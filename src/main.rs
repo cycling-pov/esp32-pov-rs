@@ -1,7 +1,11 @@
+use std::time::Duration;
+
 use bevy::{
     input::common_conditions::{input_just_pressed, input_toggle_active},
     prelude::*,
+    sprite_render::AlphaMode2d,
     text::TextColor,
+    time::common_conditions::on_timer,
     window::WindowTheme,
 };
 
@@ -23,6 +27,7 @@ fn main() {
     }))
     .insert_resource(ClearColor(Color::srgb_u8(255, 255, 255)))
     .insert_resource(ThemeState::default())
+    .insert_resource(RotationCommand { rotation_rate: 1.0 })
     .add_systems(Startup, setup_new);
 
     app.add_systems(
@@ -30,13 +35,48 @@ fn main() {
         rotate_wheel.run_if(input_toggle_active(true, KeyCode::KeyR)),
     );
 
-    app.add_systems(PostStartup, set_theme);
+    app.add_systems(PostStartup, (set_theme, update_text));
     app.add_systems(
         Update,
         (toggle_theme, set_theme).run_if(input_just_pressed(KeyCode::KeyT)),
     );
 
+    app.add_systems(
+        Update,
+        spawn_led_colors.run_if(input_just_pressed(KeyCode::KeyS)),
+    );
+
+    app.add_systems(
+        Update,
+        spawn_led_colors.run_if(on_timer(Duration::from_millis(10))),
+    );
+
+    app.add_systems(
+        PreUpdate,
+        (rotation_increase, update_text).run_if(input_just_pressed(KeyCode::ArrowUp)),
+    );
+    app.add_systems(
+        PreUpdate,
+        (rotation_decrease, update_text).run_if(input_just_pressed(KeyCode::ArrowDown)),
+    );
+
+    app.add_systems(Update, fade_lights);
+    app.add_systems(PostUpdate, delete_lights);
+
     app.run();
+}
+
+fn rotation_increase(mut cmd: ResMut<RotationCommand>) {
+    cmd.rotation_rate = (cmd.rotation_rate + 0.25).min(10.0);
+}
+
+fn rotation_decrease(mut cmd: ResMut<RotationCommand>) {
+    cmd.rotation_rate = (cmd.rotation_rate - 0.25).max(0.0);
+}
+
+#[derive(Resource)]
+struct RotationCommand {
+    rotation_rate: f32,
 }
 
 #[derive(Component)]
@@ -48,7 +88,24 @@ struct ThemeState {
 }
 
 #[derive(Component)]
-struct LED;
+struct LED {
+    id: u32,
+    offset: f32,
+}
+
+#[derive(Component)]
+struct LEDInstance {
+    fade_val: f32,
+}
+
+#[derive(Component)]
+struct TextStatUpdate;
+
+impl Default for LEDInstance {
+    fn default() -> Self {
+        Self { fade_val: 1.0 }
+    }
+}
 
 impl Default for ThemeState {
     fn default() -> Self {
@@ -131,7 +188,7 @@ fn setup_new(
             Mesh2d(meshes.add(Circle::new(LED_RADIUS))),
             MeshMaterial2d(materials.add(Color::WHITE)),
             Transform::from_xyz(xval, 0.0, 5.0),
-            LED,
+            LED { id: i, offset: 0.0 },
             ChildOf(root),
         ));
 
@@ -139,7 +196,11 @@ fn setup_new(
             Mesh2d(meshes.add(Circle::new(LED_RADIUS))),
             MeshMaterial2d(materials.add(Color::WHITE)),
             Transform::from_xyz(-xval, 0.0, 5.0),
-            LED,
+            GlobalTransform::default(),
+            LED {
+                id: i,
+                offset: std::f32::consts::PI,
+            },
             ChildOf(root),
         ));
     }
@@ -156,11 +217,78 @@ fn setup_new(
             ..default()
         },
     ));
+
+    commands.spawn((
+        Text::new("Rotation Rate: {}"),
+        TextColor(Color::WHITE),
+        TextStatUpdate,
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(100),
+            left: px(12),
+            ..default()
+        },
+    ));
 }
 
-fn rotate_wheel(mut query: Query<&mut Transform, With<Rotator>>, time: Res<Time>) {
+fn update_text(mut query: Query<&mut Text, With<TextStatUpdate>>, cmd: Res<RotationCommand>) {
+    for mut t in &mut query {
+        t.0 = format!("Rotation Rate: {:0.2}", cmd.rotation_rate);
+    }
+}
+
+fn rotate_wheel(
+    mut query: Query<&mut Transform, With<Rotator>>,
+    time: Res<Time>,
+    cmd: Res<RotationCommand>,
+) {
     for mut transform in &mut query {
-        transform.rotate_z(time.delta_secs() / 2.0);
+        transform.rotate_z(time.delta_secs() * cmd.rotation_rate);
+    }
+}
+
+fn spawn_led_colors(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    query: Query<(&LED, &GlobalTransform)>,
+) {
+    for (led, tr) in &query {
+        commands.spawn((
+            Mesh2d(meshes.add(Circle::new(1.0))),
+            MeshMaterial2d(materials.add(ColorMaterial {
+                color: Color::WHITE,
+                alpha_mode: AlphaMode2d::Blend,
+                ..Default::default()
+            })),
+            tr.compute_transform(),
+            LEDInstance::default(),
+        ));
+    }
+}
+
+fn fade_lights(
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut query: Query<(&mut LEDInstance, &MeshMaterial2d<ColorMaterial>)>,
+    time: Res<Time>,
+) {
+    fn color_with_alpha(col: &Color, alpha: f32) -> Color {
+        let prev = col.to_linear();
+        Color::linear_rgba(prev.red, prev.green, prev.blue, alpha.max(0.0))
+    }
+
+    for (mut l, h) in &mut query {
+        l.fade_val -= time.delta_secs();
+        let color = materials.get_mut(h).unwrap();
+        color.color = color_with_alpha(&color.color, l.fade_val);
+    }
+}
+
+fn delete_lights(mut commands: Commands, mut query: Query<(Entity, &LEDInstance)>) {
+    for (e, l) in &mut query {
+        if l.fade_val <= 0.0 {
+            commands.entity(e).despawn();
+        }
     }
 }
 
