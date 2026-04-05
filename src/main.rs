@@ -1,12 +1,8 @@
 use std::time::Duration;
 
 use bevy::{
-    input::common_conditions::{input_just_pressed, input_toggle_active},
-    prelude::*,
-    sprite_render::AlphaMode2d,
-    text::TextColor,
-    time::common_conditions::on_timer,
-    window::WindowTheme,
+    input::common_conditions::input_just_pressed, prelude::*, sprite_render::AlphaMode2d,
+    text::TextColor, time::common_conditions::on_timer, window::WindowTheme,
 };
 
 pub mod algorithms;
@@ -30,27 +26,11 @@ fn main() {
     .insert_resource(RotationCommand { rotation_rate: 1.0 })
     .add_systems(Startup, setup_new);
 
-    app.add_systems(
-        Update,
-        rotate_wheel.run_if(input_toggle_active(true, KeyCode::KeyR)),
-    );
-
     app.add_systems(PostStartup, (set_theme, update_text));
     app.add_systems(
-        Update,
+        PreUpdate,
         (toggle_theme, set_theme).run_if(input_just_pressed(KeyCode::KeyT)),
     );
-
-    app.add_systems(
-        Update,
-        spawn_led_colors.run_if(input_just_pressed(KeyCode::KeyS)),
-    );
-
-    app.add_systems(
-        Update,
-        spawn_led_colors.run_if(on_timer(Duration::from_millis(10))),
-    );
-
     app.add_systems(
         PreUpdate,
         (rotation_increase, update_text).run_if(input_just_pressed(KeyCode::ArrowUp)),
@@ -60,8 +40,12 @@ fn main() {
         (rotation_decrease, update_text).run_if(input_just_pressed(KeyCode::ArrowDown)),
     );
 
-    app.add_systems(Update, fade_lights);
-    app.add_systems(PostUpdate, delete_lights);
+    app.add_systems(
+        PreUpdate,
+        spawn_led_colors.run_if(on_timer(Duration::from_millis(10))),
+    );
+    app.add_systems(Update, rotate_wheel);
+    app.add_systems(PostUpdate, fade_lights);
 
     app.run();
 }
@@ -205,26 +189,13 @@ fn setup_new(
         ));
     }
 
-    let text = "Press 'R' to pause/resume rotation\nPress 'T' to toggle theme".to_string();
-
     commands.spawn((
-        Text::new(text),
-        TextColor(Color::WHITE),
-        Node {
-            position_type: PositionType::Absolute,
-            top: px(12),
-            left: px(12),
-            ..default()
-        },
-    ));
-
-    commands.spawn((
-        Text::new("Rotation Rate: {}"),
+        Text::new(""),
         TextColor(Color::WHITE),
         TextStatUpdate,
         Node {
             position_type: PositionType::Absolute,
-            top: px(100),
+            top: px(12),
             left: px(12),
             ..default()
         },
@@ -268,8 +239,9 @@ fn spawn_led_colors(
 }
 
 fn fade_lights(
+    mut commands: Commands,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    mut query: Query<(&mut LEDInstance, &MeshMaterial2d<ColorMaterial>)>,
+    mut query: Query<(Entity, &mut LEDInstance, &MeshMaterial2d<ColorMaterial>)>,
     time: Res<Time>,
 ) {
     fn color_with_alpha(col: &Color, alpha: f32) -> Color {
@@ -277,15 +249,11 @@ fn fade_lights(
         Color::linear_rgba(prev.red, prev.green, prev.blue, alpha.max(0.0))
     }
 
-    for (mut l, h) in &mut query {
+    for (e, mut l, h) in &mut query {
         l.fade_val -= time.delta_secs();
         let color = materials.get_mut(h).unwrap();
         color.color = color_with_alpha(&color.color, l.fade_val);
-    }
-}
 
-fn delete_lights(mut commands: Commands, mut query: Query<(Entity, &LEDInstance)>) {
-    for (e, l) in &mut query {
         if l.fade_val <= 0.0 {
             commands.entity(e).despawn();
         }
