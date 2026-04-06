@@ -1,26 +1,48 @@
 use std::{f32, ops::Rem};
 
 use bevy::{
-    input::common_conditions::input_just_pressed, prelude::*, sprite_render::AlphaMode2d,
-    text::TextColor, window::WindowTheme,
+    dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin, FrameTimeGraphConfig},
+    input::common_conditions::input_just_pressed,
+    prelude::*,
+    sprite_render::AlphaMode2d,
+    text::{FontSmoothing, TextColor},
+    window::WindowTheme,
 };
 
 pub mod algorithms;
 
 fn main() {
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            title: "POV SIM".into(),
-            name: Some("povsim.app".into()),
-            resolution: (1024, 768).into(),
-            fit_canvas_to_parent: true,
-            prevent_default_event_handling: false,
-            window_theme: Some(WindowTheme::Dark),
+    app.add_plugins((
+        DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "POV SIM".into(),
+                name: Some("povsim.app".into()),
+                resolution: (1024, 768).into(),
+                fit_canvas_to_parent: true,
+                prevent_default_event_handling: false,
+                window_theme: Some(WindowTheme::Dark),
+                ..Default::default()
+            }),
             ..Default::default()
         }),
-        ..Default::default()
-    }))
+        FpsOverlayPlugin {
+            config: FpsOverlayConfig {
+                text_config: TextFont {
+                    font_size: 11.0,
+                    ..Default::default()
+                },
+                refresh_interval: core::time::Duration::from_millis(100),
+                enabled: true,
+                frame_time_graph_config: FrameTimeGraphConfig {
+                    enabled: true,
+                    min_fps: 30.0,
+                    target_fps: 144.0,
+                },
+                ..Default::default()
+            },
+        },
+    ))
     .insert_resource(ClearColor(Color::srgb_u8(255, 255, 255)))
     .insert_resource(ThemeState::default())
     .insert_resource(RotationState {
@@ -45,7 +67,7 @@ fn main() {
     );
 
     app.add_systems(Update, (update_rotation_state, update_pattern));
-    app.add_systems(PostUpdate, (update_pattern_meshes, update_text_time));
+    app.add_systems(PostUpdate, update_pattern_meshes);
 
     app.run();
 }
@@ -95,9 +117,6 @@ struct LED {
 
 #[derive(Component)]
 struct TextStatUpdate;
-
-#[derive(Component)]
-struct TextTimeUpdate;
 
 fn setup(
     mut commands: Commands,
@@ -167,19 +186,7 @@ fn setup(
         Node {
             position_type: PositionType::Absolute,
             top: px(12),
-            left: px(12),
-            ..default()
-        },
-    ));
-
-    commands.spawn((
-        Text::new(""),
-        TextColor(Color::WHITE),
-        TextTimeUpdate,
-        Node {
-            position_type: PositionType::Absolute,
-            top: px(40),
-            left: px(12),
+            left: px(200),
             ..default()
         },
     ));
@@ -188,12 +195,6 @@ fn setup(
 fn update_text(mut query: Query<&mut Text, With<TextStatUpdate>>, cmd: Res<RotationState>) {
     for mut t in &mut query {
         t.0 = format!("Rotation Rate: {:0.2}", cmd.rotation_rate);
-    }
-}
-
-fn update_text_time(mut query: Query<&mut Text, With<TextTimeUpdate>>, time: Res<Time>) {
-    for mut t in &mut query {
-        t.0 = format!("dt: {:0.2}", time.delta_secs());
     }
 }
 
