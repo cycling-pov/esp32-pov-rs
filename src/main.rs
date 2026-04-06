@@ -2,13 +2,14 @@ use std::{f32, ops::Rem};
 
 use bevy::{
     dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin, FrameTimeGraphConfig},
-    input::common_conditions::input_just_pressed,
+    ecs::schedule::ExecutorKind,
+    input::common_conditions::{input_just_pressed, input_toggle_active},
+    log::tracing::instrument,
     prelude::*,
     sprite_render::AlphaMode2d,
     text::TextColor,
     window::WindowTheme,
 };
-
 pub mod algorithms;
 
 fn main() {
@@ -22,6 +23,7 @@ fn main() {
                 fit_canvas_to_parent: true,
                 prevent_default_event_handling: false,
                 window_theme: Some(WindowTheme::Dark),
+                //present_mode: bevy::window::PresentMode::Immediate,
                 ..Default::default()
             }),
             ..Default::default()
@@ -46,11 +48,20 @@ fn main() {
     .insert_resource(ClearColor(Color::srgb_u8(255, 255, 255)))
     .insert_resource(ThemeState::default())
     .insert_resource(RotationState {
-        rotation_rate: 1.0,
+        rotation_rate: 10.0,
         previous_pos: 0.0,
         current_pos: 0.0,
     })
-    .add_systems(Startup, setup);
+    .add_systems(Startup, setup)
+    .edit_schedule(Update, |sched| {
+        sched.set_executor_kind(ExecutorKind::SingleThreaded);
+    })
+    .edit_schedule(PreUpdate, |sched| {
+        sched.set_executor_kind(ExecutorKind::SingleThreaded);
+    })
+    .edit_schedule(PostUpdate, |sched| {
+        sched.set_executor_kind(ExecutorKind::SingleThreaded);
+    });
 
     app.add_systems(PostStartup, (set_theme, update_text));
     app.add_systems(
@@ -59,28 +70,30 @@ fn main() {
     );
     app.add_systems(
         PreUpdate,
-        (rotation_increase, update_text).run_if(input_just_pressed(KeyCode::ArrowUp)),
-    );
-    app.add_systems(
-        PreUpdate,
-        (rotation_decrease, update_text).run_if(input_just_pressed(KeyCode::ArrowDown)),
+        (rotation_change_input, update_text).run_if(
+            input_just_pressed(KeyCode::ArrowUp).or(input_just_pressed(KeyCode::ArrowDown)),
+        ),
     );
 
     app.add_systems(Update, (update_rotation_state, update_pattern));
-    app.add_systems(PostUpdate, update_pattern_meshes);
+    app.add_systems(
+        PostUpdate,
+        update_pattern_meshes.run_if(input_toggle_active(true, KeyCode::KeyU)),
+    );
 
     app.run();
 }
 
-fn rotation_increase(mut cmd: ResMut<RotationState>) {
-    cmd.rotation_rate = (cmd.rotation_rate + 0.25).min(10.0);
+fn rotation_change_input(input: Res<ButtonInput<KeyCode>>, mut cmd: ResMut<RotationState>) {
+    let dir = if input.just_pressed(KeyCode::ArrowUp) {
+        1.0
+    } else {
+        -1.0
+    };
+    cmd.rotation_rate = (cmd.rotation_rate + 0.5 * dir).min(10.0).max(0.0);
 }
 
-fn rotation_decrease(mut cmd: ResMut<RotationState>) {
-    cmd.rotation_rate = (cmd.rotation_rate - 0.25).max(0.0);
-}
-
-#[derive(Resource)]
+#[derive(Debug, Resource)]
 struct RotationState {
     rotation_rate: f32,
     previous_pos: f32,
@@ -200,12 +213,14 @@ fn update_text(mut query: Query<&mut Text, With<TextStatUpdate>>, cmd: Res<Rotat
     }
 }
 
+#[instrument(name = "rotation_state")]
 fn update_rotation_state(time: Res<Time>, mut state: ResMut<RotationState>) {
     state.previous_pos = state.current_pos;
     state.current_pos =
         (state.current_pos + time.delta_secs() * state.rotation_rate).rem(2.0 * f32::consts::PI);
 }
 
+#[instrument(name = "update_pattern")]
 fn update_pattern(mut query: Query<&mut LED>, state: Res<RotationState>, time: Res<Time>) {
     for mut led in &mut query {
         if state.contains(led.offset) {
@@ -216,19 +231,21 @@ fn update_pattern(mut query: Query<&mut LED>, state: Res<RotationState>, time: R
     }
 }
 
+#[instrument(name = "update_pattern_meshes", skip_all)]
 fn update_pattern_meshes(
     mut query: Query<(&LED, &MeshMaterial2d<ColorMaterial>)>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     for (led, h) in &mut query {
-        let mat = materials.get_mut(h).unwrap();
-
-        mat.color = if led.id > 30 {
+        let col = if led.id > 30 {
             Color::WHITE
         } else {
             Color::srgb_u8(0, 255, 255)
         }
         .with_alpha(led.fade_state);
+
+        let mat = materials.get_mut(h).unwrap();
+        mat.color = col;
     }
 }
 
