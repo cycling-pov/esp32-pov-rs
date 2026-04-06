@@ -5,7 +5,7 @@ use bevy::{
     input::common_conditions::input_just_pressed,
     prelude::*,
     sprite_render::AlphaMode2d,
-    text::{FontSmoothing, TextColor},
+    text::TextColor,
     window::WindowTheme,
 };
 
@@ -155,6 +155,8 @@ fn setup(
 
     const DEG_2_RAD: f32 = f32::consts::PI / 180.0;
 
+    let pxmesh = Mesh2d(meshes.add(Rectangle::new(LED_RADIUS, LED_RADIUS)));
+
     for deg in 0..NUM_LED_SPOKES {
         let offset = deg as f32 * DEG_PER_SPOKE_F * DEG_2_RAD;
         let (s1, c1) = offset.sin_cos();
@@ -163,7 +165,7 @@ fn setup(
             let led_rad = RADIUS_HUB + LED_LEN / (NUM_LEDS as f32) * i as f32 + LED_RADIUS;
 
             commands.spawn((
-                Mesh2d(meshes.add(Circle::new(LED_RADIUS))),
+                pxmesh.clone(),
                 MeshMaterial2d(materials.add(ColorMaterial {
                     color: Color::WHITE,
                     alpha_mode: AlphaMode2d::Blend,
