@@ -11,7 +11,11 @@ use defmt::info;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
+use esp_hal::rmt::Rmt;
+use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
+use esp32_pov_rs::led::{LedStrip, WaveshareMatrix, WaveshareMatrixPins};
+use smart_leds_trait::RGB8;
 use {esp_backtrace as _, esp_println as _};
 
 extern crate alloc;
@@ -37,6 +41,23 @@ async fn main(_spawner: Spawner) -> ! {
     esp_rtos::start(timg0.timer0);
 
     info!("Embassy initialized!");
+
+    let rmt = Rmt::new(peripherals.RMT, Rate::from_mhz(80)).expect("failed to initialize RMT");
+    let mut led_strip =
+        WaveshareMatrix::new(rmt.channel0, WaveshareMatrixPins::new(peripherals.GPIO14));
+    info!(
+        "LED strip ready: leds={}, timings={:?}",
+        led_strip.led_count(),
+        led_strip.timings()
+    );
+
+    led_strip.fill(RGB8 {
+        r: 0xFF,
+        g: 0xFF,
+        b: 0xFF,
+    });
+
+    led_strip.show().expect("failed to update LED strip");
 
     loop {
         info!("Hello world!");

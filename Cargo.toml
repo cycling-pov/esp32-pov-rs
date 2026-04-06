@@ -21,6 +21,7 @@ esp-rtos = { version = "0.2.0", features = [
 
 defmt                  = "1.0.1"
 esp-bootloader-esp-idf = { version = "0.4.0", features = ["defmt", "esp32s3"] }
+esp-hal-smartled = { version = "0.17.0", features = ["defmt", "esp32s3"] }
 
 bt-hci = "0.6.0"
 embassy-executor = { version = "0.9.1", features = ["defmt"] }
@@ -44,6 +45,8 @@ esp-radio = { version = "0.17.0", features = [
 trouble-host = { version = "0.5.0", features = ["gatt"] }
 
 critical-section = "1.2.0"
+rgb              = "0.8.52"
+smart-leds-trait = "0.3.2"
 static_cell      = "2.1.1"
 
 
