@@ -1,26 +1,65 @@
 use std::time::Duration;
 
 use bevy::{
-    input::common_conditions::input_just_pressed, prelude::*, sprite_render::AlphaMode2d,
-    text::TextColor, time::common_conditions::on_timer, window::WindowTheme,
+    dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin, FrameTimeGraphConfig},
+    input::common_conditions::input_just_pressed,
+    prelude::*,
+    sprite_render::AlphaMode2d,
+    text::{FontSmoothing, TextColor},
+    time::common_conditions::on_timer,
+    window::WindowTheme,
 };
 
 pub mod algorithms;
 
+struct OverlayColor;
+
+impl OverlayColor {
+    const RED: Color = Color::srgb(1.0, 0.0, 0.0);
+    const GREEN: Color = Color::srgb(0.0, 1.0, 0.0);
+}
+
 fn main() {
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            title: "POV SIM".into(),
-            name: Some("povsim.app".into()),
-            resolution: (1024, 768).into(),
-            fit_canvas_to_parent: true,
-            prevent_default_event_handling: false,
-            window_theme: Some(WindowTheme::Dark),
+    app.add_plugins((
+        DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "POV SIM".into(),
+                name: Some("povsim.app".into()),
+                resolution: (1024, 768).into(),
+                fit_canvas_to_parent: true,
+                prevent_default_event_handling: false,
+                window_theme: Some(WindowTheme::Dark),
+                ..Default::default()
+            }),
             ..Default::default()
         }),
-        ..Default::default()
-    }))
+        FpsOverlayPlugin {
+            config: FpsOverlayConfig {
+                text_config: TextFont {
+                    // Here we define size of our overlay
+                    font_size: 11.0,
+                    // If we want, we can use a custom font
+                    font: default(),
+                    // We could also disable font smoothing,
+                    font_smoothing: FontSmoothing::default(),
+                    ..default()
+                },
+                // We can also change color of the overlay
+                text_color: OverlayColor::GREEN,
+                // We can also set the refresh interval for the FPS counter
+                refresh_interval: core::time::Duration::from_millis(100),
+                enabled: true,
+                frame_time_graph_config: FrameTimeGraphConfig {
+                    enabled: true,
+                    // The minimum acceptable fps
+                    min_fps: 30.0,
+                    // The target fps
+                    target_fps: 144.0,
+                },
+            },
+        },
+    ))
     .insert_resource(ClearColor(Color::srgb_u8(255, 255, 255)))
     .insert_resource(ThemeState::default())
     .insert_resource(RotationCommand { rotation_rate: 1.0 })
@@ -46,7 +85,6 @@ fn main() {
     );
     app.add_systems(Update, rotate_wheel);
     app.add_systems(PostUpdate, fade_lights);
-    app.add_systems(PostUpdate, update_time_text);
 
     app.run();
 }
@@ -97,9 +135,6 @@ impl Default for LEDInstance {
 
 #[derive(Component)]
 struct TextStatUpdate;
-
-#[derive(Component)]
-struct TextTimeUpdate;
 
 fn setup_new(
     mut commands: Commands,
@@ -200,19 +235,7 @@ fn setup_new(
         Node {
             position_type: PositionType::Absolute,
             top: px(12),
-            left: px(12),
-            ..default()
-        },
-    ));
-
-    commands.spawn((
-        Text::new(""),
-        TextColor(Color::WHITE),
-        TextTimeUpdate,
-        Node {
-            position_type: PositionType::Absolute,
-            top: px(40),
-            left: px(12),
+            left: px(200),
             ..default()
         },
     ));
@@ -221,12 +244,6 @@ fn setup_new(
 fn update_text(mut query: Query<&mut Text, With<TextStatUpdate>>, cmd: Res<RotationCommand>) {
     for mut t in &mut query {
         t.0 = format!("Rotation Rate: {:0.2}", cmd.rotation_rate);
-    }
-}
-
-fn update_time_text(mut query: Query<&mut Text, With<TextTimeUpdate>>, time: Res<Time>) {
-    for mut t in &mut query {
-        t.0 = format!("dt: {:0.2}", time.delta_secs());
     }
 }
 
