@@ -46,6 +46,7 @@ fn main() {
     );
     app.add_systems(Update, rotate_wheel);
     app.add_systems(PostUpdate, fade_lights);
+    app.add_systems(PostUpdate, update_time_text);
 
     app.run();
 }
@@ -71,6 +72,12 @@ struct ThemeState {
     dark_theme: bool,
 }
 
+impl Default for ThemeState {
+    fn default() -> Self {
+        Self { dark_theme: true }
+    }
+}
+
 #[derive(Component)]
 struct LED {
     id: u32,
@@ -82,20 +89,17 @@ struct LEDInstance {
     fade_val: f32,
 }
 
-#[derive(Component)]
-struct TextStatUpdate;
-
 impl Default for LEDInstance {
     fn default() -> Self {
         Self { fade_val: 1.0 }
     }
 }
 
-impl Default for ThemeState {
-    fn default() -> Self {
-        Self { dark_theme: true }
-    }
-}
+#[derive(Component)]
+struct TextStatUpdate;
+
+#[derive(Component)]
+struct TextTimeUpdate;
 
 fn setup_new(
     mut commands: Commands,
@@ -200,11 +204,29 @@ fn setup_new(
             ..default()
         },
     ));
+
+    commands.spawn((
+        Text::new(""),
+        TextColor(Color::WHITE),
+        TextTimeUpdate,
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(40),
+            left: px(12),
+            ..default()
+        },
+    ));
 }
 
 fn update_text(mut query: Query<&mut Text, With<TextStatUpdate>>, cmd: Res<RotationCommand>) {
     for mut t in &mut query {
         t.0 = format!("Rotation Rate: {:0.2}", cmd.rotation_rate);
+    }
+}
+
+fn update_time_text(mut query: Query<&mut Text, With<TextTimeUpdate>>, time: Res<Time>) {
+    for mut t in &mut query {
+        t.0 = format!("dt: {:0.2}", time.delta_secs());
     }
 }
 
