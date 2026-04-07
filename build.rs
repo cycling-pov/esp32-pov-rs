@@ -1,8 +1,137 @@
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
+
+const GENERATED_BITMAP_WIDTH: u32 = 64;
+const GENERATED_BITMAP_HEIGHT: u32 = 64;
+
 fn main() {
+    generate_asset_bitmap();
     linker_be_nice();
     println!("cargo:rustc-link-arg=-Tdefmt.x");
     // make sure linkall.x is the last linker script (otherwise might cause problems with flip-link)
     println!("cargo:rustc-link-arg=-Tlinkall.x");
+}
+
+fn generate_asset_bitmap() {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("missing manifest dir");
+    let assets_dir = Path::new(&manifest_dir).join("assets");
+    let out_dir = std::env::var("OUT_DIR").expect("missing OUT_DIR");
+    let output_path = Path::new(&out_dir).join("asset_bitmap.rs");
+
+    println!("cargo:rerun-if-changed={}", assets_dir.display());
+
+    let image_paths = asset_png_paths(&assets_dir);
+    let generated = if let Some(image_path) = image_paths.first() {
+        println!("cargo:rerun-if-changed={}", image_path.display());
+        generate_bitmap_source_from_png(image_path)
+    } else {
+        generate_off_bitmap_source()
+    };
+
+    std::fs::write(&output_path, generated)
+        .unwrap_or_else(|error| panic!("failed to write {}: {error}", output_path.display()));
+}
+
+fn asset_png_paths(assets_dir: &Path) -> Vec<PathBuf> {
+    let mut image_paths = Vec::new();
+
+    let Ok(entries) = std::fs::read_dir(assets_dir) else {
+        return image_paths;
+    };
+
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|error| panic!("failed to read asset entry: {error}"));
+        let path = entry.path();
+
+        let is_png = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("png"));
+
+        if is_png {
+            image_paths.push(path);
+        }
+    }
+
+    image_paths.sort();
+    image_paths
+}
+
+fn generate_bitmap_source_from_png(png_path: &Path) -> String {
+    let image = image::ImageReader::open(png_path)
+        .unwrap_or_else(|error| panic!("failed to open {}: {error}", png_path.display()))
+        .decode()
+        .unwrap_or_else(|error| panic!("failed to decode {}: {error}", png_path.display()))
+        .resize_exact(
+            GENERATED_BITMAP_WIDTH,
+            GENERATED_BITMAP_HEIGHT,
+            image::imageops::FilterType::Triangle,
+        )
+        .to_rgba8();
+
+    let (width, height) = image.dimensions();
+    let mut generated = String::new();
+
+    writeln!(
+        &mut generated,
+        "pub const GENERATED_BITMAP_METADATA: BitmapStorageMetadata = BitmapStorageMetadata {{ width: {}, height: {} }};",
+        width,
+        height
+    )
+    .expect("failed to write generated metadata");
+    writeln!(
+        &mut generated,
+        "pub const GENERATED_BITMAP_PIXEL_COUNT: usize = GENERATED_BITMAP_METADATA.pixel_count();"
+    )
+    .expect("failed to write generated pixel count");
+    writeln!(
+        &mut generated,
+        "pub static GENERATED_BITMAP: [RGB8; GENERATED_BITMAP_PIXEL_COUNT] = ["
+    )
+    .expect("failed to start generated pixel array");
+
+    for pixel in image.pixels() {
+        let [red, green, blue, alpha] = pixel.0;
+        let (red, green, blue) = if alpha == 0 {
+            (0, 0, 0)
+        } else {
+            (red, green, blue)
+        };
+
+        writeln!(
+            &mut generated,
+            "    RGB8 {{ r: {red}, g: {green}, b: {blue} }},"
+        )
+        .expect("failed to write generated pixel");
+    }
+
+    writeln!(&mut generated, "];").expect("failed to finish generated pixel array");
+
+    generated
+}
+
+fn generate_off_bitmap_source() -> String {
+    let mut generated = String::new();
+
+    writeln!(
+        &mut generated,
+        "pub const GENERATED_BITMAP_METADATA: BitmapStorageMetadata = BitmapStorageMetadata {{ width: {}, height: {} }};",
+        GENERATED_BITMAP_WIDTH,
+        GENERATED_BITMAP_HEIGHT
+    )
+    .expect("failed to write fallback metadata");
+    writeln!(
+        &mut generated,
+        "pub const GENERATED_BITMAP_PIXEL_COUNT: usize = GENERATED_BITMAP_METADATA.pixel_count();"
+    )
+    .expect("failed to write fallback pixel count");
+    writeln!(
+        &mut generated,
+        "pub static GENERATED_BITMAP: [RGB8; GENERATED_BITMAP_PIXEL_COUNT] = [RGB8 {{ r: 64, g: 64, b: 64 }}; GENERATED_BITMAP_PIXEL_COUNT];"
+    )
+    .expect("failed to write fallback pixel array");
+
+    generated
 }
 
 fn linker_be_nice() {

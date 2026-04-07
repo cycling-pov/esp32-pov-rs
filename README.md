@@ -40,6 +40,12 @@ From the repository root:
 cargo build
 ```
 
+During the build, the build script scans the `assets/` directory for PNG files and uses the first image it finds as the rendered source image.
+
+If no image is found in `assets/`, the firmware falls back to a white display pattern.
+
+To change the rendered image, replace the image file in `assets/` with your own PNG.
+
 ## 3. Flash and monitor
 
 Connect the board over USB, then run:

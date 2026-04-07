@@ -14,8 +14,8 @@ use esp_hal::clock::CpuClock;
 use esp_hal::rmt::Rmt;
 use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
+use esp32_pov_rs::bitmap::{BitmapStorage, generated_image_storage};
 use esp32_pov_rs::led::{LedStrip, WaveshareMatrix, WaveshareMatrixPins};
-use smart_leds_trait::RGB8;
 use {esp_backtrace as _, esp_println as _};
 
 extern crate alloc;
@@ -51,11 +51,14 @@ async fn main(_spawner: Spawner) -> ! {
         led_strip.timings()
     );
 
-    led_strip.fill(RGB8 {
-        r: 0xFF,
-        g: 0xFF,
-        b: 0xFF,
-    });
+    let bitmap_store = generated_image_storage();
+    let image_bitmap = bitmap_store.bitmap(0).expect("missing generated bitmap");
+    let target_width = 8;
+    let target_height = WaveshareMatrix::LED_COUNT / target_width;
+
+    image_bitmap
+        .scale_into(target_width, target_height, led_strip.pixels_mut())
+        .expect("failed to scale generated bitmap");
 
     led_strip.show().expect("failed to update LED strip");
 
