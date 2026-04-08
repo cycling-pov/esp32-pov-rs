@@ -18,6 +18,7 @@ path = "./src/bin/metro_main.rs"
 [features]
 default = ["waveshare-matrix"]
 waveshare-matrix = []
+sk9822-strip = []
 
 [dependencies]
 esp-hal = { version = "~1.0", features = ["defmt", "esp32s3", "unstable"] }

@@ -7,6 +7,10 @@ use smart_leds_trait::RGB8;
 const WS2811_DATA_TIME_PER_LED: Duration = Duration::from_nanos(24 * 2_500);
 const WS2811_RESET_LATCH: Duration = Duration::from_micros(50);
 
+// SK9822: 32 bits per LED at 4 MHz = 8,000 ns per LED.
+const SK9822_DATA_TIME_PER_LED: Duration = Duration::from_nanos(8_000);
+const SK9822_RESET_LATCH: Duration = Duration::ZERO;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, defmt::Format)]
 pub struct LedTimings {
     /// Time to transmit one LED's worth of color data.
@@ -20,12 +24,18 @@ impl LedTimings {
         data_time_per_led: WS2811_DATA_TIME_PER_LED,
         reset_latch: WS2811_RESET_LATCH,
     };
+
+    pub const SK9822: Self = Self {
+        data_time_per_led: SK9822_DATA_TIME_PER_LED,
+        reset_latch: SK9822_RESET_LATCH,
+    };
 }
 
 #[derive(Debug, defmt::Format)]
 pub enum LedError {
     InvalidIndex { index: usize, led_count: usize },
     Write(LedAdapterError),
+    SpiWrite,
 }
 
 impl From<LedAdapterError> for LedError {

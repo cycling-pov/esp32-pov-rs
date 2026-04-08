@@ -23,6 +23,10 @@ jobs:
         action:
           - command: build
             args: --release
+          - command: build
+            args: --release --bin waveshare
+          - command: build
+            args: --release --bin metro --no-default-features --features sk9822-strip
           - command: fmt
             args: --all -- --check
           - command: clippy

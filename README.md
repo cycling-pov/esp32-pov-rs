@@ -45,7 +45,13 @@ This builds the Waveshare target binary with the Waveshare Matrix component enab
 To build for Adafruit Metro ESP32-S3 (without Waveshare Matrix output):
 
 ```sh
-cargo build --bin metro
+cargo build --bin metro --no-default-features
+```
+
+To build Metro with SK9822 strip output enabled:
+
+```sh
+cargo build --bin metro --no-default-features --features sk9822-strip
 ```
 
 During the build, the build script scans the `assets/` directory for PNG files and uses the first image it finds as the rendered source image.
@@ -76,9 +82,15 @@ cargo run --bin waveshare -- --port <serial-port>
 ```
 
 To run the Metro target:
-This disables the waveshare matrix code. The build works OK if you leave the feature in.
+
 ```sh
 cargo run --bin metro --no-default-features
+```
+
+To run Metro with SK9822 strip output:
+
+```sh
+cargo run --bin metro --no-default-features --features sk9822-strip
 ```
 
 Both board targets use the same `src/bin/main.rs` entry file. Board-specific logic lives in separate files under `src/bin/`.

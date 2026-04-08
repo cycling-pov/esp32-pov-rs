@@ -10,6 +10,8 @@ use esp_hal::timer::timg::TimerGroup;
 #[cfg(feature = "waveshare-matrix")]
 use esp32_pov_rs::led::{WaveshareMatrix, WaveshareMatrixPins};
 mod metro;
+#[cfg(feature = "sk9822-strip")]
+use metro::MetroSk9822Output;
 #[cfg(feature = "waveshare-matrix")]
 mod waveshare;
 
@@ -52,7 +54,20 @@ pub async fn run(target: BoardTarget, _spawner: Spawner) -> ! {
             panic!("Waveshare binary requires 'waveshare-matrix' feature");
         }
         BoardTarget::Metro => {
-            metro::initialize_metro_output();
+            #[cfg(feature = "sk9822-strip")]
+            {
+                let output = MetroSk9822Output::new(
+                    peripherals.SPI2,
+                    peripherals.GPIO12,
+                    peripherals.GPIO13,
+                );
+                metro::initialize_metro_output(output);
+            }
+
+            #[cfg(not(feature = "sk9822-strip"))]
+            {
+                metro::initialize_metro_output();
+            }
         }
     }
 
