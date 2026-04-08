@@ -3,10 +3,21 @@ edition      = "2024"
 name         = "esp32-pov-rs"
 rust-version = "1.88"
 version      = "0.1.0"
+autobins     = false
+default-run = "waveshare"
 
 [[bin]]
-name = "esp32-pov-rs"
-path = "./src/bin/main.rs"
+name = "waveshare"
+path = "./src/bin/waveshare_main.rs"
+required-features = ["waveshare-matrix"]
+
+[[bin]]
+name = "metro"
+path = "./src/bin/metro_main.rs"
+
+[features]
+default = ["waveshare-matrix"]
+waveshare-matrix = []
 
 [dependencies]
 esp-hal = { version = "~1.0", features = ["defmt", "esp32s3", "unstable"] }
