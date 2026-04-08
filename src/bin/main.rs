@@ -22,18 +22,37 @@ pub enum BoardTarget {
     Metro,
 }
 
+const TOTAL_HEAP_BYTES: usize = 64 * 1024;
+
+#[cfg(feature = "heap-stats")]
+#[embassy_executor::task]
+async fn heap_stats_task() -> ! {
+    loop {
+        info!("heap stats:\n{}", esp_alloc::HEAP.stats());
+        Timer::after(Duration::from_secs(30)).await;
+    }
+}
+
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
-pub async fn run(target: BoardTarget, _spawner: Spawner) -> ! {
+pub async fn run(target: BoardTarget, spawner: Spawner) -> ! {
     // generator version: 1.2.0
 
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
-    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 73744);
+    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: TOTAL_HEAP_BYTES);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0);
+
+    #[cfg(feature = "heap-stats")]
+    spawner
+        .spawn(heap_stats_task())
+        .expect("failed to spawn heap stats task");
+
+    #[cfg(not(feature = "heap-stats"))]
+    let _ = spawner;
 
     info!("Embassy initialized!");
 
