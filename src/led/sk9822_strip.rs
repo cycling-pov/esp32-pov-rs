@@ -19,7 +19,7 @@ const SK9822_BRIGHTNESS: u8 =
 const SK9822_START_FRAME_BYTES: usize = 4;
 
 const fn sk9822_end_frame_bytes(led_count: usize) -> usize {
-    (led_count + 15) / 16
+    led_count.div_ceil(16)
 }
 
 const fn sk9822_frame_size(led_count: usize) -> usize {
