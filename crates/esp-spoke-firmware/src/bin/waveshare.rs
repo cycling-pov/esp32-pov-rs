@@ -130,7 +130,12 @@ pub async fn run_waveshare_output(led_strip: &mut WaveshareMatrix<'_>) -> ! {
 
     loop {
         if let Some(command) = networking::try_receive_command() {
-            apply_command(led_strip, &*bitmap_store, &mut current_bitmap_index, command);
+            apply_command(
+                led_strip,
+                &*bitmap_store,
+                &mut current_bitmap_index,
+                command,
+            );
         }
 
         if let Some(download) = networking::try_receive_download() {

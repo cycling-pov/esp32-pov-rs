@@ -64,7 +64,9 @@ pub fn ingest_manufacturer_data(payload: &[u8]) -> Result<Option<IngestedPacket>
                 "transfer complete: kind={:?} transfer_id={=usize} bytes={=usize} crc32={=u32}",
                 completed.kind, completed.transfer_id, completed.len, completed.crc32
             );
-            Ok(Some(IngestedPacket::Download(alloc::boxed::Box::new(completed))))
+            Ok(Some(IngestedPacket::Download(alloc::boxed::Box::new(
+                completed,
+            ))))
         }
         Ok(None) => {
             let (received, total) = critical_section::with(|cs| {
