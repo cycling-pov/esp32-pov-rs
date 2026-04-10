@@ -39,3 +39,4 @@ jobs:
         uses: Swatinem/rust-cache@v2
       - name: Run command
         run: cargo ${{ matrix.action.command }} ${{ matrix.action.args }}
+        working-directory: tools/pov-sender-cli
