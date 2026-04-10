@@ -10,6 +10,7 @@ name = "pov_proto"
 
 [features]
 default      = []
+bridge       = []
 defmt        = ["dep:defmt"]
 image-decode = ["dep:miniz_oxide", "dep:rgb"]
 image-encode = ["dep:miniz_oxide", "miniz_oxide/with-alloc"]

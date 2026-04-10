@@ -5,5 +5,7 @@
 #[cfg(feature = "image-encode")]
 extern crate alloc;
 
+#[cfg(feature = "bridge")]
+pub mod bridge;
 pub mod image;
 pub mod transfer;
