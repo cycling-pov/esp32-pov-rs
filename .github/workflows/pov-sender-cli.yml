@@ -29,6 +29,8 @@ jobs:
           - command: clippy
             args: --all-features --workspace -- -D warnings
     steps:
+      - name: Install libudev
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev
       - name: Checkout repository
         uses: actions/checkout@v6
       - name: Install Rust toolchain
