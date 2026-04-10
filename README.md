@@ -32,12 +32,29 @@ This project targets the ESP32-S3 SOC using the esp-rs toolchain and utilizes th
       cargo install espflash --locked
       ```
 
-## 2. esp-spoke-firmware
-This is the primary firmware for the project, an LED persistence of light display mounted to a bike wheel.
+## 2. Project Components
 
-Specific instructions for this project can be found [here](README-esp-spoke-firmware.md)
+### esp-spoke-firmware
+Primary firmware for the POV spoke display mounted to a bike wheel.
 
-## 3. Build crates
+- README: [README-esp-spoke-firmware.md](README-esp-spoke-firmware.md)
+
+### esp-bridge-firmware
+Bridge firmware that receives host frames over USB serial and forwards them over BLE or ESP-NOW.
+
+- README: [README-esp-bridge-firmware.md](README-esp-bridge-firmware.md)
+
+### pov-proto
+Shared wire protocol crate used by firmware and host tools.
+
+- README: [README-pov-proto.md](README-pov-proto.md)
+
+### pov-sender-cli
+Host CLI for sending commands, images, and downloads through the bridge.
+
+- README: [README-pov-sender-cli.md](README-pov-sender-cli.md)
+
+## 3. Build Firmware Crates
 
 From the repository root:
 
@@ -45,4 +62,18 @@ From the repository root:
 cargo build
 ```
 
-This builds all esp crates in the workspace. See a subcrates' readme for specific build and run instructions.
+This builds all ESP firmware crates in the workspace.
+
+For specific targets:
+
+```sh
+cargo build -p esp-spoke-firmware --bin waveshare
+cargo build -p esp-spoke-firmware --bin metro --no-default-features --features sk9822-strip
+cargo build -p esp-bridge-firmware
+```
+
+See each component README for flashing and runtime details.
+
+## 4. Build and Run Host CLI
+
+The sender CLI lives outside the firmware workspace and uses its own toolchain/target configuration, see [README-pov-sender-cli.md](README-pov-sender-cli.md).
