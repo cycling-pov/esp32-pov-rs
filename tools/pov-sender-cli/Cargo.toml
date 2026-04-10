@@ -1,0 +1,13 @@
+[package]
+name = "pov-sender-cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+pov-proto = { path = "../../crates/pov-proto", features = ["image-encode", "bridge"] }
+postcard  = { version = "1", features = ["use-std"] }
+image     = "0.25"
+serialport = "4"
+clap      = { version = "4", features = ["derive"] }
+anyhow    = "1"
+rand      = "0.8"

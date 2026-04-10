@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/*"]
+exclude = ["tools/pov-sender-cli"]
 resolver = "3"
 
 [workspace.package]
