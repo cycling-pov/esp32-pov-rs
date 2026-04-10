@@ -1,3 +1,5 @@
+use alloc::boxed::Box;
+
 use smart_leds_trait::RGB8;
 
 use crate::bitmap::{Bitmap, BitmapError, BitmapMut, BitmapStorage, BitmapStorageMetadata};
@@ -6,8 +8,9 @@ include!(concat!(env!("OUT_DIR"), "/asset_bitmap.rs"));
 
 pub static BUILTIN_IMAGES: [[RGB8; GENERATED_BITMAP_PIXEL_COUNT]; 1] = [GENERATED_BITMAP];
 
-pub fn generated_image_storage() -> InMemoryImageStorage<1, GENERATED_BITMAP_PIXEL_COUNT> {
-    InMemoryImageStorage::new(GENERATED_BITMAP_METADATA, &BUILTIN_IMAGES)
+pub fn generated_image_storage(
+) -> Box<InMemoryImageStorage<1, GENERATED_BITMAP_PIXEL_COUNT>> {
+    Box::new(InMemoryImageStorage::new(GENERATED_BITMAP_METADATA, &BUILTIN_IMAGES))
 }
 
 pub struct InMemoryImageStorage<const IMAGE_COUNT: usize, const PIXEL_COUNT: usize> {

@@ -38,6 +38,8 @@ esp-hal-smartled = { version = "0.17.0", features = ["defmt", "esp32s3"] }
 
 bt-hci = "0.6.0"
 embassy-executor = { version = "0.9.1", features = ["defmt"] }
+embassy-futures = "0.1.2"
+embassy-sync = "0.7.2"
 embassy-time = { version = "0.5.0", features = ["defmt"] }
 embedded-io = { version = "0.7.1", features = ["defmt"] }
 embedded-io-async = { version = "0.7.0", features = ["defmt"] }
@@ -50,17 +52,21 @@ esp-backtrace = { version = "0.18.1", features = [
 esp-println = { version = "0.16.1", features = ["defmt-espflash", "esp32s3"] }
 esp-radio = { version = "0.17.0", features = [
   "ble",
+  "coex",
   "defmt",
   "esp-alloc",
+  "esp-now",
   "esp32s3",
   "unstable",
+  "wifi",
 ] }
-trouble-host = { version = "0.5.0", features = ["gatt"] }
+trouble-host = { version = "0.5.0", features = ["gatt", "scan"] }
 
 critical-section = "1.2.0"
 rgb              = "0.8.52"
 smart-leds-trait = "0.3.2"
 static_cell      = "2.1.1"
+pov-proto       = { path = "../pov-proto", features = ["defmt", "image-decode"] }
 
 [build-dependencies]
 image = { version = "0.25.6", default-features = false, features = ["png"] }

@@ -1,5 +1,7 @@
 use defmt::info;
 #[cfg(feature = "sk9822-strip")]
+use embassy_time::{Duration, Timer};
+#[cfg(feature = "sk9822-strip")]
 use esp_hal::{
     Blocking,
     gpio::Pin,
@@ -12,7 +14,7 @@ use esp_hal::{
 #[cfg(feature = "sk9822-strip")]
 use esp_spoke_firmware::led::{LedStrip, Sk9822Pins, Sk9822Strip};
 #[cfg(feature = "sk9822-strip")]
-use smart_leds_trait::RGB8;
+use esp_spoke_firmware::networking;
 
 #[cfg(feature = "sk9822-strip")]
 const METRO_SK9822_LED_COUNT: usize = 30;
@@ -47,12 +49,12 @@ fn initialize_sk9822_output(strip: &mut Sk9822Strip<'_, METRO_SK9822_LED_COUNT>)
         strip.timings()
     );
 
-    strip.fill(RGB8 { r: 255, g: 0, b: 0 });
+    strip.fill(smart_leds_trait::RGB8 { r: 255, g: 0, b: 0 });
     strip.show().expect("failed to update SK9822 strip");
 }
 
 #[cfg(feature = "sk9822-strip")]
-pub fn initialize_metro_output<'d, SpiDevice>(output: MetroSk9822Output<'d, SpiDevice>)
+pub async fn run_metro_output<'d, SpiDevice>(output: MetroSk9822Output<'d, SpiDevice>) -> !
 where
     SpiDevice: SpiInstance + 'd,
 {
@@ -67,7 +69,25 @@ where
     let mut strip = Sk9822Strip::<METRO_SK9822_LED_COUNT>::new(spi, output.pins);
 
     initialize_sk9822_output(&mut strip);
-    info!("Adafruit Metro ESP32-S3 target active with SK9822 output");
+    info!("Adafruit Metro ESP32-S3 target active with SK9822 output + BLE ingest");
+
+    loop {
+        if let Some(command) = networking::try_receive_command() {
+            info!(
+                "Metro received command: transfer_id={} command={:?}. Command handling is not implemented for this output yet.",
+                command.transfer_id, command.command
+            );
+        }
+
+        if let Some(command) = networking::try_receive_download() {
+            info!(
+                "Metro received download: kind={:?} transfer_id={} bytes={} crc32=0x{:08x}. Payload application is not implemented for this output yet.",
+                command.kind, command.transfer_id, command.len, command.crc32
+            );
+        }
+
+        Timer::after(Duration::from_millis(25)).await;
+    }
 }
 
 #[cfg(not(feature = "sk9822-strip"))]
