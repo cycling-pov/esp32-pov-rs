@@ -1,0 +1,23 @@
+[package]
+name        = "pov-proto"
+version     = "0.1.0"
+edition     = "2024"
+rust-version = "1.88"
+description = "Wire protocol and image encoding for POV display over broadcast transports"
+
+[lib]
+name = "pov_proto"
+
+[features]
+default      = []
+defmt        = ["dep:defmt"]
+image-decode = ["dep:miniz_oxide", "dep:rgb"]
+image-encode = ["dep:miniz_oxide", "miniz_oxide/with-alloc"]
+
+[dependencies]
+crc32fast   = { version = "1", default-features = false }
+defmt       = { version = "1", optional = true }
+miniz_oxide = { version = "0.8", default-features = false, optional = true }
+postcard    = { version = "1", default-features = false }
+rgb         = { version = "0.8", optional = true }
+serde       = { version = "1", default-features = false, features = ["derive"] }
