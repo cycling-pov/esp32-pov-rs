@@ -10,7 +10,7 @@ use esp_hal::{
     time::Rate,
 };
 #[cfg(feature = "sk9822-strip")]
-use esp32_pov_rs::led::{LedStrip, Sk9822Pins, Sk9822Strip};
+use esp_spoke_firmware::led::{LedStrip, Sk9822Pins, Sk9822Strip};
 #[cfg(feature = "sk9822-strip")]
 use smart_leds_trait::RGB8;
 

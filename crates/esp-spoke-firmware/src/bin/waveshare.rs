@@ -1,6 +1,6 @@
 use defmt::info;
-use esp32_pov_rs::bitmap::{BitmapStorage, generated_image_storage};
-use esp32_pov_rs::led::{LedStrip, WaveshareMatrix};
+use esp_spoke_firmware::bitmap::{BitmapStorage, generated_image_storage};
+use esp_spoke_firmware::led::{LedStrip, WaveshareMatrix};
 
 pub fn initialize_waveshare_output(led_strip: &mut WaveshareMatrix<'_>) {
     info!(

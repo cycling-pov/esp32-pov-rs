@@ -4,8 +4,9 @@ on:
   push:
     branches:
       - main
-    paths-ignore:
-      - "**/README.md"
+    paths:
+      - "crates/**"
+      - "!**/README.md"
   pull_request:
   workflow_dispatch:
 
@@ -24,9 +25,9 @@ jobs:
           - command: build
             args: --release
           - command: build
-            args: --release --bin waveshare
+            args: --release -p esp-spoke-firmware --bin waveshare
           - command: build
-            args: --release --bin metro --no-default-features --features sk9822-strip
+            args: --release -p esp-spoke-firmware --bin metro --no-default-features --features sk9822-strip
           - command: fmt
             args: --all -- --check
           - command: clippy

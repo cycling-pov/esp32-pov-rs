@@ -8,7 +8,7 @@ use esp_hal::rmt::Rmt;
 use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
 #[cfg(feature = "waveshare-matrix")]
-use esp32_pov_rs::led::{WaveshareMatrix, WaveshareMatrixPins};
+use esp_spoke_firmware::led::{WaveshareMatrix, WaveshareMatrixPins};
 mod metro;
 #[cfg(feature = "sk9822-strip")]
 use metro::MetroSk9822Output;

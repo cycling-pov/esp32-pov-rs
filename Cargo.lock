@@ -887,6 +887,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "esp-spoke-firmware"
+version = "0.1.0"
+dependencies = [
+ "bt-hci",
+ "critical-section",
+ "defmt 1.0.1",
+ "embassy-executor",
+ "embassy-time",
+ "embedded-io 0.7.1",
+ "embedded-io-async 0.7.0",
+ "esp-alloc",
+ "esp-backtrace",
+ "esp-bootloader-esp-idf",
+ "esp-hal",
+ "esp-hal-smartled",
+ "esp-println",
+ "esp-radio",
+ "esp-rtos",
+ "image",
+ "rgb",
+ "smart-leds-trait",
+ "static_cell",
+ "trouble-host",
+]
+
+[[package]]
 name = "esp-sync"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -934,32 +960,6 @@ dependencies = [
  "critical-section",
  "defmt 1.0.1",
  "vcell",
-]
-
-[[package]]
-name = "esp32-pov-rs"
-version = "0.1.0"
-dependencies = [
- "bt-hci",
- "critical-section",
- "defmt 1.0.1",
- "embassy-executor",
- "embassy-time",
- "embedded-io 0.7.1",
- "embedded-io-async 0.7.0",
- "esp-alloc",
- "esp-backtrace",
- "esp-bootloader-esp-idf",
- "esp-hal",
- "esp-hal-smartled",
- "esp-println",
- "esp-radio",
- "esp-rtos",
- "image",
- "rgb",
- "smart-leds-trait",
- "static_cell",
- "trouble-host",
 ]
 
 [[package]]
