@@ -1,3 +1,4 @@
+#[cfg(feature = "ble")]
 use bt_hci::controller::ExternalController;
 use defmt::info;
 use embassy_executor::Spawner;
@@ -9,7 +10,9 @@ use esp_hal::rmt::Rmt;
 #[cfg(feature = "waveshare-matrix")]
 use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
+#[cfg(feature = "ble")]
 use esp_radio::ble::controller::BleConnector;
+#[cfg(feature = "espnow")]
 use esp_radio::wifi::{WifiController, WifiMode};
 #[cfg(feature = "waveshare-matrix")]
 use esp_spoke_firmware::led::{WaveshareMatrix, WaveshareMatrixPins};
@@ -32,6 +35,7 @@ pub enum BoardTarget {
 
 const TOTAL_HEAP_BYTES: usize = 64 * 1024;
 // COEX (simultaneous BLE + WiFi/ESP-NOW) requires extra heap on top.
+#[cfg(feature = "coexistence")]
 const COEX_HEAP_BYTES: usize = 64 * 1024;
 #[cfg(feature = "heap-stats")]
 #[embassy_executor::task]
@@ -42,7 +46,9 @@ async fn heap_stats_task() -> ! {
     }
 }
 
-static BLE_RADIO_CONTROLLER: StaticCell<esp_radio::Controller<'static>> = StaticCell::new();
+#[cfg(any(feature = "ble", feature = "espnow"))]
+static RADIO_CONTROLLER: StaticCell<esp_radio::Controller<'static>> = StaticCell::new();
+#[cfg(feature = "espnow")]
 static WIFI_CONTROLLER: StaticCell<WifiController<'static>> = StaticCell::new();
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
@@ -55,6 +61,7 @@ pub async fn run(target: BoardTarget, spawner: Spawner) -> ! {
 
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: TOTAL_HEAP_BYTES);
     // Extra heap required by COEX (running BLE and WiFi/ESP-NOW concurrently).
+    #[cfg(feature = "coexistence")]
     esp_alloc::heap_allocator!(size: COEX_HEAP_BYTES);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
@@ -67,37 +74,44 @@ pub async fn run(target: BoardTarget, spawner: Spawner) -> ! {
 
     info!("Embassy initialized!");
 
-    let radio = BLE_RADIO_CONTROLLER
-        .init(esp_radio::init().expect("failed to initialize radio controller"));
+    #[cfg(any(feature = "ble", feature = "espnow"))]
+    let radio =
+        RADIO_CONTROLLER.init(esp_radio::init().expect("failed to initialize radio controller"));
 
     // ---------- WiFi / ESP-NOW ---------------------------------------------------
-    let (mut wifi_ctrl, interfaces) =
-        esp_radio::wifi::new(radio, peripherals.WIFI, Default::default())
-            .expect("failed to initialize WiFi");
-    wifi_ctrl
-        .set_mode(WifiMode::Sta)
-        .expect("failed to set WiFi mode");
-    info!("WiFi mode set to STA, starting WiFi...");
-    wifi_ctrl.start_async().await.expect("failed to start WiFi");
-    info!("WiFi started, configuring ESP-NOW...");
-    let esp_now = interfaces.esp_now;
+    #[cfg(feature = "espnow")]
+    {
+        let (mut wifi_ctrl, interfaces) =
+            esp_radio::wifi::new(radio, peripherals.WIFI, Default::default())
+                .expect("failed to initialize WiFi");
+        wifi_ctrl
+            .set_mode(WifiMode::Sta)
+            .expect("failed to set WiFi mode");
+        info!("WiFi mode set to STA, starting WiFi...");
+        wifi_ctrl.start_async().await.expect("failed to start WiFi");
+        info!("WiFi started, configuring ESP-NOW...");
+        let esp_now = interfaces.esp_now;
 
-    // Set explicit WiFi channel to ensure spoke and bridge sync on the same channel.
-    const ESPNOW_CHANNEL: u8 = 6;
-    esp_now
-        .set_channel(ESPNOW_CHANNEL)
-        .expect("failed to set ESP-NOW channel");
-    info!("ESP-NOW channel set to {}", ESPNOW_CHANNEL);
+        // Set explicit WiFi channel to ensure spoke and bridge sync on the same channel.
+        const ESPNOW_CHANNEL: u8 = 6;
+        esp_now
+            .set_channel(ESPNOW_CHANNEL)
+            .expect("failed to set ESP-NOW channel");
+        info!("ESP-NOW channel set to {}", ESPNOW_CHANNEL);
 
-    // Keep `wifi_ctrl` alive — dropping it would call `esp_wifi_stop()`.
-    let _wifi_ctrl = WIFI_CONTROLLER.init(wifi_ctrl);
-    networking::esp_now::start_esp_now_backend(spawner, esp_now);
+        // Keep `wifi_ctrl` alive — dropping it would call `esp_wifi_stop()`.
+        let _wifi_ctrl = WIFI_CONTROLLER.init(wifi_ctrl);
+        networking::esp_now::start_esp_now_backend(spawner, esp_now);
+    }
 
     // ---------- BLE --------------------------------------------------------------
-    let ble_connector = BleConnector::new(radio, peripherals.BT, Default::default())
-        .expect("failed to initialize BLE connector");
-    let ble_controller: ExternalController<_, 1> = ExternalController::new(ble_connector);
-    networking::ble::start_ble_backend(spawner, ble_controller);
+    #[cfg(feature = "ble")]
+    {
+        let ble_connector = BleConnector::new(radio, peripherals.BT, Default::default())
+            .expect("failed to initialize BLE connector");
+        let ble_controller: ExternalController<_, 1> = ExternalController::new(ble_connector);
+        networking::ble::start_ble_backend(spawner, ble_controller);
+    }
 
     match target {
         BoardTarget::Waveshare => {

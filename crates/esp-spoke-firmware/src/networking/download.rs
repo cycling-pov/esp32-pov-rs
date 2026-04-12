@@ -14,7 +14,9 @@ pub const BLE_MAX_CHUNK_PAYLOAD: usize = 224;
 pub const ESPNOW_MAX_CHUNK_PAYLOAD: usize = 1450;
 pub const MAX_TRANSFER_BYTES: usize = 10 * 1024;
 
+#[cfg(feature = "ble")]
 const BLE_MAX_CHUNKS: usize = MAX_TRANSFER_BYTES.div_ceil(BLE_MAX_CHUNK_PAYLOAD);
+#[cfg(feature = "espnow")]
 const ESPNOW_MAX_CHUNKS: usize = MAX_TRANSFER_BYTES.div_ceil(ESPNOW_MAX_CHUNK_PAYLOAD);
 
 pub type IngestError = ParseError;
@@ -26,23 +28,30 @@ pub enum IngestedPacket {
 
 pub type CompletedDownload = CompletedTransfer<MAX_TRANSFER_BYTES>;
 
+#[cfg(feature = "ble")]
 type BleAssembly = TransferAssembly<BLE_MAX_CHUNK_PAYLOAD, MAX_TRANSFER_BYTES, BLE_MAX_CHUNKS>;
+#[cfg(feature = "espnow")]
 type EspNowAssembly =
     TransferAssembly<ESPNOW_MAX_CHUNK_PAYLOAD, MAX_TRANSFER_BYTES, ESPNOW_MAX_CHUNKS>;
 
+#[cfg(feature = "ble")]
 static BLE_ASSEMBLY: Mutex<RefCell<BleAssembly>> =
     Mutex::new(RefCell::new(BleAssembly::new()));
+#[cfg(feature = "espnow")]
 static ESPNOW_ASSEMBLY: Mutex<RefCell<EspNowAssembly>> =
     Mutex::new(RefCell::new(EspNowAssembly::new()));
 
+#[cfg(feature = "ble")]
 pub fn ingest_ble_payload(payload: &[u8]) -> Result<Option<IngestedPacket>, IngestError> {
     ingest_packet(payload, &BLE_ASSEMBLY)
 }
 
+#[cfg(feature = "espnow")]
 pub fn ingest_espnow_payload(payload: &[u8]) -> Result<Option<IngestedPacket>, IngestError> {
     ingest_packet(payload, &ESPNOW_ASSEMBLY)
 }
 
+#[cfg(any(feature = "ble", feature = "espnow"))]
 fn ingest_packet<const MCP: usize, const MC: usize>(
     payload: &[u8],
     assembly: &Mutex<RefCell<TransferAssembly<MCP, MAX_TRANSFER_BYTES, MC>>>,
@@ -63,6 +72,7 @@ fn ingest_packet<const MCP: usize, const MC: usize>(
     ingest_chunk(chunk, assembly)
 }
 
+#[cfg(any(feature = "ble", feature = "espnow"))]
 fn ingest_chunk<const MCP: usize, const MC: usize>(
     chunk: DownloadChunk<'_>,
     assembly: &Mutex<RefCell<TransferAssembly<MCP, MAX_TRANSFER_BYTES, MC>>>,

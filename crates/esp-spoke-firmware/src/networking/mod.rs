@@ -5,11 +5,15 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use pov_proto::transfer::CommandFrame;
 
+#[cfg(feature = "ble")]
 pub mod ble;
 mod download;
+#[cfg(feature = "espnow")]
 pub mod esp_now;
 
-pub use download::{BLE_MAX_CHUNK_PAYLOAD, ESPNOW_MAX_CHUNK_PAYLOAD, IngestError, MAX_TRANSFER_BYTES};
+pub use download::{
+    BLE_MAX_CHUNK_PAYLOAD, ESPNOW_MAX_CHUNK_PAYLOAD, IngestError, MAX_TRANSFER_BYTES,
+};
 
 pub type CompletedDownload = download::CompletedDownload;
 
@@ -25,10 +29,12 @@ pub fn try_receive_command() -> Option<CommandFrame> {
     COMMAND_CHANNEL.receiver().try_receive().ok()
 }
 
+#[cfg(feature = "ble")]
 pub fn ingest_ble_payload(payload: &[u8]) -> Result<(), IngestError> {
     route_ingested_packet(download::ingest_ble_payload(payload)?)
 }
 
+#[cfg(feature = "espnow")]
 pub fn ingest_espnow_payload(payload: &[u8]) -> Result<(), IngestError> {
     route_ingested_packet(download::ingest_espnow_payload(payload)?)
 }

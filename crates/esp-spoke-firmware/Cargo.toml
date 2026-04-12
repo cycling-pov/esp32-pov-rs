@@ -16,10 +16,13 @@ name = "metro"
 path = "./src/bin/metro_main.rs"
 
 [features]
-default = ["waveshare-matrix"]
+default = ["waveshare-matrix","espnow"]
 waveshare-matrix = []
 sk9822-strip = []
 heap-stats = []
+ble = ["dep:bt-hci", "dep:trouble-host", "esp-radio/ble"]
+espnow = ["esp-radio/esp-now", "esp-radio/wifi"]
+coexistence = ["esp-radio/coex"]
 
 [dependencies]
 esp-hal = { version = "~1.0", features = ["defmt", "esp32s3", "unstable"] }
@@ -36,7 +39,7 @@ defmt                  = "1.0.1"
 esp-bootloader-esp-idf = { version = "0.4.0", features = ["defmt", "esp32s3"] }
 esp-hal-smartled = { version = "0.17.0", features = ["defmt", "esp32s3"] }
 
-bt-hci = "0.6.0"
+bt-hci = { version = "0.6.0", optional = true }
 embassy-executor = { version = "0.9.1", features = ["defmt"] }
 embassy-futures = "0.1.2"
 embassy-sync = "0.7.2"
@@ -51,16 +54,12 @@ esp-backtrace = { version = "0.18.1", features = [
 ] }
 esp-println = { version = "0.16.1", features = ["defmt-espflash", "esp32s3"] }
 esp-radio = { version = "0.17.0", features = [
-  "ble",
-  "coex",
   "defmt",
   "esp-alloc",
-  "esp-now",
   "esp32s3",
   "unstable",
-  "wifi",
 ] }
-trouble-host = { version = "0.5.0", features = ["gatt", "scan"] }
+trouble-host = { version = "0.5.0", features = ["gatt", "scan"], optional = true }
 
 critical-section = "1.2.0"
 rgb              = "0.8.52"

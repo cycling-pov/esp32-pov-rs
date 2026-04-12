@@ -25,7 +25,7 @@ jobs:
           - command: build
             args: --release
           - command: build
-            args: --release -p esp-spoke-firmware --bin waveshare
+            args: --release -p esp-spoke-firmware --bin waveshare --features heap-stats,espnow,ble,coexistence
           - command: build
             args: --release -p esp-spoke-firmware --bin metro --no-default-features --features sk9822-strip
           - command: fmt
