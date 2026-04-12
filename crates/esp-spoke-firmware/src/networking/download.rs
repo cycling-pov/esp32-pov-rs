@@ -35,8 +35,7 @@ type EspNowAssembly =
     TransferAssembly<ESPNOW_MAX_CHUNK_PAYLOAD, MAX_TRANSFER_BYTES, ESPNOW_MAX_CHUNKS>;
 
 #[cfg(feature = "ble")]
-static BLE_ASSEMBLY: Mutex<RefCell<BleAssembly>> =
-    Mutex::new(RefCell::new(BleAssembly::new()));
+static BLE_ASSEMBLY: Mutex<RefCell<BleAssembly>> = Mutex::new(RefCell::new(BleAssembly::new()));
 #[cfg(feature = "espnow")]
 static ESPNOW_ASSEMBLY: Mutex<RefCell<EspNowAssembly>> =
     Mutex::new(RefCell::new(EspNowAssembly::new()));
@@ -77,8 +76,7 @@ fn ingest_chunk<const MCP: usize, const MC: usize>(
     chunk: DownloadChunk<'_>,
     assembly: &Mutex<RefCell<TransferAssembly<MCP, MAX_TRANSFER_BYTES, MC>>>,
 ) -> Result<Option<IngestedPacket>, IngestError> {
-    let new_transfer =
-        critical_section::with(|cs| assembly.borrow_ref(cs).is_new_transfer(&chunk));
+    let new_transfer = critical_section::with(|cs| assembly.borrow_ref(cs).is_new_transfer(&chunk));
 
     if new_transfer {
         if critical_section::with(|cs| assembly.borrow_ref(cs).received_count()) == 0 {
@@ -94,8 +92,7 @@ fn ingest_chunk<const MCP: usize, const MC: usize>(
         }
     }
 
-    let result =
-        critical_section::with(|cs| assembly.borrow_ref_mut(cs).push_download(chunk));
+    let result = critical_section::with(|cs| assembly.borrow_ref_mut(cs).push_download(chunk));
 
     match result {
         Ok(Some(completed)) => {

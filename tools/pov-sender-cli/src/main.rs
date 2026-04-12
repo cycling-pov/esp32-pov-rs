@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use pov_proto::{
     bridge::{BridgeFrame, TransportSelector},
     image::encode_rgb888_to_wire,
-    transfer::{encode_packet, ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand},
+    transfer::{ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand, encode_packet},
 };
 use rand::seq::SliceRandom;
 use serialport::SerialPort;
