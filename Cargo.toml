@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy = { version = "0.18.1", features = ["bevy_dev_tools"] }
+bevy = { version = "0.18", features = ["bevy_dev_tools", "dynamic_linking", "trace", "trace_tracy", "dev"] }
+tracing = "0.1"
 
 [profile.dev]
 opt-level = 1
