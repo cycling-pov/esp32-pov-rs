@@ -11,13 +11,19 @@ use clap::{Parser, Subcommand, ValueEnum};
 use pov_proto::{
     bridge::{BridgeFrame, TransportSelector},
     image::encode_rgb888_to_wire,
-    transfer::{ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand, encode_packet},
+    transfer::{encode_packet, ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand},
 };
 use rand::seq::SliceRandom;
 use serialport::SerialPort;
 
-const WIRELESS_CHUNK_PAYLOAD_BYTES: usize = 224;
-const SERIAL_TX_BUF_BYTES: usize = 512;
+/// ESP-NOW 2.0 supports up to 1470-byte packets including protocol metadata.
+/// Keep chunk payload lower so postcard-encoded transfer packets fit the MTU.
+const ESPNOW_CHUNK_PAYLOAD_BYTES: usize = 1450;
+/// BLE extended advertising caps the manufacturer-specific AD payload at ~250 bytes.
+const BLE_CHUNK_PAYLOAD_BYTES: usize = 224;
+/// Must be large enough to hold a postcard-encoded pov-proto packet whose
+/// payload is up to ESPNOW_CHUNK_PAYLOAD_BYTES bytes (~1490 bytes max).
+const SERIAL_TX_BUF_BYTES: usize = 1600;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum Transport {
@@ -90,7 +96,10 @@ enum Command {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let max_chunk_payload = WIRELESS_CHUNK_PAYLOAD_BYTES;
+    let max_chunk_payload = match args.transport {
+        Transport::Espnow => ESPNOW_CHUNK_PAYLOAD_BYTES,
+        Transport::Ble => BLE_CHUNK_PAYLOAD_BYTES,
+    };
 
     let transport_selector = match args.transport {
         Transport::Ble => TransportSelector::BleExtAdv,

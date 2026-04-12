@@ -12,16 +12,17 @@ use pov_proto::bridge::{BridgeFrame, TransportSelector};
 
 /// Maximum on-wire COBS frame size we are willing to buffer.
 ///
-/// A single BridgeFrame wraps at most DEFAULT_MAX_CHUNK_PAYLOAD (224) bytes of
-/// chunk data plus a small postcard/COBS overhead — 256 bytes is ample.
-const RX_BUF: usize = 512;
+/// A single BridgeFrame wraps at most 1470 bytes of ESP-NOW 2.0 chunk data
+/// plus postcard/COBS framing overhead, 2048 bytes is sufficient.
+const RX_BUF: usize = 2048;
 
 /// A fixed-size copy of a raw chunk payload received from the host.
 ///
 /// The payload is opaque from the bridge's perspective; it is written straight
 /// into the BLE advertisement or ESP-NOW packet.
+/// Sized for the ESP-NOW 2.0 maximum of 1470 bytes per packet.
 pub struct ChunkMsg {
-    pub buf: [u8; 256],
+    pub buf: [u8; 1470],
     pub len: usize,
 }
 
@@ -53,7 +54,7 @@ pub async fn usb_serial_task(
                     Ok(frame) => {
                         // Copy the borrowed payload before we release `buf`.
                         let mut msg = ChunkMsg {
-                            buf: [0u8; 256],
+                            buf: [0u8; 1470],
                             len: 0,
                         };
                         let copy_len = frame.payload.len().min(msg.buf.len());

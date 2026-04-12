@@ -296,7 +296,7 @@ pub async fn ble_backend_task(controller: BleController) {
 }
 
 pub fn ingest_manufacturer_data(payload: &[u8]) -> Result<(), ParseError> {
-    super::ingest_manufacturer_data(payload)
+    super::ingest_ble_payload(payload)
 }
 
 pub fn ingest_legacy_advertisement(

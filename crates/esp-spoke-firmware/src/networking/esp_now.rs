@@ -57,7 +57,7 @@ pub async fn esp_now_backend_task(mut esp_now: EspNow<'static>) {
             );
         }
 
-        match super::ingest_manufacturer_data(payload) {
+        match super::ingest_espnow_payload(payload) {
             Ok(()) => {
                 debug!("ESP-NOW packet successfully ingested");
             }

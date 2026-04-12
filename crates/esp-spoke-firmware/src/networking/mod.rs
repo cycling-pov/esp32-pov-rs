@@ -9,7 +9,7 @@ pub mod ble;
 mod download;
 pub mod esp_now;
 
-pub use download::{IngestError, MAX_CHUNK_PAYLOAD, MAX_TRANSFER_BYTES};
+pub use download::{BLE_MAX_CHUNK_PAYLOAD, ESPNOW_MAX_CHUNK_PAYLOAD, IngestError, MAX_TRANSFER_BYTES};
 
 pub type CompletedDownload = download::CompletedDownload;
 
@@ -25,8 +25,16 @@ pub fn try_receive_command() -> Option<CommandFrame> {
     COMMAND_CHANNEL.receiver().try_receive().ok()
 }
 
-pub fn ingest_manufacturer_data(payload: &[u8]) -> Result<(), IngestError> {
-    if let Some(packet) = download::ingest_manufacturer_data(payload)? {
+pub fn ingest_ble_payload(payload: &[u8]) -> Result<(), IngestError> {
+    route_ingested_packet(download::ingest_ble_payload(payload)?)
+}
+
+pub fn ingest_espnow_payload(payload: &[u8]) -> Result<(), IngestError> {
+    route_ingested_packet(download::ingest_espnow_payload(payload)?)
+}
+
+fn route_ingested_packet(packet: Option<download::IngestedPacket>) -> Result<(), IngestError> {
+    if let Some(packet) = packet {
         match packet {
             download::IngestedPacket::Download(completed) => {
                 let kind = completed.kind;
