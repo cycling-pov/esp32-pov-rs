@@ -10,8 +10,9 @@ use static_cell::StaticCell;
 use crate::led::{LedError, LedStrip, LedTimings};
 
 // The Waveshare Matrix has very poor thermal design. The manufacturer recommends limiting
-// the brightness to 50%. We'll cap the brightness to 5% to prevent overheating.
-const WAVESHARE_MATRIX_BRIGHTNESS_LIMIT_PERCENT: u16 = 5;
+// the brightness to 50%. We'll cap the brightness to 1% to prevent overheating and because
+// the LEDs are very bright even at low brightness levels.
+const WAVESHARE_MATRIX_BRIGHTNESS_LIMIT_PERCENT: u16 = 1;
 
 const WAVESHARE_MATRIX_LED_COUNT: usize = 64;
 const WAVESHARE_MATRIX_BUFFER_SIZE: usize = buffer_size(WAVESHARE_MATRIX_LED_COUNT);
