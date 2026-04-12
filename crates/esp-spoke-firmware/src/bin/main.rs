@@ -1,6 +1,7 @@
 use bt_hci::controller::ExternalController;
 use defmt::info;
 use embassy_executor::Spawner;
+#[cfg(feature = "heap-stats")]
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
 #[cfg(feature = "waveshare-matrix")]
