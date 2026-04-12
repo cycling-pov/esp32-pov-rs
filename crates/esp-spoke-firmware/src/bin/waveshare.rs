@@ -32,13 +32,14 @@ fn render_bitmap_index(
 fn apply_downloaded_image(
     led_strip: &mut WaveshareMatrix<'_>,
     bitmap_store: &mut impl BitmapStorage,
+    current_bitmap_index: &mut usize,
     decode_scratch: &mut [u8],
     download: &CompletedDownload,
 ) {
     let metadata = bitmap_store.metadata();
     let pixel_count = metadata.pixel_count();
 
-    let writable_index = bitmap_store.bitmap_count();
+    let writable_index = bitmap_store.bitmap_count().saturating_sub(1);
     let mut writable = bitmap_store
         .bitmap_mut(writable_index)
         .expect("missing writable image slot");
@@ -72,6 +73,7 @@ fn apply_downloaded_image(
     led_strip
         .show()
         .expect("failed to show downloaded bitmap on LED strip");
+    *current_bitmap_index = writable_index;
 
     info!(
         "applied downloaded image transfer {} ({} bytes, crc32=0x{:08x})",
@@ -140,9 +142,13 @@ pub async fn run_waveshare_output(led_strip: &mut WaveshareMatrix<'_>) -> ! {
 
         if let Some(download) = networking::try_receive_download() {
             match download.kind {
-                DownloadKind::DisplayImage => {
-                    apply_downloaded_image(led_strip, &mut *bitmap_store, decode_scratch, &download)
-                }
+                DownloadKind::DisplayImage => apply_downloaded_image(
+                    led_strip,
+                    &mut *bitmap_store,
+                    &mut current_bitmap_index,
+                    decode_scratch,
+                    &download,
+                ),
                 DownloadKind::OtaImage | DownloadKind::Video => {
                     info!(
                         "ignoring unsupported download kind on waveshare target: kind={:?} transfer_id={} bytes={}",

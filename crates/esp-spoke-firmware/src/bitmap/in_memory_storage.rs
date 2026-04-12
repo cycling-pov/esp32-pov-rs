@@ -46,12 +46,16 @@ impl<const IMAGE_COUNT: usize, const PIXEL_COUNT: usize> BitmapStorage
     }
 
     fn bitmap_count(&self) -> usize {
-        IMAGE_COUNT
+        IMAGE_COUNT + 1
     }
 
     fn bitmap(&self, index: usize) -> Result<Bitmap<'_>, BitmapError> {
         if let Some(image) = self.images.get(index) {
             return Ok(Bitmap::new(self.metadata, image));
+        }
+
+        if index == IMAGE_COUNT {
+            return Ok(Bitmap::new(self.metadata, &self.writable_image));
         }
 
         Err(BitmapError::InvalidIndex {
