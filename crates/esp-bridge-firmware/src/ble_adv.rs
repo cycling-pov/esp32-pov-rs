@@ -4,6 +4,7 @@
 //! as a non-connectable, non-scannable BLE extended advertisement.
 
 use bt_hci::controller::ExternalController;
+use defmt::info;
 use embassy_futures::select::select;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Receiver};
 use embassy_time::Duration;
@@ -58,6 +59,7 @@ pub async fn ble_adv_task(
     // non-connectable broadcast.  `runner.run()` processes HCI events on the
     // other side of `select`.
     let adv_loop = async {
+        info!("BLE extended advertisement broadcaster task started");
         loop {
             let msg = receiver.receive().await;
 

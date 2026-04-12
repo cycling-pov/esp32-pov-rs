@@ -135,6 +135,6 @@ async fn main(spawner: Spawner) -> ! {
     info!("Wireless bridge running.");
     loop {
         info!("Heartbeat");
-        Timer::after(Duration::from_secs(10)).await;
+        Timer::after(Duration::from_secs(30)).await;
     }
 }

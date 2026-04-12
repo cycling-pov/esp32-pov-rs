@@ -18,22 +18,11 @@ pub async fn esp_now_task(
 
     loop {
         let msg = receiver.receive().await;
-        info!(
-            "ESP-NOW: sending {} bytes to broadcast address FF:FF:FF:FF:FF:FF",
-            msg.len
-        );
 
         // Ignore send errors; best-effort broadcast.
-        match esp_now
+        esp_now
             .send_async(&BROADCAST_ADDRESS, &msg.buf[..msg.len])
             .await
-        {
-            Ok(()) => {
-                info!("ESP-NOW: packet sent successfully");
-            }
-            Err(err) => {
-                info!("ESP-NOW: send failed: {:?}", err);
-            }
-        }
+            .ok();
     }
 }
