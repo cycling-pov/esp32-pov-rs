@@ -7,6 +7,7 @@ use crate::bitmap::{Bitmap, BitmapError, BitmapMut, BitmapStorage, BitmapStorage
 include!(concat!(env!("OUT_DIR"), "/asset_bitmap.rs"));
 
 pub static BUILTIN_IMAGES: [[RGB8; GENERATED_BITMAP_PIXEL_COUNT]; 1] = [GENERATED_BITMAP];
+const DOWNLOADABLE_IMAGE_SLOTS: usize = 2;
 
 pub fn generated_image_storage() -> Box<InMemoryImageStorage<1, GENERATED_BITMAP_PIXEL_COUNT>> {
     Box::new(InMemoryImageStorage::new(
@@ -18,7 +19,7 @@ pub fn generated_image_storage() -> Box<InMemoryImageStorage<1, GENERATED_BITMAP
 pub struct InMemoryImageStorage<const IMAGE_COUNT: usize, const PIXEL_COUNT: usize> {
     metadata: BitmapStorageMetadata,
     images: &'static [[RGB8; PIXEL_COUNT]; IMAGE_COUNT],
-    writable_image: [RGB8; PIXEL_COUNT],
+    writable_images: [[RGB8; PIXEL_COUNT]; DOWNLOADABLE_IMAGE_SLOTS],
 }
 
 impl<const IMAGE_COUNT: usize, const PIXEL_COUNT: usize>
@@ -33,7 +34,7 @@ impl<const IMAGE_COUNT: usize, const PIXEL_COUNT: usize>
         Self {
             metadata,
             images,
-            writable_image: [RGB8::default(); PIXEL_COUNT],
+            writable_images: [[RGB8::default(); PIXEL_COUNT]; DOWNLOADABLE_IMAGE_SLOTS],
         }
     }
 }
@@ -46,7 +47,7 @@ impl<const IMAGE_COUNT: usize, const PIXEL_COUNT: usize> BitmapStorage
     }
 
     fn bitmap_count(&self) -> usize {
-        IMAGE_COUNT + 1
+        IMAGE_COUNT + DOWNLOADABLE_IMAGE_SLOTS
     }
 
     fn bitmap(&self, index: usize) -> Result<Bitmap<'_>, BitmapError> {
@@ -54,8 +55,8 @@ impl<const IMAGE_COUNT: usize, const PIXEL_COUNT: usize> BitmapStorage
             return Ok(Bitmap::new(self.metadata, image));
         }
 
-        if index == IMAGE_COUNT {
-            return Ok(Bitmap::new(self.metadata, &self.writable_image));
+        if let Some(image) = self.writable_images.get(index.saturating_sub(IMAGE_COUNT)) {
+            return Ok(Bitmap::new(self.metadata, image));
         }
 
         Err(BitmapError::InvalidIndex {
@@ -65,17 +66,20 @@ impl<const IMAGE_COUNT: usize, const PIXEL_COUNT: usize> BitmapStorage
     }
 
     fn bitmap_mut(&mut self, index: usize) -> Result<BitmapMut<'_>, BitmapError> {
-        if index == IMAGE_COUNT {
-            return Ok(BitmapMut::new(self.metadata, &mut self.writable_image));
-        }
+        let bitmap_count = IMAGE_COUNT + DOWNLOADABLE_IMAGE_SLOTS;
 
         if index < IMAGE_COUNT {
             return Err(BitmapError::NotWritable { index });
         }
 
+        let writable_index = index.saturating_sub(IMAGE_COUNT);
+        if let Some(image) = self.writable_images.get_mut(writable_index) {
+            return Ok(BitmapMut::new(self.metadata, image));
+        }
+
         Err(BitmapError::InvalidIndex {
             index,
-            bitmap_count: self.bitmap_count(),
+            bitmap_count,
         })
     }
 }

@@ -33,7 +33,8 @@ pub enum BoardTarget {
     Metro,
 }
 
-const TOTAL_HEAP_BYTES: usize = 64 * 1024;
+const RECLAIMABLE_BOOTLOADER_BYTES: usize = 73744;
+const ADDITIONAL_HEAP_BYTES: usize = 64 * 1024;
 // COEX (simultaneous BLE + WiFi/ESP-NOW) requires extra heap on top.
 #[cfg(feature = "coexistence")]
 const COEX_HEAP_BYTES: usize = 64 * 1024;
@@ -59,7 +60,8 @@ pub async fn run(target: BoardTarget, spawner: Spawner) -> ! {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
-    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: TOTAL_HEAP_BYTES);
+    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: RECLAIMABLE_BOOTLOADER_BYTES);
+    esp_alloc::heap_allocator!(size: ADDITIONAL_HEAP_BYTES);
     // Extra heap required by COEX (running BLE and WiFi/ESP-NOW concurrently).
     #[cfg(feature = "coexistence")]
     esp_alloc::heap_allocator!(size: COEX_HEAP_BYTES);
