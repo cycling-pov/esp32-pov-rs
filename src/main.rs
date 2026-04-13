@@ -8,26 +8,77 @@ struct LedValue {
     id: u32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default, Clone, Copy)]
+struct SpokePosition {
+    current_pos: f32,
+    previous_pos: f32,
+}
+
+#[derive(Debug, Clone)]
 struct RotationState {
     rotation_rate: f32,
-    previous_pos: f32,
-    current_pos: f32,
+    spoke_positions: Vec<SpokePosition>,
 }
 
 impl RotationState {
-    fn step(&mut self, dt: f32) {
-        self.previous_pos = self.current_pos;
-        self.current_pos =
-            (self.current_pos + dt * self.rotation_rate).rem(2.0 * ::core::f32::consts::PI);
+    const FULL_CIRCLE: f32 = 2.0 * ::core::f32::consts::PI;
+
+    fn new(num_spokes: usize, init_rate: f32) -> Self {
+        assert!(num_spokes > 0);
+        let mut s = Self {
+            rotation_rate: init_rate,
+            spoke_positions: vec![SpokePosition::default(); num_spokes],
+        };
+        s.reset();
+        s
     }
 
-    const fn contains(&self, x: f32) -> bool {
-        if self.current_pos > self.previous_pos {
-            x >= self.previous_pos && x <= self.current_pos
-        } else {
-            x <= self.current_pos || x >= self.previous_pos
+    fn reset(&mut self) {
+        let offset = self.offset_angle();
+        for (i, pos) in self.spoke_positions.iter_mut().enumerate() {
+            let current = offset * (i as f32);
+            pos.current_pos = current;
+            pos.previous_pos = current;
         }
+    }
+
+    fn step(&mut self, dt: f32) {
+        let angle_offset = self.offset_angle();
+
+        let init_angle = if let Some(pos) = self.spoke_positions.first_mut() {
+            pos.previous_pos = pos.current_pos;
+            pos.current_pos = (pos.current_pos + dt * self.rotation_rate).rem(Self::FULL_CIRCLE);
+            pos.current_pos
+        } else {
+            panic!("unable to get spoke values");
+        };
+
+        for pos in &mut self.spoke_positions[1..] {
+            pos.previous_pos = pos.current_pos;
+            pos.current_pos = (init_angle + angle_offset).rem(Self::FULL_CIRCLE);
+        }
+    }
+
+    fn offset_angle(&self) -> f32 {
+        let num_spokes = self.spoke_positions.len();
+        assert!(num_spokes > 0);
+        Self::FULL_CIRCLE / num_spokes as f32
+    }
+
+    fn contains(&self, x: f32) -> bool {
+        for spoke in &self.spoke_positions {
+            let res = if spoke.current_pos > spoke.previous_pos {
+                x >= spoke.previous_pos && x <= spoke.current_pos
+            } else {
+                x <= spoke.current_pos || x >= spoke.previous_pos
+            };
+
+            if res {
+                return true;
+            }
+        }
+
+        false
     }
 }
 
@@ -61,11 +112,7 @@ pub fn main() {
         }
     }
 
-    let mut state = RotationState {
-        current_pos: 0.0,
-        previous_pos: 0.0,
-        rotation_rate: 5.0,
-    };
+    let mut state = RotationState::new(2, 5.0);
 
     while !rl.window_should_close() {
         let scale = rl.get_window_scale_dpi();
@@ -89,10 +136,10 @@ pub fn main() {
             if state.contains(l.offset) {
                 l.fade_val = 1.0;
             } else {
-                l.fade_val = (l.fade_val - d.get_frame_time()).max(0.0);
+                l.fade_val = (l.fade_val - d.get_frame_time() * (1.0 / 0.2)).max(0.0);
             }
 
-            let color = if l.id > 30 { Color::RED } else { Color::BLUE }.alpha(l.fade_val);
+            let color = if l.id > 10 { Color::RED } else { Color::BLUE }.alpha(l.fade_val);
 
             d.draw_circle(
                 cx + (l.loc.0 * wheel_inner_radius) as i32,
@@ -102,7 +149,21 @@ pub fn main() {
             );
         }
 
-        d.draw_text("Hello, world!", 12, 12, 20, Color::BLACK);
-        d.draw_text(&format!("FPS: {}", d.get_fps()), 12, 40, 20, Color::BLACK);
+        if d.is_key_down(KeyboardKey::KEY_UP) {
+            state.rotation_rate = (state.rotation_rate + 2.0 * d.get_frame_time()).min(15.0);
+        }
+
+        if d.is_key_down(KeyboardKey::KEY_DOWN) {
+            state.rotation_rate = (state.rotation_rate - 2.0 * d.get_frame_time()).max(1.0);
+        }
+
+        d.draw_text(&format!("FPS: {}", d.get_fps()), 12, 12, 20, Color::BLACK);
+        d.draw_text(
+            &format!("Speed: {:.2}", state.rotation_rate),
+            12,
+            40,
+            20,
+            Color::BLACK,
+        );
     }
 }
