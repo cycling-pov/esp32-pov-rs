@@ -165,11 +165,14 @@ pub fn main() {
             state.rotation_rate = (state.rotation_rate - 2.0 * d.get_frame_time()).max(1.0);
         }
 
-        d.draw_text(&format!("FPS: {}", d.get_fps()), 12, 12, 20, Color::BLACK);
         d.draw_text(
-            &format!("Speed: {:.2}", state.rotation_rate),
+            &format!(
+                "Speed: {:.2} (Up/Down to Change)\nFPS: {}",
+                state.rotation_rate,
+                d.get_fps()
+            ),
             12,
-            40,
+            12,
             20,
             Color::BLACK,
         );
