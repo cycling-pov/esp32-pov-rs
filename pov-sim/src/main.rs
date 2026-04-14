@@ -1,87 +1,19 @@
-use pov_images::image_from_data;
+mod selections;
+mod state;
+
+use crate::{
+    selections::{Image, ImageSelection, VideoRotation, VideoTime},
+    state::RotationState,
+};
+use pov_images::{frames_from_data, image_from_data};
 use raylib::prelude::*;
-use std::ops::Rem;
 
 struct LedValue {
     loc: (f32, f32),
     fade_val: f32,
     offset: f32,
-    id: u32,
-    radius: f32,
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-struct SpokePosition {
-    current_pos: f32,
-    previous_pos: f32,
-}
-
-#[derive(Debug, Clone)]
-struct RotationState {
-    rotation_rate: f32,
-    spoke_positions: Vec<SpokePosition>,
-}
-
-impl RotationState {
-    const FULL_CIRCLE: f32 = 2.0 * ::core::f32::consts::PI;
-
-    fn new(num_spokes: usize, init_rate: f32) -> Self {
-        assert!(num_spokes > 0);
-        let mut s = Self {
-            rotation_rate: init_rate,
-            spoke_positions: vec![SpokePosition::default(); num_spokes],
-        };
-        s.reset();
-        s
-    }
-
-    fn reset(&mut self) {
-        let offset = self.offset_angle();
-        for (i, pos) in self.spoke_positions.iter_mut().enumerate() {
-            let current = offset * (i as f32);
-            pos.current_pos = current;
-            pos.previous_pos = current;
-        }
-    }
-
-    fn step(&mut self, dt: f32) {
-        let angle_offset = self.offset_angle();
-
-        let init_angle = if let Some(pos) = self.spoke_positions.first_mut() {
-            pos.previous_pos = pos.current_pos;
-            pos.current_pos = (pos.current_pos + dt * self.rotation_rate).rem(Self::FULL_CIRCLE);
-            pos.current_pos
-        } else {
-            panic!("unable to get spoke values");
-        };
-
-        for pos in &mut self.spoke_positions[1..] {
-            pos.previous_pos = pos.current_pos;
-            pos.current_pos = (init_angle + angle_offset).rem(Self::FULL_CIRCLE);
-        }
-    }
-
-    fn offset_angle(&self) -> f32 {
-        let num_spokes = self.spoke_positions.len();
-        assert!(num_spokes > 0);
-        Self::FULL_CIRCLE / num_spokes as f32
-    }
-
-    fn contains(&self, x: f32) -> bool {
-        for spoke in &self.spoke_positions {
-            let res = if spoke.current_pos > spoke.previous_pos {
-                x >= spoke.previous_pos && x <= spoke.current_pos
-            } else {
-                x <= spoke.current_pos || x >= spoke.previous_pos
-            };
-
-            if res {
-                return true;
-            }
-        }
-
-        false
-    }
+    //id: u32,
+    //radius: f32,
 }
 
 pub fn main() {
@@ -97,6 +29,14 @@ pub fn main() {
     const NUM_LED_SPOKES: u32 = 72 * 2;
 
     let img_val = image_from_data::<256>(include_bytes!("../earth.jpg"));
+    let cat_frames = frames_from_data::<256>(include_bytes!("../cat-space.gif"));
+
+    let mut selections: Vec<(&'static str, Box<dyn ImageSelection>)> = vec![
+        ("earth", Box::new(Image::new(&img_val))),
+        ("cat (rot)", Box::new(VideoRotation::new(&cat_frames))),
+        ("cat (dt)", Box::new(VideoTime::new(&cat_frames, 0.05))),
+    ];
+    let mut selection_index = 0;
 
     let mut leds = Vec::new();
     for d in 0..NUM_LED_SPOKES {
@@ -111,14 +51,22 @@ pub fn main() {
             leds.push(LedValue {
                 loc: (radius * c, radius * s),
                 fade_val: 1.0,
-                id: i,
                 offset: angle,
-                radius,
+                //id: i,
+                //radius,
             });
         }
     }
 
-    let mut state = RotationState::new(2, 5.0);
+    const ROT_RATE_MIN: f32 = 1.0;
+    const ROT_RATE_MAX: f32 = 20.0;
+    const ROT_ACCEL: f32 = 2.0;
+
+    const FADE_TIME_MIN: f32 = 0.1;
+    const FADE_TIME_MAX: f32 = 2.0;
+    const FADE_TIME_RATE: f32 = 0.5;
+
+    let mut state = RotationState::new(2, 12.0);
     let mut fade_time = 0.2f32;
 
     while !rl.window_should_close() {
@@ -130,6 +78,13 @@ pub fn main() {
         let wheel_inner_radius = wheel_radius * 0.95;
 
         state.step(rl.get_frame_time());
+        if state.has_rotated() {
+            selections[selection_index].1.step_rotation();
+        }
+        selections[selection_index].1.step_dt(rl.get_frame_time());
+
+        let (name, val) = &selections[selection_index];
+        let current = val.current_image();
 
         let mut d = rl.begin_drawing(&thread);
 
@@ -147,7 +102,7 @@ pub fn main() {
                 l.fade_val = (l.fade_val - d.get_frame_time() * (1.0 / fade_time)).max(0.0);
             }
 
-            let px = img_val.get_nearest(l.loc.0, l.loc.1);
+            let px = current.get_nearest(l.loc.0, l.loc.1);
             let color = Color::new(px.red, px.green, px.blue, 255).alpha(l.fade_val);
 
             d.draw_circle(
@@ -158,28 +113,43 @@ pub fn main() {
             );
         }
 
+        let mut rot_dir: i32 = 0;
+
         if d.is_key_down(KeyboardKey::KEY_UP) {
-            state.rotation_rate = (state.rotation_rate + 2.0 * d.get_frame_time()).min(15.0);
+            rot_dir += 1;
         }
 
         if d.is_key_down(KeyboardKey::KEY_DOWN) {
-            state.rotation_rate = (state.rotation_rate - 2.0 * d.get_frame_time()).max(1.0);
+            rot_dir -= 1;
         }
 
+        state.rotation_rate = (state.rotation_rate
+            + rot_dir as f32 * ROT_ACCEL * d.get_frame_time())
+        .clamp(ROT_RATE_MIN, ROT_RATE_MAX);
+
+        let mut fade_dir: i32 = 0;
+
         if d.is_key_down(KeyboardKey::KEY_RIGHT) {
-            fade_time = (fade_time + 0.5 * d.get_frame_time()).min(2.0);
+            fade_dir += 1;
         }
 
         if d.is_key_down(KeyboardKey::KEY_LEFT) {
-            fade_time = (fade_time - 0.5 * d.get_frame_time()).max(0.1);
+            fade_dir -= 1;
+        }
+        fade_time = (fade_time + fade_dir as f32 * FADE_TIME_RATE * d.get_frame_time())
+            .clamp(FADE_TIME_MIN, FADE_TIME_MAX);
+
+        if d.is_key_pressed(KeyboardKey::KEY_A) {
+            selection_index = (selection_index + 1) % selections.len();
         }
 
         d.draw_text(
             &format!(
-                "Speed: {:.2} rad/s (Up/Down)\nFade: {:.2} s (Left/Right)\nFPS: {}",
+                "Speed: {:.2} rad/s (Up/Down)\nFade: {:.2} s (Left/Right)\nFPS: {}\n{}\n'a' to advance",
                 state.rotation_rate,
                 fade_time,
-                d.get_fps()
+                d.get_fps(),
+                name
             ),
             12,
             12,
