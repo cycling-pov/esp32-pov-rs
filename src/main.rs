@@ -138,6 +138,7 @@ pub fn main() {
         d.clear_background(BACK_COLOR);
         d.draw_circle(cx, cy, wheel_radius, Color::BLACK);
         d.draw_circle(cx, cy, wheel_inner_radius, BACK_COLOR);
+        d.draw_circle(cx, cy, HUB_PERC * wheel_inner_radius * 0.8, Color::BLACK);
 
         for l in &mut leds {
             if state.contains(l.offset) {
