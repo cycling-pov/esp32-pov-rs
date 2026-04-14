@@ -1,0 +1,3 @@
+[submodule "pov-algs"]
+	path = pov-algs
+	url = ../pov-algs

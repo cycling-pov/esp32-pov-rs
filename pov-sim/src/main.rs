@@ -1,3 +1,4 @@
+use pov_images::image_from_data;
 use raylib::prelude::*;
 use std::ops::Rem;
 
@@ -91,9 +92,11 @@ pub fn main() {
         .resizable()
         .build();
 
-    const NUM_LED: u32 = 30;
+    const NUM_LED: u32 = 40;
     const HUB_PERC: f32 = 0.2;
     const NUM_LED_SPOKES: u32 = 72 * 2;
+
+    let img_val = image_from_data::<256>(include_bytes!("../earth.jpg"));
 
     let mut leds = Vec::new();
     for d in 0..NUM_LED_SPOKES {
@@ -101,10 +104,6 @@ pub fn main() {
         let (s, c) = angle.sin_cos();
 
         for i in 0..NUM_LED {
-            if d % 2 == 1 && i < NUM_LED / 3 {
-                continue;
-            }
-
             let radius_perc = i as f32 / NUM_LED as f32;
             let radius_mod = radius_perc.powf(0.8);
 
@@ -120,6 +119,7 @@ pub fn main() {
     }
 
     let mut state = RotationState::new(2, 5.0);
+    let mut fade_time = 0.2f32;
 
     while !rl.window_should_close() {
         let scale = rl.get_window_scale_dpi();
@@ -144,10 +144,11 @@ pub fn main() {
             if state.contains(l.offset) {
                 l.fade_val = 1.0;
             } else {
-                l.fade_val = (l.fade_val - d.get_frame_time() * (1.0 / 0.2)).max(0.0);
+                l.fade_val = (l.fade_val - d.get_frame_time() * (1.0 / fade_time)).max(0.0);
             }
 
-            let color = if l.id > 10 { Color::RED } else { Color::BLUE }.alpha(l.fade_val);
+            let px = img_val.get_nearest(l.loc.0, l.loc.1);
+            let color = Color::new(px.red, px.green, px.blue, 255).alpha(l.fade_val);
 
             d.draw_circle(
                 cx + (l.loc.0 * wheel_inner_radius) as i32,
@@ -165,10 +166,19 @@ pub fn main() {
             state.rotation_rate = (state.rotation_rate - 2.0 * d.get_frame_time()).max(1.0);
         }
 
+        if d.is_key_down(KeyboardKey::KEY_RIGHT) {
+            fade_time = (fade_time + 0.5 * d.get_frame_time()).min(2.0);
+        }
+
+        if d.is_key_down(KeyboardKey::KEY_LEFT) {
+            fade_time = (fade_time - 0.5 * d.get_frame_time()).max(0.1);
+        }
+
         d.draw_text(
             &format!(
-                "Speed: {:.2} (Up/Down to Change)\nFPS: {}",
+                "Speed: {:.2} rad/s (Up/Down)\nFade: {:.2} s (Left/Right)\nFPS: {}",
                 state.rotation_rate,
+                fade_time,
                 d.get_fps()
             ),
             12,
