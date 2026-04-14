@@ -6,6 +6,7 @@ struct LedValue {
     fade_val: f32,
     offset: f32,
     id: u32,
+    radius: f32,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -92,13 +93,18 @@ pub fn main() {
 
     const NUM_LED: u32 = 30;
     const HUB_PERC: f32 = 0.2;
+    const NUM_LED_SPOKES: u32 = 72 * 2;
 
     let mut leds = Vec::new();
-    for d in 0..72 {
-        let angle = (d * 5) as f32 * ::core::f32::consts::PI / 180.0;
+    for d in 0..NUM_LED_SPOKES {
+        let angle = (d as f32 * 360.0 / NUM_LED_SPOKES as f32) * ::core::f32::consts::PI / 180.0;
         let (s, c) = angle.sin_cos();
 
         for i in 0..NUM_LED {
+            if d % 2 == 1 && i < NUM_LED / 3 {
+                continue;
+            }
+
             let radius_perc = i as f32 / NUM_LED as f32;
             let radius_mod = radius_perc.powf(0.8);
 
@@ -108,6 +114,7 @@ pub fn main() {
                 fade_val: 1.0,
                 id: i,
                 offset: angle,
+                radius,
             });
         }
     }
