@@ -16,7 +16,7 @@ use crate::bitmap::{BitmapStorage, generated_image_storage};
 use crate::led::{LedCommand, LedError, LedStrip, LedTimings};
 use crate::networking::CompletedDownload;
 
-pub const METRO_SK9822_LED_COUNT: usize = 30;
+pub const SK9822_LED_COUNT: usize = 30;
 
 const SK9822_RGB565_DECODE_SCRATCH_BYTES: usize = 1024 * 10;
 const DOWNLOADABLE_IMAGE_SLOTS: usize = 2;
@@ -116,21 +116,21 @@ impl<const LED_COUNT: usize> LedStrip for Sk9822Strip<'_, LED_COUNT> {
 }
 
 fn render_bitmap_index(
-    led_strip: &mut Sk9822Strip<'_, METRO_SK9822_LED_COUNT>,
+    led_strip: &mut Sk9822Strip<'_, SK9822_LED_COUNT>,
     bitmap_store: &impl BitmapStorage,
     index: usize,
 ) {
     let image_bitmap = bitmap_store.bitmap(index).expect("missing bitmap");
 
     image_bitmap
-        .scale_into(METRO_SK9822_LED_COUNT, 1, led_strip.pixels_mut())
+        .scale_into(SK9822_LED_COUNT, 1, led_strip.pixels_mut())
         .expect("failed to scale bitmap");
 
     led_strip.show().expect("failed to update SK9822 strip");
 }
 
 fn apply_downloaded_image(
-    led_strip: &mut Sk9822Strip<'_, METRO_SK9822_LED_COUNT>,
+    led_strip: &mut Sk9822Strip<'_, SK9822_LED_COUNT>,
     bitmap_store: &mut impl BitmapStorage,
     current_bitmap_index: &mut usize,
     next_download_slot: &mut usize,
@@ -169,10 +169,12 @@ fn apply_downloaded_image(
         download.transfer_id, decoded, download.len, pixel_count
     );
 
-    writable
-        .as_bitmap()
-        .scale_into(METRO_SK9822_LED_COUNT, 1, led_strip.pixels_mut())
-        .expect("failed to scale downloaded bitmap");
+    // TODO: Use LED translation utility to map the bitmap to LED strip commands. For now, just set the LEDs to white
+    led_strip.fill(smart_leds_trait::RGB8 {
+        r: 255,
+        g: 255,
+        b: 255,
+    });
     led_strip
         .show()
         .expect("failed to show downloaded bitmap on SK9822 strip");
@@ -185,7 +187,7 @@ fn apply_downloaded_image(
 }
 
 fn apply_command(
-    led_strip: &mut Sk9822Strip<'_, METRO_SK9822_LED_COUNT>,
+    led_strip: &mut Sk9822Strip<'_, SK9822_LED_COUNT>,
     bitmap_store: &impl BitmapStorage,
     current_bitmap_index: &mut usize,
     frame: pov_proto::transfer::CommandFrame,
@@ -220,17 +222,14 @@ fn apply_command(
 }
 
 #[embassy_executor::task]
-pub async fn sk9822_strip_task(
-    mut led_strip: Sk9822Strip<'static, METRO_SK9822_LED_COUNT>,
-) -> ! {
+pub async fn sk9822_strip_task(mut led_strip: Sk9822Strip<'static, SK9822_LED_COUNT>) -> ! {
     info!(
         "SK9822 strip ready: leds={}, timings={:?}",
         led_strip.led_count(),
         led_strip.timings()
     );
 
-    static DECODE_SCRATCH: StaticCell<[u8; SK9822_RGB565_DECODE_SCRATCH_BYTES]> =
-        StaticCell::new();
+    static DECODE_SCRATCH: StaticCell<[u8; SK9822_RGB565_DECODE_SCRATCH_BYTES]> = StaticCell::new();
     let decode_scratch = DECODE_SCRATCH.init([0; SK9822_RGB565_DECODE_SCRATCH_BYTES]);
 
     let mut bitmap_store = generated_image_storage();
@@ -268,4 +267,3 @@ pub async fn sk9822_strip_task(
         }
     }
 }
-

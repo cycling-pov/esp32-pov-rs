@@ -70,10 +70,15 @@ pub fn init_sk9822(
     )
     .expect("failed to initialize SPI for SK9822");
 
-    let strip = Sk9822Strip::<{ sk9822_strip::METRO_SK9822_LED_COUNT }>::new(
+    let mut strip = Sk9822Strip::<{ sk9822_strip::SK9822_LED_COUNT }>::new(
         spi_bus,
         Sk9822Pins::new(clock, data),
     );
+
+    strip.fill(smart_leds_trait::RGB8 { r: 255, g: 0, b: 0 });
+    strip
+        .show()
+        .expect("failed to show initial red color on SK9822 strip");
 
     spawner
         .spawn(sk9822_strip::sk9822_strip_task(strip))
