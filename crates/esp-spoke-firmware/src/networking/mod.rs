@@ -25,11 +25,11 @@ static DOWNLOAD_CHANNEL: Channel<CriticalSectionRawMutex, Box<CompletedDownload>
 static COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, CommandFrame, 4> = Channel::new();
 
 pub async fn receive_download() -> Option<Box<CompletedDownload>> {
-    DOWNLOAD_CHANNEL.receive().await.try_into().ok()
+    DOWNLOAD_CHANNEL.receive().await.into()
 }
 
 pub async fn receive_command() -> Option<CommandFrame> {
-    COMMAND_CHANNEL.receiver().receive().await.try_into().ok()
+    COMMAND_CHANNEL.receiver().receive().await.into()
 }
 
 #[cfg(any(feature = "ble", feature = "espnow"))]

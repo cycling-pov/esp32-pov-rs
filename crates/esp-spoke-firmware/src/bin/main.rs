@@ -21,7 +21,10 @@ extern crate alloc;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use embassy_futures::select::{Either, select};
 use esp_hal::timer::timg::TimerGroup;
+
+#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use esp_spoke_firmware::led;
+
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use esp_spoke_firmware::led::LedCommand;
 use esp_spoke_firmware::networking;
@@ -83,22 +86,24 @@ async fn main(spawner: Spawner) -> ! {
         spawner,
     );
 
-    // Forward networking events to the active LED task.
-    #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
     loop {
-        match select(
-            networking::receive_command(),
-            networking::receive_download(),
-        )
-        .await
+        // Forward networking events to the active LED task.
+        #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
         {
-            Either::First(Some(command)) => {
-                led::try_send_led_command(LedCommand::Frame(command));
+            match select(
+                networking::receive_command(),
+                networking::receive_download(),
+            )
+            .await
+            {
+                Either::First(Some(command)) => {
+                    led::try_send_led_command(LedCommand::Frame(command));
+                }
+                Either::Second(Some(download)) => {
+                    led::try_send_led_command(LedCommand::Download(download));
+                }
+                _ => {}
             }
-            Either::Second(Some(download)) => {
-                led::try_send_led_command(LedCommand::Download(download));
-            }
-            _ => {}
         }
     }
 

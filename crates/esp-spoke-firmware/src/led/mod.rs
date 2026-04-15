@@ -5,7 +5,10 @@ mod strip;
 mod waveshare_matrix;
 
 use alloc::boxed::Box;
+
+#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use embassy_executor::Spawner;
+
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 #[cfg(feature = "sk9822-strip")]
