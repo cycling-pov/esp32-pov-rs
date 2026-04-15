@@ -57,8 +57,7 @@ pub fn init_waveshare(
 #[cfg(feature = "sk9822-strip")]
 pub fn init_sk9822(
     spi: esp_hal::peripherals::SPI2<'static>,
-    clock: esp_hal::peripherals::GPIO12<'static>,
-    data: esp_hal::peripherals::GPIO11<'static>,
+    pins: Sk9822Pins<'static>,
     spawner: Spawner,
 ) {
     use esp_hal::spi::master::{Config as SpiConfig, Spi};
@@ -68,10 +67,7 @@ pub fn init_sk9822(
         Spi::new(spi, SpiConfig::default().with_frequency(Rate::from_mhz(30)))
             .expect("failed to initialize SPI for SK9822");
 
-    let mut strip = Sk9822Strip::<{ sk9822_strip::SK9822_LED_COUNT }>::new(
-        spi_bus,
-        Sk9822Pins::new(clock, data),
-    );
+    let mut strip = Sk9822Strip::<{ sk9822_strip::SK9822_LED_COUNT }>::new(spi_bus, pins);
 
     strip.fill(smart_leds_trait::RGB8 { r: 255, g: 0, b: 0 });
     strip

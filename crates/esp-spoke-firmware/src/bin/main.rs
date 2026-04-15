@@ -11,6 +11,8 @@ use defmt::info;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
+#[cfg(feature = "sk9822-strip")]
+use esp_spoke_firmware::led::Sk9822Pins;
 use {esp_backtrace as _, esp_println as _};
 
 extern crate alloc;
@@ -74,8 +76,7 @@ async fn main(spawner: Spawner) -> ! {
     #[cfg(feature = "sk9822-strip")]
     led::init_sk9822(
         peripherals.SPI2,
-        peripherals.GPIO12,
-        peripherals.GPIO11,
+        Sk9822Pins::new(peripherals.GPIO12, peripherals.GPIO11),
         spawner,
     );
 
