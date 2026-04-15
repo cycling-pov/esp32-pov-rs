@@ -9,6 +9,7 @@
 
 use defmt::info;
 use embassy_executor::Spawner;
+#[cfg(feature = "heap-stats")]
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
 #[cfg(feature = "sk9822-strip")]
@@ -17,6 +18,8 @@ use {esp_backtrace as _, esp_println as _};
 
 extern crate alloc;
 
+#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+use embassy_futures::select::{Either, select};
 use esp_hal::timer::timg::TimerGroup;
 use esp_spoke_firmware::led;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
@@ -83,13 +86,20 @@ async fn main(spawner: Spawner) -> ! {
     // Forward networking events to the active LED task.
     #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
     loop {
-        if let Some(command) = networking::try_receive_command() {
-            led::try_send_led_command(LedCommand::Frame(command));
+        match select(
+            networking::receive_command(),
+            networking::receive_download(),
+        )
+        .await
+        {
+            Either::First(Some(command)) => {
+                led::try_send_led_command(LedCommand::Frame(command));
+            }
+            Either::Second(Some(download)) => {
+                led::try_send_led_command(LedCommand::Download(download));
+            }
+            _ => {}
         }
-        if let Some(download) = networking::try_receive_download() {
-            led::try_send_led_command(LedCommand::Download(download));
-        }
-        Timer::after(Duration::from_millis(25)).await;
     }
 
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.0.0/examples
