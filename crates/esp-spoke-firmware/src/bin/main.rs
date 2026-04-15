@@ -1,5 +1,3 @@
-#[cfg(feature = "ble")]
-use bt_hci::controller::ExternalController;
 use defmt::info;
 use embassy_executor::Spawner;
 #[cfg(feature = "heap-stats")]
@@ -10,14 +8,9 @@ use esp_hal::rmt::Rmt;
 #[cfg(feature = "waveshare-matrix")]
 use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
-#[cfg(feature = "ble")]
-use esp_radio::ble::controller::BleConnector;
-#[cfg(feature = "espnow")]
-use esp_radio::wifi::{WifiController, WifiMode};
 #[cfg(feature = "waveshare-matrix")]
 use esp_spoke_firmware::led::{WaveshareMatrix, WaveshareMatrixPins};
 use esp_spoke_firmware::networking;
-use static_cell::StaticCell;
 #[cfg(feature = "waveshare-matrix")]
 mod image_wire;
 mod metro;
@@ -47,11 +40,6 @@ async fn heap_stats_task() -> ! {
     }
 }
 
-#[cfg(any(feature = "ble", feature = "espnow"))]
-static RADIO_CONTROLLER: StaticCell<esp_radio::Controller<'static>> = StaticCell::new();
-#[cfg(feature = "espnow")]
-static WIFI_CONTROLLER: StaticCell<WifiController<'static>> = StaticCell::new();
-
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 pub async fn run(target: BoardTarget, spawner: Spawner) -> ! {
@@ -76,44 +64,7 @@ pub async fn run(target: BoardTarget, spawner: Spawner) -> ! {
 
     info!("Embassy initialized!");
 
-    #[cfg(any(feature = "ble", feature = "espnow"))]
-    let radio =
-        RADIO_CONTROLLER.init(esp_radio::init().expect("failed to initialize radio controller"));
-
-    // ---------- WiFi / ESP-NOW ---------------------------------------------------
-    #[cfg(feature = "espnow")]
-    {
-        let (mut wifi_ctrl, interfaces) =
-            esp_radio::wifi::new(radio, peripherals.WIFI, Default::default())
-                .expect("failed to initialize WiFi");
-        wifi_ctrl
-            .set_mode(WifiMode::Sta)
-            .expect("failed to set WiFi mode");
-        info!("WiFi mode set to STA, starting WiFi...");
-        wifi_ctrl.start_async().await.expect("failed to start WiFi");
-        info!("WiFi started, configuring ESP-NOW...");
-        let esp_now = interfaces.esp_now;
-
-        // Set explicit WiFi channel to ensure spoke and bridge sync on the same channel.
-        const ESPNOW_CHANNEL: u8 = 6;
-        esp_now
-            .set_channel(ESPNOW_CHANNEL)
-            .expect("failed to set ESP-NOW channel");
-        info!("ESP-NOW channel set to {}", ESPNOW_CHANNEL);
-
-        // Keep `wifi_ctrl` alive — dropping it would call `esp_wifi_stop()`.
-        let _wifi_ctrl = WIFI_CONTROLLER.init(wifi_ctrl);
-        networking::esp_now::start_esp_now_backend(spawner, esp_now);
-    }
-
-    // ---------- BLE --------------------------------------------------------------
-    #[cfg(feature = "ble")]
-    {
-        let ble_connector = BleConnector::new(radio, peripherals.BT, Default::default())
-            .expect("failed to initialize BLE connector");
-        let ble_controller: ExternalController<_, 1> = ExternalController::new(ble_connector);
-        networking::ble::start_ble_backend(spawner, ble_controller);
-    }
+    networking::init(peripherals.WIFI, peripherals.BT, spawner).await;
 
     match target {
         BoardTarget::Waveshare => {
@@ -137,7 +88,7 @@ pub async fn run(target: BoardTarget, spawner: Spawner) -> ! {
                 let output = MetroSk9822Output::new(
                     peripherals.SPI2,
                     peripherals.GPIO12,
-                    peripherals.GPIO13,
+                    peripherals.GPIO11,
                 );
                 metro::run_metro_output(output).await;
             }
