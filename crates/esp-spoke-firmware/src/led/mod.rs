@@ -54,8 +54,8 @@ pub fn init_waveshare(
 #[cfg(feature = "sk9822-strip")]
 pub fn init_sk9822(
     spi: esp_hal::peripherals::SPI2<'static>,
-    clock: esp_hal::peripherals::GPIO12<'static>,
-    data: esp_hal::peripherals::GPIO11<'static>,
+    clock: esp_hal::peripherals::GPIO35<'static>,
+    data: esp_hal::peripherals::GPIO36<'static>,
     spawner: Spawner,
 ) {
     use esp_hal::spi::Mode;

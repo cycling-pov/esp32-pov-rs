@@ -9,10 +9,9 @@ default-run = "esp-spoke-firmware"
 [[bin]]
 name = "esp-spoke-firmware"
 path = "./src/bin/main.rs"
-required-features = ["waveshare-matrix"]
 
 [features]
-default = ["waveshare-matrix","espnow"]
+default = ["espnow"]
 waveshare-matrix = []
 sk9822-strip = []
 heap-stats = []

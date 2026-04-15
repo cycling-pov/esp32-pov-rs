@@ -74,8 +74,8 @@ async fn main(spawner: Spawner) -> ! {
     #[cfg(feature = "sk9822-strip")]
     led::init_sk9822(
         peripherals.SPI2,
-        peripherals.GPIO12,
-        peripherals.GPIO11,
+        peripherals.GPIO35,
+        peripherals.GPIO36,
         spawner,
     );
 
