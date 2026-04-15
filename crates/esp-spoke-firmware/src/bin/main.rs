@@ -1,23 +1,16 @@
 use defmt::info;
 use embassy_executor::Spawner;
-#[cfg(feature = "heap-stats")]
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
-#[cfg(feature = "waveshare-matrix")]
-use esp_hal::rmt::Rmt;
-#[cfg(feature = "waveshare-matrix")]
-use esp_hal::time::Rate;
+
 use esp_hal::timer::timg::TimerGroup;
+use esp_spoke_firmware::led;
 #[cfg(feature = "waveshare-matrix")]
-use esp_spoke_firmware::led::{WaveshareMatrix, WaveshareMatrixPins};
+use esp_spoke_firmware::led::WaveshareCommand;
 use esp_spoke_firmware::networking;
-#[cfg(feature = "waveshare-matrix")]
-mod image_wire;
 mod metro;
 #[cfg(feature = "sk9822-strip")]
 use metro::MetroSk9822Output;
-#[cfg(feature = "waveshare-matrix")]
-mod waveshare;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,21 +59,20 @@ pub async fn run(target: BoardTarget, spawner: Spawner) -> ! {
 
     networking::init(peripherals.WIFI, peripherals.BT, spawner).await;
 
+    led::init(peripherals.RMT, peripherals.GPIO14, spawner).await;
+
     match target {
         BoardTarget::Waveshare => {
             #[cfg(feature = "waveshare-matrix")]
-            {
-                let rmt = Rmt::new(peripherals.RMT, Rate::from_mhz(80))
-                    .expect("failed to initialize RMT");
-                let mut led_strip = WaveshareMatrix::new(
-                    rmt.channel0,
-                    WaveshareMatrixPins::new(peripherals.GPIO14),
-                );
-                waveshare::run_waveshare_output(&mut led_strip).await;
+            loop {
+                if let Some(command) = networking::try_receive_command() {
+                    led::try_send_led_command(WaveshareCommand::Frame(command));
+                }
+                if let Some(download) = networking::try_receive_download() {
+                    led::try_send_led_command(WaveshareCommand::Download(download));
+                }
+                Timer::after(Duration::from_millis(25)).await;
             }
-
-            #[cfg(not(feature = "waveshare-matrix"))]
-            panic!("Waveshare binary requires 'waveshare-matrix' feature");
         }
         BoardTarget::Metro => {
             #[cfg(feature = "sk9822-strip")]
