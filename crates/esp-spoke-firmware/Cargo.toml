@@ -4,16 +4,12 @@ name         = "esp-spoke-firmware"
 rust-version = "1.88"
 version      = "0.1.0"
 autobins     = false
-default-run = "waveshare"
+default-run = "esp-spoke-firmware"
 
 [[bin]]
-name = "waveshare"
-path = "./src/bin/waveshare_main.rs"
+name = "esp-spoke-firmware"
+path = "./src/bin/main.rs"
 required-features = ["waveshare-matrix"]
-
-[[bin]]
-name = "metro"
-path = "./src/bin/metro_main.rs"
 
 [features]
 default = ["waveshare-matrix","espnow"]
