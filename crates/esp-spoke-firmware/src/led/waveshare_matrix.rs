@@ -1,8 +1,4 @@
-use alloc::boxed::Box;
-
 use defmt::info;
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::channel::Channel;
 use esp_hal::{
     Blocking,
     peripherals::GPIO14,
@@ -15,7 +11,7 @@ use smart_leds_trait::{RGB8, SmartLedsWrite as _};
 use static_cell::StaticCell;
 
 use crate::bitmap::{BitmapStorage, generated_image_storage};
-use crate::led::{LedError, LedStrip, LedTimings};
+use crate::led::{LedCommand, LedError, LedStrip, LedTimings};
 use crate::networking::CompletedDownload;
 
 // The Waveshare Matrix has very poor thermal design. The manufacturer recommends limiting
@@ -28,20 +24,6 @@ const WAVESHARE_MATRIX_BUFFER_SIZE: usize = buffer_size(WAVESHARE_MATRIX_LED_COU
 
 const WAVESHARE_RGB565_DECODE_SCRATCH_BYTES: usize = 1024 * 10;
 const DOWNLOADABLE_IMAGE_SLOTS: usize = 2;
-
-/// Commands that can be sent to the Waveshare matrix LED task.
-pub enum WaveshareCommand {
-    Frame(CommandFrame),
-    Download(Box<CompletedDownload>),
-}
-
-static LED_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, WaveshareCommand, 4> = Channel::new();
-
-/// Try to send a command to the Waveshare matrix LED task.
-/// Returns `true` if the command was enqueued, `false` if the channel is full.
-pub fn try_send_led_command(cmd: WaveshareCommand) -> bool {
-    LED_COMMAND_CHANNEL.try_send(cmd).is_ok()
-}
 
 fn apply_brightness_limit(color: RGB8) -> RGB8 {
     RGB8 {
@@ -242,8 +224,8 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
     info!("rendered built-in bitmap at startup");
 
     loop {
-        match LED_COMMAND_CHANNEL.receive().await {
-            WaveshareCommand::Frame(frame) => {
+        match super::LED_COMMAND_CHANNEL.receive().await {
+            LedCommand::Frame(frame) => {
                 apply_command(
                     &mut led_strip,
                     &*bitmap_store,
@@ -251,7 +233,7 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
                     frame,
                 );
             }
-            WaveshareCommand::Download(download) => match download.kind {
+            LedCommand::Download(download) => match download.kind {
                 DownloadKind::DisplayImage => apply_downloaded_image(
                     &mut led_strip,
                     &mut *bitmap_store,

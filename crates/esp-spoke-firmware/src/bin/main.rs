@@ -5,12 +5,10 @@ use esp_hal::clock::CpuClock;
 
 use esp_hal::timer::timg::TimerGroup;
 use esp_spoke_firmware::led;
-#[cfg(feature = "waveshare-matrix")]
-use esp_spoke_firmware::led::WaveshareCommand;
+#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+use esp_spoke_firmware::led::LedCommand;
 use esp_spoke_firmware::networking;
 mod metro;
-#[cfg(feature = "sk9822-strip")]
-use metro::MetroSk9822Output;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -59,43 +57,35 @@ pub async fn run(target: BoardTarget, spawner: Spawner) -> ! {
 
     networking::init(peripherals.WIFI, peripherals.BT, spawner).await;
 
-    led::init(peripherals.RMT, peripherals.GPIO14, spawner).await;
+    #[cfg(feature = "waveshare-matrix")]
+    led::init_waveshare(peripherals.RMT, peripherals.GPIO14, spawner);
+
+    #[cfg(feature = "sk9822-strip")]
+    led::init_sk9822(
+        peripherals.SPI2,
+        peripherals.GPIO12,
+        peripherals.GPIO11,
+        spawner,
+    );
 
     match target {
-        BoardTarget::Waveshare => {
-            #[cfg(feature = "waveshare-matrix")]
-            loop {
-                if let Some(command) = networking::try_receive_command() {
-                    led::try_send_led_command(WaveshareCommand::Frame(command));
-                }
-                if let Some(download) = networking::try_receive_download() {
-                    led::try_send_led_command(WaveshareCommand::Download(download));
-                }
-                Timer::after(Duration::from_millis(25)).await;
-            }
-        }
+        BoardTarget::Waveshare => {}
         BoardTarget::Metro => {
-            #[cfg(feature = "sk9822-strip")]
-            {
-                let output = MetroSk9822Output::new(
-                    peripherals.SPI2,
-                    peripherals.GPIO12,
-                    peripherals.GPIO11,
-                );
-                metro::run_metro_output(output).await;
-            }
-
             #[cfg(not(feature = "sk9822-strip"))]
-            {
-                metro::initialize_metro_output();
-            }
+            metro::initialize_metro_output();
         }
     }
 
-    #[cfg(not(feature = "sk9822-strip"))]
+    // Forward networking events to the active LED task.
+    #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
     loop {
-        info!("Hello world!");
-        embassy_time::Timer::after(embassy_time::Duration::from_secs(10)).await;
+        if let Some(command) = networking::try_receive_command() {
+            led::try_send_led_command(LedCommand::Frame(command));
+        }
+        if let Some(download) = networking::try_receive_download() {
+            led::try_send_led_command(LedCommand::Download(download));
+        }
+        Timer::after(Duration::from_millis(25)).await;
     }
 
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.0.0/examples
