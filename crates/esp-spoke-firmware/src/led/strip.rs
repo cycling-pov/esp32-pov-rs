@@ -1,5 +1,6 @@
 use core::time::Duration;
 
+use esp_hal::rng::Rng;
 use esp_hal_smartled::LedAdapterError;
 use smart_leds_trait::RGB8;
 
@@ -84,5 +85,16 @@ pub trait LedStrip {
 
     fn clear(&mut self) {
         self.fill(RGB8::default());
+    }
+
+    fn randomize(&mut self, rng: &Rng) {
+        for pixel in self.pixels_mut() {
+            let value = rng.random();
+            *pixel = RGB8 {
+                r: (value & 0xFF) as u8,
+                g: ((value >> 8) & 0xFF) as u8,
+                b: ((value >> 16) & 0xFF) as u8,
+            };
+        }
     }
 }

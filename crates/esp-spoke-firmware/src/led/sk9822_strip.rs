@@ -2,9 +2,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use defmt::info;
-use embedded_hal_async::spi::SpiBus;
 use embassy_futures::select::{Either, select};
 use embassy_time::{Duration as EmbassyDuration, Timer};
+use embedded_hal_async::spi::SpiBus;
 use esp_hal::{
     Async,
     gpio::{AnyPin, Pin},
@@ -187,18 +187,6 @@ async fn apply_downloaded_image(
     );
 }
 
-async fn randomize_leds(led_strip: &mut Sk9822Strip<'_, SK9822_LED_COUNT>, rng: &Rng) {
-    for pixel in led_strip.pixels_mut() {
-        let value = rng.random();
-        *pixel = RGB8 {
-            r: (value & 0xFF) as u8,
-            g: ((value >> 8) & 0xFF) as u8,
-            b: ((value >> 16) & 0xFF) as u8,
-        };
-    }
-    led_strip.show().await.expect("failed to show randomized LEDs");
-}
-
 async fn apply_command(
     led_strip: &mut Sk9822Strip<'_, SK9822_LED_COUNT>,
     bitmap_store: &impl BitmapStorage,
@@ -210,7 +198,10 @@ async fn apply_command(
         SpokeCommand::DisplayOff => {
             *randomizing = false;
             led_strip.clear();
-            led_strip.show().await.expect("failed to clear SK9822 strip");
+            led_strip
+                .show()
+                .await
+                .expect("failed to clear SK9822 strip");
             info!(
                 "applied DisplayOff command from transfer {}",
                 frame.transfer_id
@@ -265,12 +256,15 @@ pub async fn sk9822_strip_task(mut led_strip: Sk9822Strip<'static, SK9822_LED_CO
 
     loop {
         let led_cmd = if randomizing {
-            let refresh_period = led_strip.refresh_period();
-            let delay = EmbassyDuration::from_micros(refresh_period.as_micros() as u64);
+            let delay = EmbassyDuration::from_millis(10);
             match select(super::LED_COMMAND_CHANNEL.receive(), Timer::after(delay)).await {
                 Either::First(cmd) => Some(cmd),
                 Either::Second(_) => {
-                    randomize_leds(&mut led_strip, &rng).await;
+                    led_strip.randomize(&rng);
+                    led_strip
+                        .show()
+                        .await
+                        .expect("failed to show randomized SK9822 strip");
                     None
                 }
             }
@@ -279,6 +273,7 @@ pub async fn sk9822_strip_task(mut led_strip: Sk9822Strip<'static, SK9822_LED_CO
         };
 
         let Some(led_cmd) = led_cmd else { continue };
+        randomizing = false;
 
         match led_cmd {
             LedCommand::Frame(frame) => {
@@ -292,15 +287,17 @@ pub async fn sk9822_strip_task(mut led_strip: Sk9822Strip<'static, SK9822_LED_CO
                 .await;
             }
             LedCommand::Download(download) => match download.kind {
-                DownloadKind::DisplayImage => apply_downloaded_image(
-                    &mut led_strip,
-                    &mut *bitmap_store,
-                    &mut current_bitmap_index,
-                    &mut next_download_slot,
-                    decode_scratch,
-                    &download,
-                )
-                .await,
+                DownloadKind::DisplayImage => {
+                    apply_downloaded_image(
+                        &mut led_strip,
+                        &mut *bitmap_store,
+                        &mut current_bitmap_index,
+                        &mut next_download_slot,
+                        decode_scratch,
+                        &download,
+                    )
+                    .await
+                }
                 DownloadKind::OtaImage | DownloadKind::Video => {
                     info!(
                         "ignoring unsupported download kind on SK9822 target: kind={:?} transfer_id={} bytes={}",

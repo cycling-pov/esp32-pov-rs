@@ -175,18 +175,6 @@ async fn apply_downloaded_image(
     );
 }
 
-async fn randomize_leds(led_strip: &mut WaveshareMatrix<'_>, rng: &Rng) {
-    for pixel in led_strip.pixels_mut() {
-        let value = rng.random();
-        *pixel = RGB8 {
-            r: (value & 0xFF) as u8,
-            g: ((value >> 8) & 0xFF) as u8,
-            b: ((value >> 16) & 0xFF) as u8,
-        };
-    }
-    led_strip.show().await.expect("failed to show randomized LEDs");
-}
-
 async fn apply_command(
     led_strip: &mut WaveshareMatrix<'_>,
     bitmap_store: &impl BitmapStorage,
@@ -254,12 +242,15 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
 
     loop {
         let led_cmd = if randomizing {
-            let refresh_period = led_strip.refresh_period();
-            let delay = EmbassyDuration::from_micros(refresh_period.as_micros() as u64);
+            let delay = EmbassyDuration::from_millis(10);
             match select(super::LED_COMMAND_CHANNEL.receive(), Timer::after(delay)).await {
                 Either::First(cmd) => Some(cmd),
                 Either::Second(_) => {
-                    randomize_leds(&mut led_strip, &rng).await;
+                    led_strip.randomize(&rng);
+                    led_strip
+                        .show()
+                        .await
+                        .expect("failed to show randomized Waveshare matrix");
                     None
                 }
             }
@@ -268,6 +259,7 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
         };
 
         let Some(led_cmd) = led_cmd else { continue };
+        randomizing = false;
 
         match led_cmd {
             LedCommand::Frame(frame) => {
@@ -281,15 +273,17 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
                 .await;
             }
             LedCommand::Download(download) => match download.kind {
-                DownloadKind::DisplayImage => apply_downloaded_image(
-                    &mut led_strip,
-                    &mut *bitmap_store,
-                    &mut current_bitmap_index,
-                    &mut next_download_slot,
-                    decode_scratch,
-                    &download,
-                )
-                .await,
+                DownloadKind::DisplayImage => {
+                    apply_downloaded_image(
+                        &mut led_strip,
+                        &mut *bitmap_store,
+                        &mut current_bitmap_index,
+                        &mut next_download_slot,
+                        decode_scratch,
+                        &download,
+                    )
+                    .await
+                }
                 DownloadKind::OtaImage | DownloadKind::Video => {
                     info!(
                         "ignoring unsupported download kind on waveshare target: kind={:?} transfer_id={} bytes={}",
