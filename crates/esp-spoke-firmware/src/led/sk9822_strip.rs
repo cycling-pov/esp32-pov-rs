@@ -2,10 +2,11 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use defmt::info;
+use embedded_hal_async::spi::SpiBus;
 use embassy_futures::select::{Either, select};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use esp_hal::{
-    Blocking,
+    Async,
     gpio::{AnyPin, Pin},
     rng::Rng,
     spi::master::Spi,
@@ -55,7 +56,7 @@ impl<'d> Sk9822Pins<'d> {
 }
 
 pub struct Sk9822Strip<'d, const LED_COUNT: usize> {
-    spi: Spi<'d, Blocking>,
+    spi: Spi<'d, Async>,
     framebuffer: [RGB8; LED_COUNT],
     tx_buffer: Vec<u8>,
 }
@@ -64,7 +65,7 @@ impl<'d, const LED_COUNT: usize> Sk9822Strip<'d, LED_COUNT> {
     pub const LED_COUNT: usize = LED_COUNT;
     pub const TIMINGS: LedTimings = LedTimings::SK9822;
 
-    pub fn new(spi: Spi<'d, Blocking>, pins: Sk9822Pins<'d>) -> Self {
+    pub fn new(spi: Spi<'d, Async>, pins: Sk9822Pins<'d>) -> Self {
         let spi = spi.with_sck(pins.clock).with_mosi(pins.data);
 
         Self {
@@ -110,15 +111,15 @@ impl<const LED_COUNT: usize> LedStrip for Sk9822Strip<'_, LED_COUNT> {
         &mut self.framebuffer
     }
 
-    fn show(&mut self) -> Result<(), LedError> {
+    async fn show(&mut self) -> Result<(), LedError> {
         self.encode_framebuffer();
-        self.spi
-            .write(&self.tx_buffer)
+        <Spi<'_, Async> as SpiBus<u8>>::write(&mut self.spi, &self.tx_buffer)
+            .await
             .map_err(|_| LedError::SpiWrite)
     }
 }
 
-fn render_bitmap_index(
+async fn render_bitmap_index(
     _led_strip: &mut Sk9822Strip<'_, SK9822_LED_COUNT>,
     bitmap_store: &impl BitmapStorage,
     index: usize,
@@ -128,7 +129,7 @@ fn render_bitmap_index(
     info!("Bitmap rendering not implemented yet");
 }
 
-fn apply_downloaded_image(
+async fn apply_downloaded_image(
     led_strip: &mut Sk9822Strip<'_, SK9822_LED_COUNT>,
     bitmap_store: &mut impl BitmapStorage,
     current_bitmap_index: &mut usize,
@@ -176,6 +177,7 @@ fn apply_downloaded_image(
     });
     led_strip
         .show()
+        .await
         .expect("failed to show downloaded bitmap on SK9822 strip");
     *current_bitmap_index = writable_index;
 
@@ -185,7 +187,7 @@ fn apply_downloaded_image(
     );
 }
 
-fn randomize_leds(led_strip: &mut Sk9822Strip<'_, SK9822_LED_COUNT>, rng: &Rng) {
+async fn randomize_leds(led_strip: &mut Sk9822Strip<'_, SK9822_LED_COUNT>, rng: &Rng) {
     for pixel in led_strip.pixels_mut() {
         let value = rng.random();
         *pixel = RGB8 {
@@ -194,10 +196,10 @@ fn randomize_leds(led_strip: &mut Sk9822Strip<'_, SK9822_LED_COUNT>, rng: &Rng) 
             b: ((value >> 16) & 0xFF) as u8,
         };
     }
-    led_strip.show().expect("failed to show randomized LEDs");
+    led_strip.show().await.expect("failed to show randomized LEDs");
 }
 
-fn apply_command(
+async fn apply_command(
     led_strip: &mut Sk9822Strip<'_, SK9822_LED_COUNT>,
     bitmap_store: &impl BitmapStorage,
     current_bitmap_index: &mut usize,
@@ -208,7 +210,7 @@ fn apply_command(
         SpokeCommand::DisplayOff => {
             *randomizing = false;
             led_strip.clear();
-            led_strip.show().expect("failed to clear SK9822 strip");
+            led_strip.show().await.expect("failed to clear SK9822 strip");
             info!(
                 "applied DisplayOff command from transfer {}",
                 frame.transfer_id
@@ -226,7 +228,7 @@ fn apply_command(
             }
 
             *current_bitmap_index = (*current_bitmap_index + 1) % bitmap_count;
-            render_bitmap_index(led_strip, bitmap_store, *current_bitmap_index);
+            render_bitmap_index(led_strip, bitmap_store, *current_bitmap_index).await;
             info!(
                 "applied NextImage command from transfer {}: new_index={}",
                 frame.transfer_id, *current_bitmap_index
@@ -258,7 +260,7 @@ pub async fn sk9822_strip_task(mut led_strip: Sk9822Strip<'static, SK9822_LED_CO
     let mut next_download_slot = 0usize;
     let mut randomizing = false;
     let rng = Rng::new();
-    render_bitmap_index(&mut led_strip, &*bitmap_store, current_bitmap_index);
+    render_bitmap_index(&mut led_strip, &*bitmap_store, current_bitmap_index).await;
     info!("rendered built-in bitmap at startup");
 
     loop {
@@ -268,7 +270,7 @@ pub async fn sk9822_strip_task(mut led_strip: Sk9822Strip<'static, SK9822_LED_CO
             match select(super::LED_COMMAND_CHANNEL.receive(), Timer::after(delay)).await {
                 Either::First(cmd) => Some(cmd),
                 Either::Second(_) => {
-                    randomize_leds(&mut led_strip, &rng);
+                    randomize_leds(&mut led_strip, &rng).await;
                     None
                 }
             }
@@ -286,7 +288,8 @@ pub async fn sk9822_strip_task(mut led_strip: Sk9822Strip<'static, SK9822_LED_CO
                     &mut current_bitmap_index,
                     &mut randomizing,
                     frame,
-                );
+                )
+                .await;
             }
             LedCommand::Download(download) => match download.kind {
                 DownloadKind::DisplayImage => apply_downloaded_image(
@@ -296,7 +299,8 @@ pub async fn sk9822_strip_task(mut led_strip: Sk9822Strip<'static, SK9822_LED_CO
                     &mut next_download_slot,
                     decode_scratch,
                     &download,
-                ),
+                )
+                .await,
                 DownloadKind::OtaImage | DownloadKind::Video => {
                     info!(
                         "ignoring unsupported download kind on SK9822 target: kind={:?} transfer_id={} bytes={}",

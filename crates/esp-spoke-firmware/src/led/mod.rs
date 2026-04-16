@@ -12,7 +12,7 @@ use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 #[cfg(feature = "sk9822-strip")]
-use esp_hal::Blocking;
+use esp_hal::Async;
 #[cfg(feature = "waveshare-matrix")]
 use esp_hal::rmt::Rmt;
 #[cfg(feature = "waveshare-matrix")]
@@ -50,7 +50,9 @@ pub fn init_waveshare(
     waveshare_pin: esp_hal::peripherals::GPIO14<'static>,
     spawner: Spawner,
 ) {
-    let rmt = Rmt::new(rmt, Rate::from_mhz(80)).expect("failed to initialize RMT");
+    let rmt = Rmt::new(rmt, Rate::from_mhz(80))
+        .expect("failed to initialize RMT")
+        .into_async();
     let led_strip = WaveshareMatrix::new(rmt.channel0, WaveshareMatrixPins::new(waveshare_pin));
     spawner
         .spawn(waveshare_matrix::waveshare_matrix_task(led_strip))
@@ -66,16 +68,12 @@ pub fn init_sk9822(
     use esp_hal::spi::master::{Config as SpiConfig, Spi};
     use esp_hal::time::Rate;
 
-    let spi_bus: Spi<'_, Blocking> =
+    let spi_bus: Spi<'_, Async> =
         Spi::new(spi, SpiConfig::default().with_frequency(Rate::from_mhz(30)))
-            .expect("failed to initialize SPI for SK9822");
+            .expect("failed to initialize SPI for SK9822")
+            .into_async();
 
-    let mut strip = Sk9822Strip::<{ sk9822_strip::SK9822_LED_COUNT }>::new(spi_bus, pins);
-
-    strip.fill(smart_leds_trait::RGB8 { r: 255, g: 0, b: 0 });
-    strip
-        .show()
-        .expect("failed to show initial red color on SK9822 strip");
+    let strip = Sk9822Strip::<{ sk9822_strip::SK9822_LED_COUNT }>::new(spi_bus, pins);
 
     spawner
         .spawn(sk9822_strip::sk9822_strip_task(strip))

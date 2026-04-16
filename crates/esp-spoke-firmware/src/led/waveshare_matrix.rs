@@ -2,15 +2,15 @@ use defmt::info;
 use embassy_futures::select::{Either, select};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use esp_hal::{
-    Blocking,
+    Async,
     peripherals::GPIO14,
     rmt::{PulseCode, TxChannelCreator},
     rng::Rng,
 };
-use esp_hal_smartled::{SmartLedsAdapter, buffer_size};
+use esp_hal_smartled::{SmartLedsAdapterAsync, buffer_size_async};
 use pov_proto::image::{DecodeMode, decode_into_rgb8};
 use pov_proto::transfer::{CommandFrame, DownloadKind, SpokeCommand};
-use smart_leds_trait::{RGB8, SmartLedsWrite as _};
+use smart_leds_trait::{RGB8, SmartLedsWriteAsync as _};
 use static_cell::StaticCell;
 
 use crate::bitmap::{BitmapStorage, generated_image_storage};
@@ -23,7 +23,7 @@ use crate::networking::CompletedDownload;
 const WAVESHARE_MATRIX_BRIGHTNESS_LIMIT_PERCENT: u16 = 1;
 
 const WAVESHARE_MATRIX_LED_COUNT: usize = 64;
-const WAVESHARE_MATRIX_BUFFER_SIZE: usize = buffer_size(WAVESHARE_MATRIX_LED_COUNT);
+const WAVESHARE_MATRIX_BUFFER_SIZE: usize = buffer_size_async(WAVESHARE_MATRIX_LED_COUNT);
 
 const WAVESHARE_RGB565_DECODE_SCRATCH_BYTES: usize = 1024 * 10;
 const DOWNLOADABLE_IMAGE_SLOTS: usize = 2;
@@ -51,7 +51,7 @@ impl<'d> WaveshareMatrixPins<'d> {
 }
 
 pub struct WaveshareMatrix<'d> {
-    driver: SmartLedsAdapter<'d, WAVESHARE_MATRIX_BUFFER_SIZE, RGB8>,
+    driver: SmartLedsAdapterAsync<'d, WAVESHARE_MATRIX_BUFFER_SIZE, RGB8>,
     framebuffer: [RGB8; WAVESHARE_MATRIX_LED_COUNT],
 }
 
@@ -61,7 +61,7 @@ impl<'d> WaveshareMatrix<'d> {
 
     pub fn new<C>(channel: C, pins: WaveshareMatrixPins<'d>) -> Self
     where
-        C: TxChannelCreator<'d, Blocking>,
+        C: TxChannelCreator<'d, Async>,
     {
         static RMT_BUFFER: StaticCell<[PulseCode; WAVESHARE_MATRIX_BUFFER_SIZE]> =
             StaticCell::new();
@@ -70,7 +70,7 @@ impl<'d> WaveshareMatrix<'d> {
 
         Self {
             // Waveshare matrix LEDs use RGB byte order, not the more common GRB.
-            driver: SmartLedsAdapter::new_with_color(channel, pins.data, rmt_buffer),
+            driver: SmartLedsAdapterAsync::new_with_color(channel, pins.data, rmt_buffer),
             framebuffer: [RGB8::default(); WAVESHARE_MATRIX_LED_COUNT],
         }
     }
@@ -93,14 +93,15 @@ impl LedStrip for WaveshareMatrix<'_> {
         &mut self.framebuffer
     }
 
-    fn show(&mut self) -> Result<(), LedError> {
+    async fn show(&mut self) -> Result<(), LedError> {
         self.driver
             .write(self.framebuffer.iter().copied().map(apply_brightness_limit))
+            .await
             .map_err(LedError::from)
     }
 }
 
-fn render_bitmap_index(
+async fn render_bitmap_index(
     led_strip: &mut WaveshareMatrix<'_>,
     bitmap_store: &impl BitmapStorage,
     index: usize,
@@ -113,10 +114,10 @@ fn render_bitmap_index(
         .scale_into(target_width, target_height, led_strip.pixels_mut())
         .expect("failed to scale bitmap");
 
-    led_strip.show().expect("failed to update LED strip");
+    led_strip.show().await.expect("failed to update LED strip");
 }
 
-fn apply_downloaded_image(
+async fn apply_downloaded_image(
     led_strip: &mut WaveshareMatrix<'_>,
     bitmap_store: &mut impl BitmapStorage,
     current_bitmap_index: &mut usize,
@@ -164,6 +165,7 @@ fn apply_downloaded_image(
         .expect("failed to scale downloaded bitmap");
     led_strip
         .show()
+        .await
         .expect("failed to show downloaded bitmap on LED strip");
     *current_bitmap_index = writable_index;
 
@@ -173,7 +175,7 @@ fn apply_downloaded_image(
     );
 }
 
-fn randomize_leds(led_strip: &mut WaveshareMatrix<'_>, rng: &Rng) {
+async fn randomize_leds(led_strip: &mut WaveshareMatrix<'_>, rng: &Rng) {
     for pixel in led_strip.pixels_mut() {
         let value = rng.random();
         *pixel = RGB8 {
@@ -182,10 +184,10 @@ fn randomize_leds(led_strip: &mut WaveshareMatrix<'_>, rng: &Rng) {
             b: ((value >> 16) & 0xFF) as u8,
         };
     }
-    led_strip.show().expect("failed to show randomized LEDs");
+    led_strip.show().await.expect("failed to show randomized LEDs");
 }
 
-fn apply_command(
+async fn apply_command(
     led_strip: &mut WaveshareMatrix<'_>,
     bitmap_store: &impl BitmapStorage,
     current_bitmap_index: &mut usize,
@@ -196,7 +198,7 @@ fn apply_command(
         SpokeCommand::DisplayOff => {
             *randomizing = false;
             led_strip.clear();
-            led_strip.show().expect("failed to clear LED strip");
+            led_strip.show().await.expect("failed to clear LED strip");
             info!(
                 "applied DisplayOff command from transfer {}",
                 frame.transfer_id
@@ -214,7 +216,7 @@ fn apply_command(
             }
 
             *current_bitmap_index = (*current_bitmap_index + 1) % bitmap_count;
-            render_bitmap_index(led_strip, bitmap_store, *current_bitmap_index);
+            render_bitmap_index(led_strip, bitmap_store, *current_bitmap_index).await;
             info!(
                 "applied NextImage command from transfer {}: new_index={}",
                 frame.transfer_id, *current_bitmap_index
@@ -247,7 +249,7 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
     let mut next_download_slot = 0usize;
     let mut randomizing = false;
     let rng = Rng::new();
-    render_bitmap_index(&mut led_strip, &*bitmap_store, current_bitmap_index);
+    render_bitmap_index(&mut led_strip, &*bitmap_store, current_bitmap_index).await;
     info!("rendered built-in bitmap at startup");
 
     loop {
@@ -257,7 +259,7 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
             match select(super::LED_COMMAND_CHANNEL.receive(), Timer::after(delay)).await {
                 Either::First(cmd) => Some(cmd),
                 Either::Second(_) => {
-                    randomize_leds(&mut led_strip, &rng);
+                    randomize_leds(&mut led_strip, &rng).await;
                     None
                 }
             }
@@ -275,7 +277,8 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
                     &mut current_bitmap_index,
                     &mut randomizing,
                     frame,
-                );
+                )
+                .await;
             }
             LedCommand::Download(download) => match download.kind {
                 DownloadKind::DisplayImage => apply_downloaded_image(
@@ -285,7 +288,8 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
                     &mut next_download_slot,
                     decode_scratch,
                     &download,
-                ),
+                )
+                .await,
                 DownloadKind::OtaImage | DownloadKind::Video => {
                     info!(
                         "ignoring unsupported download kind on waveshare target: kind={:?} transfer_id={} bytes={}",

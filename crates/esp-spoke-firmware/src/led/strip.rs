@@ -44,6 +44,7 @@ impl From<LedAdapterError> for LedError {
     }
 }
 
+#[allow(async_fn_in_trait, reason = "LedStrip is an internal firmware trait")]
 pub trait LedStrip {
     fn led_count(&self) -> usize;
 
@@ -53,7 +54,7 @@ pub trait LedStrip {
 
     fn pixels_mut(&mut self) -> &mut [RGB8];
 
-    fn show(&mut self) -> Result<(), LedError>;
+    async fn show(&mut self) -> Result<(), LedError>;
 
     /// Total time for one full strip update: data for all LEDs plus reset latch.
     fn refresh_period(&self) -> Duration {
