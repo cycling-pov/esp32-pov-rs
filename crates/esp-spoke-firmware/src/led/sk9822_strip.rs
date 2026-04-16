@@ -1,15 +1,12 @@
-use alloc::vec;
-use alloc::vec::Vec;
-
 use defmt::info;
 use embassy_futures::select::{Either, select};
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use embedded_hal_async::spi::SpiBus;
 use esp_hal::{
     Async,
+    dma::DmaLoopBuf,
     gpio::{AnyPin, Pin},
     rng::Rng,
-    spi::master::Spi,
+    spi::master::SpiDma,
 };
 use pov_proto::image::{DecodeMode, decode_into_rgb8};
 use pov_proto::transfer::{DownloadKind, SpokeCommand};
@@ -37,7 +34,7 @@ const fn sk9822_end_frame_bytes(led_count: usize) -> usize {
     led_count.div_ceil(16)
 }
 
-const fn sk9822_frame_size(led_count: usize) -> usize {
+pub const fn sk9822_frame_size(led_count: usize) -> usize {
     SK9822_START_FRAME_BYTES + (4 * led_count) + sk9822_end_frame_bytes(led_count)
 }
 
@@ -56,39 +53,37 @@ impl<'d> Sk9822Pins<'d> {
 }
 
 pub struct Sk9822Strip<'d, const LED_COUNT: usize> {
-    spi: Spi<'d, Async>,
+    spi: Option<SpiDma<'d, Async>>,
+    dma_buf: Option<DmaLoopBuf>,
     framebuffer: [RGB8; LED_COUNT],
-    tx_buffer: Vec<u8>,
 }
 
 impl<'d, const LED_COUNT: usize> Sk9822Strip<'d, LED_COUNT> {
     pub const LED_COUNT: usize = LED_COUNT;
     pub const TIMINGS: LedTimings = LedTimings::SK9822;
 
-    pub fn new(spi: Spi<'d, Async>, pins: Sk9822Pins<'d>) -> Self {
-        let spi = spi.with_sck(pins.clock).with_mosi(pins.data);
-
+    pub fn new(spi: SpiDma<'d, Async>, dma_buf: DmaLoopBuf) -> Self {
         Self {
-            spi,
+            spi: Some(spi),
+            dma_buf: Some(dma_buf),
             framebuffer: [RGB8::default(); LED_COUNT],
-            tx_buffer: vec![0; sk9822_frame_size(LED_COUNT)],
         }
     }
 
-    fn encode_framebuffer(&mut self) {
-        self.tx_buffer.fill(0);
+    fn encode_framebuffer(&self, buf: &mut [u8]) {
+        buf[..SK9822_START_FRAME_BYTES].fill(0);
 
         for (index, pixel) in self.framebuffer.iter().copied().enumerate() {
             let offset = SK9822_START_FRAME_BYTES + (index * 4);
-            self.tx_buffer[offset] = 0b1110_0000 | SK9822_BRIGHTNESS;
-            self.tx_buffer[offset + 1] = pixel.b;
-            self.tx_buffer[offset + 2] = pixel.g;
-            self.tx_buffer[offset + 3] = pixel.r;
+            buf[offset] = 0b1110_0000 | SK9822_BRIGHTNESS;
+            buf[offset + 1] = pixel.b;
+            buf[offset + 2] = pixel.g;
+            buf[offset + 3] = pixel.r;
         }
 
         let end_start = SK9822_START_FRAME_BYTES + (LED_COUNT * 4);
         let end_count = sk9822_end_frame_bytes(LED_COUNT);
-        for byte in &mut self.tx_buffer[end_start..end_start + end_count] {
+        for byte in &mut buf[end_start..end_start + end_count] {
             *byte = 0xFF;
         }
     }
@@ -112,10 +107,25 @@ impl<const LED_COUNT: usize> LedStrip for Sk9822Strip<'_, LED_COUNT> {
     }
 
     async fn show(&mut self) -> Result<(), LedError> {
-        self.encode_framebuffer();
-        <Spi<'_, Async> as SpiBus<u8>>::write(&mut self.spi, &self.tx_buffer)
-            .await
-            .map_err(|_| LedError::SpiWrite)
+        let mut dma_buf = self.dma_buf.take().expect("dma_buf missing");
+        self.encode_framebuffer(&mut dma_buf);
+
+        let frame_size = sk9822_frame_size(LED_COUNT);
+        let spi = self.spi.take().expect("spi missing");
+        let mut transfer = match spi.write(frame_size, dma_buf) {
+            Ok(t) => t,
+            Err((_, spi, dma_buf)) => {
+                self.spi = Some(spi);
+                self.dma_buf = Some(dma_buf);
+                return Err(LedError::SpiWrite);
+            }
+        };
+
+        transfer.wait_for_done().await;
+        let (spi, dma_buf) = transfer.wait();
+        self.spi = Some(spi);
+        self.dma_buf = Some(dma_buf);
+        Ok(())
     }
 }
 

@@ -11,8 +11,6 @@ use embassy_executor::Spawner;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
-#[cfg(feature = "sk9822-strip")]
-use esp_hal::Async;
 #[cfg(feature = "waveshare-matrix")]
 use esp_hal::rmt::Rmt;
 #[cfg(feature = "waveshare-matrix")]
@@ -62,18 +60,33 @@ pub fn init_waveshare(
 #[cfg(feature = "sk9822-strip")]
 pub fn init_sk9822(
     spi: esp_hal::peripherals::SPI2<'static>,
+    dma_channel: esp_hal::peripherals::DMA_CH0<'static>,
     pins: Sk9822Pins<'static>,
     spawner: Spawner,
 ) {
+    use esp_hal::dma::{DmaDescriptor, DmaLoopBuf};
     use esp_hal::spi::master::{Config as SpiConfig, Spi};
     use esp_hal::time::Rate;
+    use static_cell::StaticCell;
 
-    let spi_bus: Spi<'_, Async> =
-        Spi::new(spi, SpiConfig::default().with_frequency(Rate::from_mhz(30)))
-            .expect("failed to initialize SPI for SK9822")
-            .into_async();
+    const FRAME_SIZE: usize = sk9822_strip::sk9822_frame_size(sk9822_strip::SK9822_LED_COUNT);
 
-    let strip = Sk9822Strip::<{ sk9822_strip::SK9822_LED_COUNT }>::new(spi_bus, pins);
+    static DMA_DESCRIPTOR: StaticCell<DmaDescriptor> = StaticCell::new();
+    static DMA_BUF: StaticCell<[u8; FRAME_SIZE]> = StaticCell::new();
+
+    let descriptor = DMA_DESCRIPTOR.init(DmaDescriptor::EMPTY);
+    let buffer = DMA_BUF.init([0u8; FRAME_SIZE]);
+    let dma_loop_buf =
+        DmaLoopBuf::new(descriptor, buffer).expect("failed to create DMA loop buffer for SK9822");
+
+    let spi_dma = Spi::new(spi, SpiConfig::default().with_frequency(Rate::from_mhz(30)))
+        .expect("failed to initialize SPI for SK9822")
+        .with_sck(pins.clock)
+        .with_mosi(pins.data)
+        .with_dma(dma_channel)
+        .into_async();
+
+    let strip = Sk9822Strip::<{ sk9822_strip::SK9822_LED_COUNT }>::new(spi_dma, dma_loop_buf);
 
     spawner
         .spawn(sk9822_strip::sk9822_strip_task(strip))
