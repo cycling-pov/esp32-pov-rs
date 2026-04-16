@@ -7,9 +7,10 @@ use smart_leds_trait::RGB8;
 const WS2811_DATA_TIME_PER_LED: Duration = Duration::from_nanos(24 * 2_500);
 const WS2811_RESET_LATCH: Duration = Duration::from_micros(50);
 
-// SK9822: 32 bits per LED at 4 MHz = 8,000 ns per LED.
-const SK9822_DATA_TIME_PER_LED: Duration = Duration::from_nanos(8_000);
-const SK9822_RESET_LATCH: Duration = Duration::ZERO;
+// SK9822: 32 bits per LED at 30 MHz = 1 us per LED.
+const SK9822_DATA_TIME_PER_LED: Duration = Duration::from_micros(1);
+// SK9822 Consider the start frame and end frame as the latch time. At 30 MHz, the overhead is 64 bits and thus 2 us.
+const SK9822_RESET_LATCH: Duration = Duration::from_micros(2);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, defmt::Format)]
 pub struct LedTimings {
