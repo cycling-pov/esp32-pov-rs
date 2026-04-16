@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use pov_proto::{
     bridge::{BridgeFrame, TransportSelector},
     image::encode_rgb888_to_wire,
-    transfer::{ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand, encode_packet},
+    transfer::{encode_packet, ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand},
 };
 use rand::seq::SliceRandom;
 use serialport::SerialPort;
@@ -92,6 +92,7 @@ enum Command {
     DisplayOff,
     /// Advance the spoke to the next stored image.
     NextImage,
+    RandomizeDisplay,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -206,6 +207,18 @@ fn main() -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("Failed to encode NextImage command: {:?}", e))?;
             packets.push(chunk_buf[..n].to_vec());
             println!("Collected command: NextImage");
+        }
+        Command::RandomizeDisplay => {
+            let n = encode_packet(
+                Packet::Command(CommandFrame {
+                    transfer_id: 1,
+                    command: SpokeCommand::RandomizeDisplay,
+                }),
+                &mut chunk_buf,
+            )
+            .map_err(|e| anyhow::anyhow!("Failed to encode RandomizeDisplay command: {:?}", e))?;
+            packets.push(chunk_buf[..n].to_vec());
+            println!("Collected command: RandomizeDisplay");
         }
     }
 

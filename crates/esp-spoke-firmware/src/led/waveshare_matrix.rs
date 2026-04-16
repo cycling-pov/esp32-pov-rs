@@ -1,8 +1,11 @@
 use defmt::info;
+use embassy_futures::select::{Either, select};
+use embassy_time::{Duration as EmbassyDuration, Timer};
 use esp_hal::{
     Blocking,
     peripherals::GPIO14,
     rmt::{PulseCode, TxChannelCreator},
+    rng::Rng,
 };
 use esp_hal_smartled::{SmartLedsAdapter, buffer_size};
 use pov_proto::image::{DecodeMode, decode_into_rgb8};
@@ -170,14 +173,28 @@ fn apply_downloaded_image(
     );
 }
 
+fn randomize_leds(led_strip: &mut WaveshareMatrix<'_>, rng: &Rng) {
+    for pixel in led_strip.pixels_mut() {
+        let value = rng.random();
+        *pixel = RGB8 {
+            r: (value & 0xFF) as u8,
+            g: ((value >> 8) & 0xFF) as u8,
+            b: ((value >> 16) & 0xFF) as u8,
+        };
+    }
+    led_strip.show().expect("failed to show randomized LEDs");
+}
+
 fn apply_command(
     led_strip: &mut WaveshareMatrix<'_>,
     bitmap_store: &impl BitmapStorage,
     current_bitmap_index: &mut usize,
+    randomizing: &mut bool,
     frame: CommandFrame,
 ) {
     match frame.command {
         SpokeCommand::DisplayOff => {
+            *randomizing = false;
             led_strip.clear();
             led_strip.show().expect("failed to clear LED strip");
             info!(
@@ -186,6 +203,7 @@ fn apply_command(
             );
         }
         SpokeCommand::NextImage => {
+            *randomizing = false;
             let bitmap_count = bitmap_store.bitmap_count();
             if bitmap_count == 0 {
                 info!(
@@ -200,6 +218,13 @@ fn apply_command(
             info!(
                 "applied NextImage command from transfer {}: new_index={}",
                 frame.transfer_id, *current_bitmap_index
+            );
+        }
+        SpokeCommand::RandomizeDisplay => {
+            *randomizing = true;
+            info!(
+                "applied RandomizeDisplay command from transfer {}",
+                frame.transfer_id
             );
         }
     }
@@ -220,16 +245,35 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
     let mut bitmap_store = generated_image_storage();
     let mut current_bitmap_index = 0usize;
     let mut next_download_slot = 0usize;
+    let mut randomizing = false;
+    let rng = Rng::new();
     render_bitmap_index(&mut led_strip, &*bitmap_store, current_bitmap_index);
     info!("rendered built-in bitmap at startup");
 
     loop {
-        match super::LED_COMMAND_CHANNEL.receive().await {
+        let led_cmd = if randomizing {
+            let refresh_period = led_strip.refresh_period();
+            let delay = EmbassyDuration::from_micros(refresh_period.as_micros() as u64);
+            match select(super::LED_COMMAND_CHANNEL.receive(), Timer::after(delay)).await {
+                Either::First(cmd) => Some(cmd),
+                Either::Second(_) => {
+                    randomize_leds(&mut led_strip, &rng);
+                    None
+                }
+            }
+        } else {
+            Some(super::LED_COMMAND_CHANNEL.receive().await)
+        };
+
+        let Some(led_cmd) = led_cmd else { continue };
+
+        match led_cmd {
             LedCommand::Frame(frame) => {
                 apply_command(
                     &mut led_strip,
                     &*bitmap_store,
                     &mut current_bitmap_index,
+                    &mut randomizing,
                     frame,
                 );
             }

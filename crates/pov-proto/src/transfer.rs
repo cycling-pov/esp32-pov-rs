@@ -36,6 +36,7 @@ pub enum EncodeError {
 pub enum SpokeCommand {
     DisplayOff,
     NextImage,
+    RandomizeDisplay,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
