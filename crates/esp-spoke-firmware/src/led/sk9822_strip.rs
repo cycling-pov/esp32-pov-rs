@@ -116,17 +116,13 @@ impl<const LED_COUNT: usize> LedStrip for Sk9822Strip<'_, LED_COUNT> {
 }
 
 fn render_bitmap_index(
-    led_strip: &mut Sk9822Strip<'_, SK9822_LED_COUNT>,
+    _led_strip: &mut Sk9822Strip<'_, SK9822_LED_COUNT>,
     bitmap_store: &impl BitmapStorage,
     index: usize,
 ) {
-    let image_bitmap = bitmap_store.bitmap(index).expect("missing bitmap");
+    let _image_bitmap = bitmap_store.bitmap(index).expect("missing bitmap");
 
-    image_bitmap
-        .scale_into(SK9822_LED_COUNT, 1, led_strip.pixels_mut())
-        .expect("failed to scale bitmap");
-
-    led_strip.show().expect("failed to update SK9822 strip");
+    info!("Bitmap rendering not implemented yet");
 }
 
 fn apply_downloaded_image(
