@@ -1,4 +1,4 @@
 [workspace]
 resolver = "3"
-members = ["pov-algs", "pov-images", "pov-sim"]
+members = ["pov-algs", "pov-bevy", "pov-images", "pov-sim"]
 default-members = ["pov-sim"]

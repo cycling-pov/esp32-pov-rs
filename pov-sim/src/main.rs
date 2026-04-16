@@ -12,8 +12,6 @@ struct LedValue {
     loc: (f32, f32),
     fade_val: f32,
     offset: f32,
-    //id: u32,
-    //radius: f32,
 }
 
 pub fn main() {
