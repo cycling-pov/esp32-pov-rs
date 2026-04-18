@@ -18,6 +18,7 @@ heap-stats = []
 ble = ["dep:bt-hci", "dep:trouble-host", "esp-radio/ble"]
 espnow = ["esp-radio/esp-now", "esp-radio/wifi"]
 coexistence = ["esp-radio/coex"]
+usb-serial = []
 
 [dependencies]
 esp-hal = { version = "~1.0", features = ["defmt", "esp32s3", "unstable"] }
@@ -61,7 +62,8 @@ critical-section = "1.2.0"
 rgb              = "0.8.52"
 smart-leds-trait = "0.3.2"
 static_cell      = "2.1.1"
-pov-proto       = { path = "../pov-proto", features = ["defmt", "image-decode"] }
+postcard  = { version = "1", default-features = false }
+pov-proto = { path = "../pov-proto", features = ["bridge", "defmt", "image-decode"] }
 
 [build-dependencies]
 image = { version = "0.25.6", default-features = false, features = ["png"] }

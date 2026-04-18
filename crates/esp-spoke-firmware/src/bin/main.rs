@@ -76,6 +76,12 @@ async fn main(spawner: Spawner) -> ! {
 
     networking::init(peripherals.WIFI, peripherals.BT, spawner).await;
 
+    #[cfg(feature = "usb-serial")]
+    {
+        let usb = esp_hal::usb_serial_jtag::UsbSerialJtag::new(peripherals.USB_DEVICE).into_async();
+        networking::start_usb_serial_backend(spawner, usb);
+    }
+
     #[cfg(feature = "waveshare-matrix")]
     led::init_waveshare(peripherals.RMT, peripherals.GPIO14, spawner);
 

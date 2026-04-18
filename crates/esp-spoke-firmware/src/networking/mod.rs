@@ -11,6 +11,8 @@ pub mod ble;
 mod download;
 #[cfg(feature = "espnow")]
 pub mod esp_now;
+#[cfg(feature = "usb-serial")]
+pub mod usb_serial;
 
 pub use download::{
     BLE_MAX_CHUNK_PAYLOAD, ESPNOW_MAX_CHUNK_PAYLOAD, IngestError, MAX_TRANSFER_BYTES,
@@ -125,4 +127,14 @@ fn route_ingested_packet(packet: Option<download::IngestedPacket>) -> Result<(),
     }
 
     Ok(())
+}
+
+#[cfg(feature = "usb-serial")]
+pub fn start_usb_serial_backend(
+    spawner: Spawner,
+    usb: esp_hal::usb_serial_jtag::UsbSerialJtag<'static, esp_hal::Async>,
+) {
+    spawner
+        .spawn(usb_serial::usb_serial_task(usb))
+        .expect("failed to spawn usb_serial_task");
 }

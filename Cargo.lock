@@ -953,6 +953,7 @@ dependencies = [
  "esp-radio",
  "esp-rtos",
  "image",
+ "postcard",
  "pov-proto",
  "rgb",
  "smart-leds-trait",
