@@ -10,6 +10,7 @@ struct LedValue {
     loc: (f32, f32),
     fade_val: f32,
     offset: f32,
+    color: Color,
 }
 
 pub fn main() {
@@ -48,8 +49,7 @@ pub fn main() {
                 loc: (radius * c, radius * s),
                 fade_val: 1.0,
                 offset: angle,
-                //id: i,
-                //radius,
+                color: Color::WHITE,
             });
         }
     }
@@ -94,18 +94,18 @@ pub fn main() {
         for l in &mut leds {
             if state.contains(l.offset) {
                 l.fade_val = 1.0;
+                let px = current.get_nearest(l.loc.0, l.loc.1);
+                l.color = Color::new(px.red, px.green, px.blue, 255);
             } else {
                 l.fade_val = (l.fade_val - d.get_frame_time() * (1.0 / fade_time)).max(0.0);
+                l.color = l.color.alpha(l.fade_val);
             }
-
-            let px = current.get_nearest(l.loc.0, l.loc.1);
-            let color = Color::new(px.red, px.green, px.blue, 255).alpha(l.fade_val);
 
             d.draw_circle(
                 cx + (l.loc.0 * wheel_inner_radius) as i32,
                 cy + (l.loc.1 * wheel_inner_radius) as i32,
                 2.0,
-                color,
+                l.color,
             );
         }
 

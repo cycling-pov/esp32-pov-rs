@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-raylib = "5.5"
+raylib = { version = "5.5", features = ["wayland"] }
 pov-algs = { path = "../pov-algs", version = "*" }
 pov-images = { path = "../pov-images", version = "*" }
