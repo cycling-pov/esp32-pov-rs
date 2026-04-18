@@ -95,7 +95,7 @@ impl<'a> Image<'a> {
 
 impl<'a> ImageSelection for Image<'a> {
     fn current_image(&self) -> &Bitmap<256> {
-        &self.image
+        self.image
     }
 
     fn step_dt(&mut self, _dt: f32) {}

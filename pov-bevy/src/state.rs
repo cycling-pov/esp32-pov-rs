@@ -10,7 +10,7 @@ use bevy::{
 pub struct RotationPlugin;
 
 #[derive(Event)]
-pub struct RotationSettingsUpdated {
+pub struct RotationSettingsChanged {
     pub rate: f32,
     pub fade: f32,
 }
@@ -122,10 +122,6 @@ impl RotationState {
         false
     }
 
-    pub fn num_spokes(&self) -> usize {
-        self.spoke_positions.len()
-    }
-
     pub fn has_rotated(&self) -> bool {
         self.has_rotated_spoke(0)
     }
@@ -133,11 +129,11 @@ impl RotationState {
     pub fn has_rotated_spoke(&self, spoke: usize) -> bool {
         self.spoke_positions
             .get(spoke)
-            .map_or(false, |x| x.has_rotated())
+            .is_some_and(|x| x.has_rotated())
     }
 
-    pub fn get_settings(&self) -> RotationSettingsUpdated {
-        RotationSettingsUpdated {
+    pub fn get_settings(&self) -> RotationSettingsChanged {
+        RotationSettingsChanged {
             rate: self.rotation_rate,
             fade: self.fade_dt,
         }
@@ -147,7 +143,7 @@ impl RotationState {
 fn rotation_change_input(
     mut commands: Commands,
     input: Res<ButtonInput<KeyCode>>,
-    mut cmd: ResMut<RotationState>,
+    mut state: ResMut<RotationState>,
     time: Res<Time>,
 ) {
     let speed_dir = if input.pressed(KeyCode::ArrowUp) {
@@ -166,11 +162,9 @@ fn rotation_change_input(
         0.0
     };
 
-    cmd.rotation_rate = (cmd.rotation_rate + 4.0 * speed_dir * time.delta_secs()).clamp(0.0, 20.0);
-    cmd.fade_dt = (cmd.fade_dt + 0.5 * fade_dir * time.delta_secs()).clamp(0.1, 2.0);
+    state.rotation_rate =
+        (state.rotation_rate + 4.0 * speed_dir * time.delta_secs()).clamp(0.0, 20.0);
+    state.fade_dt = (state.fade_dt + 0.5 * fade_dir * time.delta_secs()).clamp(0.1, 2.0);
 
-    commands.trigger(RotationSettingsUpdated {
-        rate: cmd.rotation_rate,
-        fade: cmd.fade_dt,
-    });
+    commands.trigger(state.get_settings());
 }

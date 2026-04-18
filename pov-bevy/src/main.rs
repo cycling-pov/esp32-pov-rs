@@ -4,7 +4,7 @@ mod state;
 use bevy::{
     asset::RenderAssetUsages,
     dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin, FrameTimeGraphConfig},
-    input::common_conditions::{input_just_pressed, input_toggle_active},
+    input::common_conditions::input_just_pressed,
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
     text::TextColor,
@@ -12,8 +12,8 @@ use bevy::{
 };
 
 use crate::{
-    images::ImageState,
-    state::{RotationPlugin, RotationSettingsUpdated, RotationState},
+    images::{ImageChanged, ImageState},
+    state::{RotationPlugin, RotationSettingsChanged, RotationState},
 };
 
 fn main() {
@@ -27,7 +27,6 @@ fn main() {
                 fit_canvas_to_parent: true,
                 prevent_default_event_handling: false,
                 window_theme: Some(WindowTheme::Dark),
-                present_mode: bevy::window::PresentMode::Immediate,
                 ..Default::default()
             }),
             ..Default::default()
@@ -43,7 +42,7 @@ fn main() {
                 frame_time_graph_config: FrameTimeGraphConfig {
                     enabled: true,
                     min_fps: 30.0,
-                    target_fps: 144.0,
+                    target_fps: 60.0,
                 },
                 ..Default::default()
             },
@@ -65,6 +64,7 @@ fn main() {
         set_next_image.run_if(input_just_pressed(KeyCode::KeyA)),
     );
     app.add_observer(update_text);
+    app.add_observer(update_text_image);
 
     app.add_systems(Update, (update_rotation_state, update_pattern));
 
@@ -83,10 +83,10 @@ impl Default for ThemeState {
 }
 
 #[derive(Component)]
-struct LED {
-    id: u32,
+struct Led {
+    //id: u32,
     offset: f32,
-    radius_perc: f32,
+    //radius_perc: f32,
     loc: (f32, f32),
     fade: f32,
 }
@@ -94,12 +94,16 @@ struct LED {
 #[derive(Component)]
 struct TextStatUpdate;
 
+#[derive(Component)]
+struct TextImageNameUpdate;
+
 fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut images: ResMut<Assets<Image>>,
     state: Res<RotationState>,
+    image_state: Res<ImageState>,
 ) {
     commands.spawn(Camera2d);
 
@@ -151,11 +155,11 @@ fn setup(
                     ..default()
                 },
                 Transform::from_xyz(radius_val * c, -radius_val * s, 1.0),
-                LED {
-                    id: i,
+                Led {
+                    //id: i,
                     fade: 1.0,
                     offset: angle,
-                    radius_perc: radius,
+                    //radius_perc: radius,
                     loc: (radius * c, radius * s),
                 },
             ));
@@ -169,14 +173,26 @@ fn setup(
         Node {
             position_type: PositionType::Absolute,
             top: px(12),
-            left: px(200),
+            left: px(12),
             ..default()
         },
     ));
 
-    commands.trigger(RotationSettingsUpdated {
-        fade: state.fade_dt,
-        rate: state.rotation_rate,
+    commands.spawn((
+        Text::new(""),
+        TextColor(Color::WHITE),
+        TextImageNameUpdate,
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(64),
+            left: px(12),
+            ..default()
+        },
+    ));
+
+    commands.trigger(state.get_settings());
+    commands.trigger(ImageChanged {
+        name: image_state.current_name().into(),
     });
 }
 
@@ -215,7 +231,7 @@ fn create_circle_image(size: u32) -> Image {
 }
 
 fn update_text(
-    event: On<RotationSettingsUpdated>,
+    event: On<RotationSettingsChanged>,
     mut query: Query<&mut Text, With<TextStatUpdate>>,
 ) {
     let e = event.event();
@@ -224,9 +240,21 @@ fn update_text(
     }
 }
 
-fn set_next_image(mut images: ResMut<ImageState>) {
-    let len = images.selections.len();
-    images.index = (images.index + 1) % len;
+fn update_text_image(
+    event: On<ImageChanged>,
+    mut query: Query<&mut Text, With<TextImageNameUpdate>>,
+) {
+    let e = event.event();
+    for mut t in &mut query {
+        t.0 = format!("Image: {}", &e.name);
+    }
+}
+
+fn set_next_image(mut commands: Commands, mut images: ResMut<ImageState>) {
+    images.next_img();
+    commands.trigger(ImageChanged {
+        name: images.current_name().into(),
+    });
 }
 
 fn update_rotation_state(
@@ -236,22 +264,19 @@ fn update_rotation_state(
 ) {
     state.step(time.delta_secs());
 
-    let idx = images.index;
-    let img = &mut images.selections[idx].1;
-
-    img.step_dt(time.delta_secs());
+    images.step_dt(time.delta_secs());
     if state.has_rotated() {
-        img.step_rotation();
+        images.step_rotation();
     }
 }
 
 fn update_pattern(
-    mut query: Query<(&mut LED, &mut Sprite)>,
+    mut query: Query<(&mut Led, &mut Sprite)>,
     state: Res<RotationState>,
     time: Res<Time>,
     images: Res<ImageState>,
 ) {
-    let img = images.selections[images.index].1.current_image();
+    let img = images.current_image();
 
     for (mut led, mut sprite) in &mut query {
         if state.contains(led.offset) {
@@ -282,7 +307,7 @@ fn set_theme(
             t.0 = Color::WHITE;
         }
     } else {
-        color.0 = Color::linear_rgb(0.95, 0.95, 0.95);
+        color.0 = Color::srgb_u8(169, 169, 169);
 
         for mut t in &mut text {
             t.0 = Color::BLACK;
