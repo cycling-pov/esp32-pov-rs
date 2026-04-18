@@ -5,9 +5,5 @@ edition = "2024"
 
 [dependencies]
 bevy = { version = "0.18", features = ["bevy_dev_tools", "dynamic_linking"] }
-
-[profile.dev]
-opt-level = 1
-
-[profile.dev.package."*"]
-opt-level = 3
+pov-algs = { path = "../pov-algs", version = "*" }
+pov-images = { path = "../pov-images", version = "*" }

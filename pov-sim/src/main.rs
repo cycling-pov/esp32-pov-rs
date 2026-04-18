@@ -1,11 +1,9 @@
-mod selections;
 mod state;
 
-use crate::{
-    selections::{Image, ImageSelection, VideoRotation, VideoTime},
-    state::RotationState,
+use crate::state::RotationState;
+use pov_images::{
+    Image, ImageSelection, VideoRotation, VideoTime, frames_from_data, image_from_data,
 };
-use pov_images::{frames_from_data, image_from_data};
 use raylib::prelude::*;
 
 struct LedValue {

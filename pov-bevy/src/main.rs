@@ -1,15 +1,19 @@
-use std::{f32, ops::Rem};
+mod images;
+mod state;
 
 use bevy::{
     asset::RenderAssetUsages,
     dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin, FrameTimeGraphConfig},
-    ecs::schedule::ExecutorKind,
     input::common_conditions::{input_just_pressed, input_toggle_active},
-    log::tracing::instrument,
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
     text::TextColor,
     window::WindowTheme,
+};
+
+use crate::{
+    images::ImageState,
+    state::{RotationPlugin, RotationSettingsUpdated, RotationState},
 };
 
 fn main() {
@@ -45,69 +49,26 @@ fn main() {
             },
         },
     ))
+    .insert_resource(ImageState::default())
     .insert_resource(ClearColor(Color::srgb_u8(255, 255, 255)))
     .insert_resource(ThemeState::default())
-    .insert_resource(RotationState {
-        rotation_rate: 10.0,
-        previous_pos: 0.0,
-        current_pos: 0.0,
-    })
     .add_systems(Startup, setup)
-    .edit_schedule(Update, |sched| {
-        sched.set_executor_kind(ExecutorKind::SingleThreaded);
-    })
-    .edit_schedule(PreUpdate, |sched| {
-        sched.set_executor_kind(ExecutorKind::SingleThreaded);
-    })
-    .edit_schedule(PostUpdate, |sched| {
-        sched.set_executor_kind(ExecutorKind::SingleThreaded);
-    });
+    .add_plugins(RotationPlugin);
 
-    app.add_systems(PostStartup, (set_theme, update_text));
+    app.add_systems(PostStartup, set_theme);
     app.add_systems(
         PreUpdate,
         (toggle_theme, set_theme).run_if(input_just_pressed(KeyCode::KeyT)),
     );
     app.add_systems(
         PreUpdate,
-        (rotation_change_input, update_text).run_if(
-            input_just_pressed(KeyCode::ArrowUp).or(input_just_pressed(KeyCode::ArrowDown)),
-        ),
+        set_next_image.run_if(input_just_pressed(KeyCode::KeyA)),
     );
+    app.add_observer(update_text);
 
     app.add_systems(Update, (update_rotation_state, update_pattern));
-    app.add_systems(
-        PostUpdate,
-        update_pattern_meshes.run_if(input_toggle_active(true, KeyCode::KeyU)),
-    );
 
     app.run();
-}
-
-fn rotation_change_input(input: Res<ButtonInput<KeyCode>>, mut cmd: ResMut<RotationState>) {
-    let dir = if input.just_pressed(KeyCode::ArrowUp) {
-        1.0
-    } else {
-        -1.0
-    };
-    cmd.rotation_rate = (cmd.rotation_rate + 0.5 * dir).min(10.0).max(0.0);
-}
-
-#[derive(Debug, Resource)]
-struct RotationState {
-    rotation_rate: f32,
-    previous_pos: f32,
-    current_pos: f32,
-}
-
-impl RotationState {
-    const fn contains(&self, x: f32) -> bool {
-        if self.current_pos > self.previous_pos {
-            x >= self.previous_pos && x <= self.current_pos
-        } else {
-            x <= self.current_pos || x >= self.previous_pos
-        }
-    }
 }
 
 #[derive(Resource)]
@@ -126,7 +87,8 @@ struct LED {
     id: u32,
     offset: f32,
     radius_perc: f32,
-    fade_val: f32,
+    loc: (f32, f32),
+    fade: f32,
 }
 
 #[derive(Component)]
@@ -137,6 +99,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    state: Res<RotationState>,
 ) {
     commands.spawn(Camera2d);
 
@@ -187,12 +150,13 @@ fn setup(
                     custom_size: Some(Vec2::splat(5.0)),
                     ..default()
                 },
-                Transform::from_xyz(radius_val * c, radius_val * s, 1.0),
+                Transform::from_xyz(radius_val * c, -radius_val * s, 1.0),
                 LED {
                     id: i,
-                    fade_val: 1.0,
+                    fade: 1.0,
                     offset: angle,
                     radius_perc: radius,
+                    loc: (radius * c, radius * s),
                 },
             ));
         }
@@ -209,6 +173,11 @@ fn setup(
             ..default()
         },
     ));
+
+    commands.trigger(RotationSettingsUpdated {
+        fade: state.fade_dt,
+        rate: state.rotation_rate,
+    });
 }
 
 /// Creates a small white circle image for use as a sprite texture.
@@ -245,38 +214,55 @@ fn create_circle_image(size: u32) -> Image {
     )
 }
 
-fn update_text(mut query: Query<&mut Text, With<TextStatUpdate>>, cmd: Res<RotationState>) {
+fn update_text(
+    event: On<RotationSettingsUpdated>,
+    mut query: Query<&mut Text, With<TextStatUpdate>>,
+) {
+    let e = event.event();
     for mut t in &mut query {
-        t.0 = format!("Rotation Rate: {:0.2}", cmd.rotation_rate);
+        t.0 = format!("Rotation Rate: {:0.2}\nFade Time: {:0.2}", e.rate, e.fade);
     }
 }
 
-fn update_rotation_state(time: Res<Time>, mut state: ResMut<RotationState>) {
-    state.previous_pos = state.current_pos;
-    state.current_pos =
-        (state.current_pos + time.delta_secs() * state.rotation_rate).rem(2.0 * f32::consts::PI);
+fn set_next_image(mut images: ResMut<ImageState>) {
+    let len = images.selections.len();
+    images.index = (images.index + 1) % len;
 }
 
-fn update_pattern(mut query: Query<&mut LED>, state: Res<RotationState>, time: Res<Time>) {
-    for mut led in &mut query {
+fn update_rotation_state(
+    time: Res<Time>,
+    mut state: ResMut<RotationState>,
+    mut images: ResMut<ImageState>,
+) {
+    state.step(time.delta_secs());
+
+    let idx = images.index;
+    let img = &mut images.selections[idx].1;
+
+    img.step_dt(time.delta_secs());
+    if state.has_rotated() {
+        img.step_rotation();
+    }
+}
+
+fn update_pattern(
+    mut query: Query<(&mut LED, &mut Sprite)>,
+    state: Res<RotationState>,
+    time: Res<Time>,
+    images: Res<ImageState>,
+) {
+    let img = images.selections[images.index].1.current_image();
+
+    for (mut led, mut sprite) in &mut query {
         if state.contains(led.offset) {
-            led.fade_val = 1.0;
-        } else {
-            led.fade_val = (led.fade_val - time.delta_secs()).max(0.0);
-        }
-    }
-}
+            led.fade = 1.0;
 
-fn update_pattern_meshes(mut query: Query<(&LED, &mut Sprite)>) {
-    for (led, mut sprite) in &mut query {
-        let col = if led.id > 30 {
-            Color::WHITE
+            let px = img.get_nearest(led.loc.0, led.loc.1);
+            sprite.color = Color::srgb_u8(px.red, px.green, px.blue);
         } else {
-            Color::srgb_u8(0, 255, 255)
+            led.fade = (led.fade - time.delta_secs() / state.fade_dt).max(0.0);
+            sprite.color = sprite.color.with_alpha(led.fade);
         }
-        .with_alpha(led.fade_val);
-
-        sprite.color = col;
     }
 }
 
