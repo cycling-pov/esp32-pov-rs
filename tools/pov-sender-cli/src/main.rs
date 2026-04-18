@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use pov_proto::{
     bridge::{BridgeFrame, TransportSelector},
     image::encode_rgb888_to_wire,
-    transfer::{ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand, encode_packet},
+    transfer::{encode_packet, ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand},
 };
 use rand::seq::SliceRandom;
 use serialport::SerialPort;
@@ -56,7 +56,7 @@ struct Args {
     port: String,
 
     /// Wireless transport the bridge should use
-    #[arg(short, long, default_value = "ble")]
+    #[arg(short, long, default_value = "espnow")]
     transport: Transport,
 
     /// Serial baud rate
