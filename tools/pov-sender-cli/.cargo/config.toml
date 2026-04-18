@@ -2,4 +2,3 @@
 # Override workspace default target (xtensa) with the current host target.
 # This keeps the CLI portable across Windows/macOS/Linux.
 target = "host-tuple"
-rustflags = []
