@@ -48,9 +48,7 @@ pub fn init_waveshare(
     waveshare_pin: esp_hal::peripherals::GPIO14<'static>,
     spawner: Spawner,
 ) {
-    let rmt = Rmt::new(rmt, Rate::from_mhz(80))
-        .expect("failed to initialize RMT")
-        .into_async();
+    let rmt = Rmt::new(rmt, Rate::from_mhz(80)).expect("failed to initialize RMT");
     let led_strip = WaveshareMatrix::new(rmt.channel0, WaveshareMatrixPins::new(waveshare_pin));
     spawner
         .spawn(waveshare_matrix::waveshare_matrix_task(led_strip))

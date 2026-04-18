@@ -2,15 +2,15 @@ use defmt::info;
 use embassy_futures::select::{Either, select};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use esp_hal::{
-    Async,
+    Blocking,
     peripherals::GPIO14,
     rmt::{PulseCode, TxChannelCreator},
     rng::Rng,
 };
-use esp_hal_smartled::{SmartLedsAdapterAsync, buffer_size_async};
+use esp_hal_smartled::{SmartLedsAdapter, buffer_size};
 use pov_proto::image::{DecodeMode, decode_into_rgb8};
 use pov_proto::transfer::{CommandFrame, DownloadKind, SpokeCommand};
-use smart_leds_trait::{RGB8, SmartLedsWriteAsync as _};
+use smart_leds_trait::{RGB8, SmartLedsWrite as _};
 use static_cell::StaticCell;
 
 use crate::bitmap::{BitmapStorage, generated_image_storage};
@@ -23,7 +23,7 @@ use crate::networking::CompletedDownload;
 const WAVESHARE_MATRIX_BRIGHTNESS_LIMIT_PERCENT: u16 = 1;
 
 const WAVESHARE_MATRIX_LED_COUNT: usize = 64;
-const WAVESHARE_MATRIX_BUFFER_SIZE: usize = buffer_size_async(WAVESHARE_MATRIX_LED_COUNT);
+const WAVESHARE_MATRIX_BUFFER_SIZE: usize = buffer_size(WAVESHARE_MATRIX_LED_COUNT);
 
 const WAVESHARE_RGB565_DECODE_SCRATCH_BYTES: usize = 1024 * 10;
 const DOWNLOADABLE_IMAGE_SLOTS: usize = 2;
@@ -51,7 +51,7 @@ impl<'d> WaveshareMatrixPins<'d> {
 }
 
 pub struct WaveshareMatrix<'d> {
-    driver: SmartLedsAdapterAsync<'d, WAVESHARE_MATRIX_BUFFER_SIZE, RGB8>,
+    driver: SmartLedsAdapter<'d, WAVESHARE_MATRIX_BUFFER_SIZE, RGB8>,
     framebuffer: [RGB8; WAVESHARE_MATRIX_LED_COUNT],
 }
 
@@ -61,7 +61,7 @@ impl<'d> WaveshareMatrix<'d> {
 
     pub fn new<C>(channel: C, pins: WaveshareMatrixPins<'d>) -> Self
     where
-        C: TxChannelCreator<'d, Async>,
+        C: TxChannelCreator<'d, Blocking>,
     {
         static RMT_BUFFER: StaticCell<[PulseCode; WAVESHARE_MATRIX_BUFFER_SIZE]> =
             StaticCell::new();
@@ -70,7 +70,7 @@ impl<'d> WaveshareMatrix<'d> {
 
         Self {
             // Waveshare matrix LEDs use RGB byte order, not the more common GRB.
-            driver: SmartLedsAdapterAsync::new_with_color(channel, pins.data, rmt_buffer),
+            driver: SmartLedsAdapter::new_with_color(channel, pins.data, rmt_buffer),
             framebuffer: [RGB8::default(); WAVESHARE_MATRIX_LED_COUNT],
         }
     }
@@ -96,7 +96,6 @@ impl LedStrip for WaveshareMatrix<'_> {
     async fn show(&mut self) -> Result<(), LedError> {
         self.driver
             .write(self.framebuffer.iter().copied().map(apply_brightness_limit))
-            .await
             .map_err(LedError::from)
     }
 }
