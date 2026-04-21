@@ -1739,26 +1739,6 @@ dependencies = [
 
 [[package]]
 name = "bindgen"
-version = "0.70.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f49d8fed880d473ea71efb9bf597651e77201bdd4893efe54c9e5d65ae04ce6f"
-dependencies = [
- "bitflags 2.11.0",
- "cexpr",
- "clang-sys",
- "itertools 0.13.0",
- "log",
- "prettyplease",
- "proc-macro2",
- "quote",
- "regex",
- "rustc-hash 1.1.0",
- "shlex",
- "syn",
-]
-
-[[package]]
-name = "bindgen"
 version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "993776b509cfb49c750f11b8f07a46fa23e0a1386ffc01fb1e7d343efc387895"
@@ -1999,15 +1979,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cmake"
-version = "0.1.58"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0f78a02292a74a88ac736019ab962ece0bc380e3f977bf72e376c5d78ff0678"
-dependencies = [
- "cc",
-]
-
-[[package]]
 name = "codespan-reporting"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2195,7 +2166,7 @@ version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ceec7a6067e62d6f931a2baf6f3a751f4a892595bcec1461a3c94ef9949864b6"
 dependencies = [
- "bindgen 0.72.1",
+ "bindgen",
 ]
 
 [[package]]
@@ -4316,15 +4287,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pov-sim"
-version = "0.1.0"
-dependencies = [
- "pov-algs",
- "pov-images",
- "raylib",
-]
-
-[[package]]
 name = "pp-rs"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4558,30 +4520,6 @@ name = "raw-window-handle"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
-
-[[package]]
-name = "raylib"
-version = "5.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5c54335590d1b6e6fbdbccee09dafdfd76a1111fc3c709eca949e71e81f7a8a"
-dependencies = [
- "cfg-if",
- "paste",
- "raylib-sys",
- "seq-macro",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "raylib-sys"
-version = "5.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ce5adc950b042db67f1f78f24f7e76563652ce24db032afe9ca9e534d8b7a13"
-dependencies = [
- "bindgen 0.70.1",
- "cc",
- "cmake",
-]
 
 [[package]]
 name = "rayon"
@@ -4841,12 +4779,6 @@ name = "send_wrapper"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd0b0ec5f1c1ca621c432a25813d8d60c88abe6d3e08a3eb9cf37d97a0fe3d73"
-
-[[package]]
-name = "seq-macro"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1bc711410fbe7399f390ca1c3b60ad0f53f80e95c5eb935e52268a0e2cd49acc"
 
 [[package]]
 name = "serde"

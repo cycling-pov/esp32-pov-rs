@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["pov-algs", "pov-bevy", "pov-images", "pov-sim"]
-default-members = ["pov-bevy", "pov-sim"]
+members = ["pov-algs", "pov-bevy", "pov-images"]
+default-members = ["pov-bevy"]
 
 [profile.dev]
 opt-level = 1

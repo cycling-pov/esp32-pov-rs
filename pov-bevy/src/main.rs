@@ -1,5 +1,9 @@
+mod estimator;
 mod images;
 mod state;
+mod theme;
+
+use std::{f32, ops::Rem};
 
 use bevy::{
     asset::RenderAssetUsages,
@@ -10,13 +14,18 @@ use bevy::{
     text::TextColor,
     window::WindowTheme,
 };
+use pov_algs::{CIRCLE_RADIANS, DEGREES_TO_RADIANS, LedGeometry};
 
 use crate::{
+    estimator::PositionEstimator,
     images::{ImageChanged, ImageState},
-    state::{RotationPlugin, RotationSettingsChanged, RotationState},
+    state::{RotationPlugin, RotationSettings, RotationState},
+    theme::{ThemePlugin, ThemeState},
 };
 
 fn main() {
+    let geometry = SimGeometry::new(2, 40);
+
     let mut app = App::new();
     app.add_plugins((
         DefaultPlugins.set(WindowPlugin {
@@ -48,45 +57,33 @@ fn main() {
             },
         },
     ))
-    .insert_resource(ImageState::default())
+    .insert_resource(ImageState::new(&geometry))
+    .insert_resource(PositionEstimator::default())
     .insert_resource(ClearColor(Color::srgb_u8(255, 255, 255)))
-    .insert_resource(ThemeState::default())
+    .insert_resource(geometry)
     .add_systems(Startup, setup)
-    .add_plugins(RotationPlugin);
+    .add_plugins(RotationPlugin)
+    .add_plugins(ThemePlugin)
+    .add_observer(set_theme);
 
-    app.add_systems(PostStartup, set_theme);
-    app.add_systems(
-        PreUpdate,
-        (toggle_theme, set_theme).run_if(input_just_pressed(KeyCode::KeyT)),
-    );
     app.add_systems(
         PreUpdate,
         set_next_image.run_if(input_just_pressed(KeyCode::KeyA)),
     );
+
     app.add_observer(update_text);
     app.add_observer(update_text_image);
 
-    app.add_systems(Update, (update_rotation_state, update_pattern));
+    app.add_systems(Update, (update_estimator, update_pattern));
 
     app.run();
 }
 
-#[derive(Resource)]
-struct ThemeState {
-    dark_theme: bool,
-}
-
-impl Default for ThemeState {
-    fn default() -> Self {
-        Self { dark_theme: true }
-    }
-}
-
 #[derive(Component)]
 struct Led {
-    //id: u32,
-    offset: f32,
-    //radius_perc: f32,
+    id: usize,
+    angle: f32,
+    radius: f32,
     loc: (f32, f32),
     fade: f32,
 }
@@ -97,56 +94,135 @@ struct TextStatUpdate;
 #[derive(Component)]
 struct TextImageNameUpdate;
 
+#[derive(Resource)]
+struct SimGeometry {
+    num_spokes: usize,
+    radii: Vec<f32>,
+    hub_perc: f32,
+    wheel_radius: f32,
+    wheel_thickness: f32,
+}
+
+impl SimGeometry {
+    pub fn new(num_spokes: usize, num_leds: usize) -> Self {
+        let hub_perc = 0.2;
+
+        let radii = {
+            let mut radii = vec![0.0f32; num_leds as usize];
+
+            for i in 0..num_leds {
+                let linear_percentage = i as f32 / num_leds as f32;
+                let modified_percentage = linear_percentage.powf(0.8);
+
+                radii[i as usize] = hub_perc + (1.0 - hub_perc) * modified_percentage;
+            }
+
+            radii
+        };
+
+        Self {
+            num_spokes,
+            radii,
+            hub_perc,
+            wheel_radius: 300.0,
+            wheel_thickness: 20.0,
+        }
+    }
+}
+
+impl LedGeometry for SimGeometry {
+    fn led_outer_diameter(&self) -> f32 {
+        self.wheel_radius - self.wheel_thickness // TODO - Is this trait required?
+    }
+
+    fn led_unit_positions(&self) -> &[f32] {
+        &self.radii
+    }
+
+    fn num_spokes(&self) -> usize {
+        2
+    }
+}
+
 fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut images: ResMut<Assets<Image>>,
-    state: Res<RotationState>,
+    geometry: Res<SimGeometry>,
     image_state: Res<ImageState>,
+    settings: Res<RotationSettings>,
 ) {
     commands.spawn(Camera2d);
-
-    const RADIUS_OUTER: f32 = 300.0;
-    const WHEEL_THICKNESS: f32 = 20.0;
-    const RADIUS_HUB: f32 = 20.0;
+    let radius_hub = (geometry.wheel_radius - geometry.wheel_thickness) * geometry.hub_perc * 0.8;
 
     const WHEEL_COLOR: Color = Color::BLACK;
     const HUB_COLOR: Color = Color::linear_rgb(0.05, 0.05, 0.05);
 
+    // Creates a small white circle image for use as a sprite texture.
+    // All trail sprites share this single GPU texture, enabling sprite batching
+    let circle_img_size = 8;
+    let circle_img = images.add({
+        let bytes_per_px = 4;
+        let mut data = vec![0u8; (circle_img_size * circle_img_size * bytes_per_px) as usize];
+        let center = (circle_img_size as f32 - 1.0) / 2.0;
+        for y in 0..circle_img_size {
+            for x in 0..circle_img_size {
+                let dx = x as f32 - center;
+                let dy = y as f32 - center;
+                let idx = ((y * circle_img_size + x) * bytes_per_px) as usize;
+                data[idx] = 255;
+                data[idx + 1] = 255;
+                data[idx + 2] = 255;
+                data[idx + 3] = if (dx * dx + dy * dy).sqrt() <= center {
+                    255
+                } else {
+                    0
+                };
+            }
+        }
+        Image::new(
+            Extent3d {
+                width: circle_img_size,
+                height: circle_img_size,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            data,
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::RENDER_WORLD,
+        )
+    });
+
+    // Setup the root hub for the wheel, followed by the wheel tyre
     let hub = commands
         .spawn((
-            Mesh2d(meshes.add(Circle::new(RADIUS_HUB))),
+            Mesh2d(meshes.add(Circle::new(radius_hub))),
             MeshMaterial2d(materials.add(HUB_COLOR)),
             Transform::from_xyz(0.0, 0.0, 1.0),
         ))
         .id();
 
     commands.spawn((
-        Mesh2d(meshes.add(Circle::new(RADIUS_OUTER).to_ring(WHEEL_THICKNESS))),
+        Mesh2d(meshes.add(Circle::new(geometry.wheel_radius).to_ring(geometry.wheel_thickness))),
         MeshMaterial2d(materials.add(WHEEL_COLOR)),
         Transform::from_xyz(0.0, 0.0, 1.0),
         ChildOf(hub),
     ));
 
-    const LED_LEN: f32 = RADIUS_OUTER - RADIUS_HUB - WHEEL_THICKNESS;
+    // Define the overall length of the strip for the LED values
+    let led_len: f32 = geometry.wheel_radius - radius_hub - geometry.wheel_thickness;
 
-    const NUM_LED: u32 = 40;
-    const HUB_PERC: f32 = 0.2;
-    const NUM_LED_SPOKES: u32 = 72 * 2;
+    // The number of LED spokes to use in the simulation
+    const NUM_LED_SPOKES: usize = 144;
 
-    let circle_img = images.add(create_circle_image(8));
-
+    // Spawn the elements required for each virtual LED spoke
     for d in 0..NUM_LED_SPOKES {
-        let angle = (d as f32 * 360.0 / NUM_LED_SPOKES as f32) * ::core::f32::consts::PI / 180.0;
+        let angle = (d as f32 * 360.0 / NUM_LED_SPOKES as f32) * DEGREES_TO_RADIANS;
         let (s, c) = angle.sin_cos();
 
-        for i in 0..NUM_LED {
-            let radius_perc = i as f32 / NUM_LED as f32;
-            let radius_mod = radius_perc.powf(0.8);
-
-            let radius = HUB_PERC + (1.0 - HUB_PERC) * radius_mod;
-            let radius_val = (LED_LEN + RADIUS_HUB) * radius;
+        for (i, r) in geometry.radii.iter().enumerate() {
+            let radius_val = (led_len + radius_hub) * r;
             commands.spawn((
                 Sprite {
                     image: circle_img.clone(),
@@ -156,16 +232,17 @@ fn setup(
                 },
                 Transform::from_xyz(radius_val * c, -radius_val * s, 1.0),
                 Led {
-                    //id: i,
+                    id: i,
                     fade: 1.0,
-                    offset: angle,
-                    //radius_perc: radius,
-                    loc: (radius * c, radius * s),
+                    angle,
+                    radius: *r,
+                    loc: (r * c, r * s),
                 },
             ));
         }
     }
 
+    // Add text fields
     commands.spawn((
         Text::new(""),
         TextColor(Color::WHITE),
@@ -190,50 +267,14 @@ fn setup(
         },
     ));
 
-    commands.trigger(state.get_settings());
+    // Trigger commands for updates based on the settings and current image selection
+    commands.trigger(*settings);
     commands.trigger(ImageChanged {
         name: image_state.current_name().into(),
     });
 }
 
-/// Creates a small white circle image for use as a sprite texture.
-/// All trail sprites share this single GPU texture, enabling sprite batching
-/// (one draw call for all ~7000 active dots instead of one per entity).
-fn create_circle_image(size: u32) -> Image {
-    let mut data = vec![0u8; (size * size * 4) as usize];
-    let center = (size as f32 - 1.0) / 2.0;
-    for y in 0..size {
-        for x in 0..size {
-            let dx = x as f32 - center;
-            let dy = y as f32 - center;
-            let idx = ((y * size + x) * 4) as usize;
-            data[idx] = 255;
-            data[idx + 1] = 255;
-            data[idx + 2] = 255;
-            data[idx + 3] = if (dx * dx + dy * dy).sqrt() <= center {
-                255
-            } else {
-                0
-            };
-        }
-    }
-    Image::new(
-        Extent3d {
-            width: size,
-            height: size,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        data,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    )
-}
-
-fn update_text(
-    event: On<RotationSettingsChanged>,
-    mut query: Query<&mut Text, With<TextStatUpdate>>,
-) {
+fn update_text(event: On<RotationSettings>, mut query: Query<&mut Text, With<TextStatUpdate>>) {
     let e = event.event();
     for mut t in &mut query {
         t.0 = format!("Rotation Rate: {:0.2}\nFade Time: {:0.2}", e.rate, e.fade);
@@ -257,15 +298,19 @@ fn set_next_image(mut commands: Commands, mut images: ResMut<ImageState>) {
     });
 }
 
-fn update_rotation_state(
+fn update_estimator(
     time: Res<Time>,
-    mut state: ResMut<RotationState>,
+    state: ResMut<RotationState>,
     mut images: ResMut<ImageState>,
+    mut estimator: ResMut<PositionEstimator>,
 ) {
-    state.step(time.delta_secs());
+    let s = (0..state.num_spokes())
+        .filter(|i| state.has_rotated_spoke(*i))
+        .next();
+    estimator.step(time.delta_secs(), s);
 
     images.step_dt(time.delta_secs());
-    if state.has_rotated() {
+    if estimator.has_rotated() {
         images.step_rotation();
     }
 }
@@ -273,33 +318,43 @@ fn update_rotation_state(
 fn update_pattern(
     mut query: Query<(&mut Led, &mut Sprite)>,
     state: Res<RotationState>,
+    estimator: Res<PositionEstimator>,
+    settings: Res<RotationSettings>,
+    geometry: Res<SimGeometry>,
     time: Res<Time>,
     images: Res<ImageState>,
 ) {
-    let img = images.current_image();
+    //let img = images.current_image();
+    let img = images.current_polar();
+
+    let offset_angle = CIRCLE_RADIANS / geometry.num_spokes() as f32;
 
     for (mut led, mut sprite) in &mut query {
-        if state.contains(led.offset) {
+        if let Some(spoke) = state.contains(led.angle) {
             led.fade = 1.0;
 
-            let px = img.get_nearest(led.loc.0, led.loc.1);
+            //let pos =
+            //                (estimator.pos.get_current_pos() + spoke as f32 * offset_angle).rem(CIRCLE_RADIANS);
+            let pos = state.position(spoke); // TODO - We will have to iterate over a swath of LED values between the starting and ending positions to properly assign the spoke colors
+
+            //let pos = (led.angle + spoke as f32 * offset_angle).rem(CIRCLE_RADIANS);
+
+            let px = img.get_pixel(pos, led.id);
             sprite.color = Color::srgb_u8(px.red, px.green, px.blue);
         } else {
-            led.fade = (led.fade - time.delta_secs() / state.fade_dt).max(0.0);
+            led.fade = (led.fade - time.delta_secs() / settings.fade).max(0.0);
             sprite.color = sprite.color.with_alpha(led.fade);
         }
     }
 }
 
-fn toggle_theme(mut state: ResMut<ThemeState>) {
-    state.dark_theme = !state.dark_theme;
-}
-
 fn set_theme(
+    event: On<ThemeState>,
     mut color: ResMut<ClearColor>,
-    state: Res<ThemeState>,
     mut text: Query<&mut TextColor>,
 ) {
+    let state = event.event();
+
     if state.dark_theme {
         color.0 = Color::linear_rgb(0.05, 0.05, 0.1);
 

@@ -6,124 +6,124 @@ use bevy::{
     input::{common_conditions::input_pressed, keyboard::KeyCode},
     prelude::*,
 };
+use pov_algs::{CIRCLE_RADIANS, DEGREES_TO_RADIANS, angular_error};
+
+pub const NUM_SPOKES: usize = 2;
 
 pub struct RotationPlugin;
 
-#[derive(Event)]
-pub struct RotationSettingsChanged {
+#[derive(Resource, Event, Default, Debug, Clone, Copy)]
+pub struct RotationSettings {
     pub rate: f32,
     pub fade: f32,
 }
 
 impl Plugin for RotationPlugin {
     fn build(&self, app: &mut bevy::app::App) {
-        app.insert_resource(RotationState::new(2, 12.0, 0.2))
-            .add_systems(
-                PreUpdate,
+        app.insert_resource(RotationSettings {
+            rate: 12.0,
+            fade: 0.2,
+        })
+        .insert_resource(RotationState::default())
+        .add_systems(
+            PreUpdate,
+            (
                 rotation_change_input.run_if(
                     input_pressed(KeyCode::ArrowUp)
                         .or(input_pressed(KeyCode::ArrowDown))
                         .or(input_pressed(KeyCode::ArrowLeft))
                         .or(input_pressed(KeyCode::ArrowRight)),
                 ),
-            );
+                update_rotation_state,
+            ),
+        );
     }
 }
 
 #[derive(Debug, Resource)]
 pub struct RotationState {
-    spoke_positions: Vec<SpokePosition>,
-    pub rotation_rate: f32,
-    pub fade_dt: f32,
+    spoke_positions: Vec<SpokePos>,
 }
 
-#[derive(Debug, Default, Clone, Copy)]
-struct SpokePosition {
-    current_pos: f32,
-    previous_pos: f32,
+#[derive(Default, Debug, Clone, Copy)]
+pub struct SpokePos {
+    pub pos: f32,
+    pub prev: f32,
 }
 
-impl SpokePosition {
-    fn contains(&self, x: f32) -> bool {
-        let r1 = if self.current_pos > self.previous_pos {
-            x >= self.previous_pos && x <= self.current_pos
-        } else if self.current_pos != self.previous_pos {
-            x <= self.current_pos || x >= self.previous_pos
+impl SpokePos {
+    pub const fn has_rotated(&self) -> bool {
+        self.prev > self.pos
+    }
+
+    pub fn contains(&self, x: f32) -> bool {
+        let r1 = if self.pos > self.prev {
+            x >= self.prev && x <= self.pos
+        } else if self.pos != self.prev {
+            x <= self.pos || x >= self.prev
         } else {
             false
         };
 
-        let r2 = ((x - self.current_pos + core::f32::consts::PI).rem(core::f32::consts::PI * 2.0)
-            - core::f32::consts::PI)
-            .abs()
-            < 1.0 * core::f32::consts::PI / 180.0;
+        let r2 = angular_error(x - self.pos).abs() < 1.0 * DEGREES_TO_RADIANS;
 
         r1 || r2
-    }
-
-    const fn has_rotated(&self) -> bool {
-        self.previous_pos > self.current_pos
     }
 }
 
 impl RotationState {
-    const FULL_CIRCLE: f32 = 2.0 * ::core::f32::consts::PI;
-
-    pub fn new(num_spokes: usize, init_rate: f32, init_fade: f32) -> Self {
+    fn new(num_spokes: usize) -> Self {
         assert!(num_spokes > 0);
         let mut s = Self {
-            rotation_rate: init_rate,
-            spoke_positions: vec![SpokePosition::default(); num_spokes],
-            fade_dt: init_fade,
+            spoke_positions: vec![SpokePos::default(); num_spokes],
         };
         s.reset();
         s
+    }
+
+    pub fn contains(&self, angle: f32) -> Option<usize> {
+        self.spoke_positions
+            .iter()
+            .enumerate()
+            .filter(|(_, x)| x.contains(angle))
+            .map(|(i, _)| i)
+            .next()
+    }
+
+    pub fn num_spokes(&self) -> usize {
+        self.spoke_positions.len()
     }
 
     pub fn reset(&mut self) {
         let offset = self.offset_angle();
         for (i, pos) in self.spoke_positions.iter_mut().enumerate() {
             let current = offset * (i as f32);
-            pos.current_pos = current;
-            pos.previous_pos = current;
+            pos.pos = current;
+            pos.prev = current;
         }
     }
 
-    pub fn step(&mut self, dt: f32) {
+    pub fn step(&mut self, settings: &RotationSettings, dt: f32) {
         let angle_offset = self.offset_angle();
 
         let init_angle = if let Some(pos) = self.spoke_positions.first_mut() {
-            pos.previous_pos = pos.current_pos;
-            pos.current_pos = (pos.current_pos + dt * self.rotation_rate).rem(Self::FULL_CIRCLE);
-            pos.current_pos
+            pos.prev = pos.pos;
+            pos.pos = (pos.pos + dt * settings.rate).rem(CIRCLE_RADIANS);
+            pos.pos
         } else {
             panic!("unable to get spoke values");
         };
 
         for pos in &mut self.spoke_positions[1..] {
-            pos.previous_pos = pos.current_pos;
-            pos.current_pos = (init_angle + angle_offset).rem(Self::FULL_CIRCLE);
+            pos.prev = pos.pos;
+            pos.pos = (init_angle + angle_offset).rem(CIRCLE_RADIANS);
         }
     }
 
     fn offset_angle(&self) -> f32 {
         let num_spokes = self.spoke_positions.len();
         assert!(num_spokes > 0);
-        Self::FULL_CIRCLE / num_spokes as f32
-    }
-
-    pub fn contains(&self, x: f32) -> bool {
-        for spoke in &self.spoke_positions {
-            if spoke.contains(x) {
-                return true;
-            }
-        }
-
-        false
-    }
-
-    pub fn has_rotated(&self) -> bool {
-        self.has_rotated_spoke(0)
+        CIRCLE_RADIANS / num_spokes as f32
     }
 
     pub fn has_rotated_spoke(&self, spoke: usize) -> bool {
@@ -132,18 +132,29 @@ impl RotationState {
             .is_some_and(|x| x.has_rotated())
     }
 
-    pub fn get_settings(&self) -> RotationSettingsChanged {
-        RotationSettingsChanged {
-            rate: self.rotation_rate,
-            fade: self.fade_dt,
-        }
+    pub fn position(&self, spoke: usize) -> f32 {
+        self.spoke_positions[spoke].pos
     }
+}
+
+impl Default for RotationState {
+    fn default() -> Self {
+        Self::new(NUM_SPOKES)
+    }
+}
+
+fn update_rotation_state(
+    time: Res<Time>,
+    mut state: ResMut<RotationState>,
+    settings: Res<RotationSettings>,
+) {
+    state.step(&settings, time.delta_secs());
 }
 
 fn rotation_change_input(
     mut commands: Commands,
     input: Res<ButtonInput<KeyCode>>,
-    mut state: ResMut<RotationState>,
+    mut settings: ResMut<RotationSettings>,
     time: Res<Time>,
 ) {
     let speed_dir = if input.pressed(KeyCode::ArrowUp) {
@@ -162,9 +173,8 @@ fn rotation_change_input(
         0.0
     };
 
-    state.rotation_rate =
-        (state.rotation_rate + 4.0 * speed_dir * time.delta_secs()).clamp(0.0, 20.0);
-    state.fade_dt = (state.fade_dt + 0.5 * fade_dir * time.delta_secs()).clamp(0.1, 2.0);
+    settings.rate = (settings.rate + 4.0 * speed_dir * time.delta_secs()).clamp(0.0, 20.0);
+    settings.fade = (settings.fade + 0.5 * fade_dir * time.delta_secs()).clamp(0.1, 2.0);
 
-    commands.trigger(state.get_settings());
+    commands.trigger(*settings);
 }
