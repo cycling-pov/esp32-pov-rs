@@ -14,17 +14,17 @@ use bevy::{
     text::TextColor,
     window::WindowTheme,
 };
-use pov_algs::{CIRCLE_RADIANS, DEGREES_TO_RADIANS, LedGeometry};
+use pov_algs::{CIRCLE_RADIANS, DEGREES_TO_RADIANS, LedGeometry, angular_error};
 
 use crate::{
     estimator::PositionEstimator,
     images::{ImageChanged, ImageState},
-    state::{RotationPlugin, RotationSettings, RotationState},
+    state::{NUM_SPOKES, RotationPlugin, RotationSettings, RotationState},
     theme::{ThemePlugin, ThemeState},
 };
 
 fn main() {
-    let geometry = SimGeometry::new(2, 40);
+    let geometry = SimGeometry::new(NUM_SPOKES, 40);
 
     let mut app = App::new();
     app.add_plugins((
@@ -62,6 +62,7 @@ fn main() {
     .insert_resource(ClearColor(Color::srgb_u8(255, 255, 255)))
     .insert_resource(geometry)
     .add_systems(Startup, setup)
+    .add_systems(Update, update_estimator_text)
     .add_plugins(RotationPlugin)
     .add_plugins(ThemePlugin)
     .add_observer(set_theme);
@@ -83,8 +84,6 @@ fn main() {
 struct Led {
     id: usize,
     angle: f32,
-    radius: f32,
-    loc: (f32, f32),
     fade: f32,
 }
 
@@ -93,6 +92,9 @@ struct TextStatUpdate;
 
 #[derive(Component)]
 struct TextImageNameUpdate;
+
+#[derive(Component)]
+struct TextEstimatorUpdate;
 
 #[derive(Resource)]
 struct SimGeometry {
@@ -108,13 +110,13 @@ impl SimGeometry {
         let hub_perc = 0.2;
 
         let radii = {
-            let mut radii = vec![0.0f32; num_leds as usize];
+            let mut radii = vec![0.0f32; num_leds];
 
-            for i in 0..num_leds {
+            for (i, r) in radii.iter_mut().enumerate() {
                 let linear_percentage = i as f32 / num_leds as f32;
                 let modified_percentage = linear_percentage.powf(0.8);
 
-                radii[i as usize] = hub_perc + (1.0 - hub_perc) * modified_percentage;
+                *r = hub_perc + (1.0 - hub_perc) * modified_percentage;
             }
 
             radii
@@ -131,16 +133,12 @@ impl SimGeometry {
 }
 
 impl LedGeometry for SimGeometry {
-    fn led_outer_diameter(&self) -> f32 {
-        self.wheel_radius - self.wheel_thickness // TODO - Is this trait required?
-    }
-
     fn led_unit_positions(&self) -> &[f32] {
         &self.radii
     }
 
     fn num_spokes(&self) -> usize {
-        2
+        self.num_spokes
     }
 }
 
@@ -235,8 +233,6 @@ fn setup(
                     id: i,
                     fade: 1.0,
                     angle,
-                    radius: *r,
-                    loc: (r * c, r * s),
                 },
             ));
         }
@@ -262,6 +258,18 @@ fn setup(
         Node {
             position_type: PositionType::Absolute,
             top: px(64),
+            left: px(12),
+            ..default()
+        },
+    ));
+
+    commands.spawn((
+        Text::new(""),
+        TextColor(Color::WHITE),
+        TextEstimatorUpdate,
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(96),
             left: px(12),
             ..default()
         },
@@ -304,14 +312,27 @@ fn update_estimator(
     mut images: ResMut<ImageState>,
     mut estimator: ResMut<PositionEstimator>,
 ) {
-    let s = (0..state.num_spokes())
-        .filter(|i| state.has_rotated_spoke(*i))
-        .next();
-    estimator.step(time.delta_secs(), s);
+    let spoke_tick = (0..state.num_spokes()).find(|i| state.has_rotated_spoke(*i));
+    estimator.step(time.delta_secs(), spoke_tick);
 
     images.step_dt(time.delta_secs());
     if estimator.has_rotated() {
         images.step_rotation();
+    }
+}
+
+fn update_estimator_text(
+    mut query: Query<&mut Text, With<TextEstimatorUpdate>>,
+    estimator: Res<PositionEstimator>,
+    state: Res<RotationState>,
+) {
+    for mut t in &mut query {
+        t.0 = format!(
+            "Est: {:0.1} ({:0.1}), {:0.2} rad/s",
+            estimator.pos.get_current_pos(),
+            estimator.pos.get_current_pos() - state.position(0).pos,
+            estimator.pos.get_current_rate()
+        );
     }
 }
 
@@ -320,28 +341,39 @@ fn update_pattern(
     state: Res<RotationState>,
     estimator: Res<PositionEstimator>,
     settings: Res<RotationSettings>,
-    geometry: Res<SimGeometry>,
+    //geometry: Res<SimGeometry>,
     time: Res<Time>,
     images: Res<ImageState>,
 ) {
     //let img = images.current_image();
     let img = images.current_polar();
 
-    let offset_angle = CIRCLE_RADIANS / geometry.num_spokes() as f32;
-
     for (mut led, mut sprite) in &mut query {
         if let Some(spoke) = state.contains(led.angle) {
             led.fade = 1.0;
 
-            //let pos =
-            //                (estimator.pos.get_current_pos() + spoke as f32 * offset_angle).rem(CIRCLE_RADIANS);
-            let pos = state.position(spoke); // TODO - We will have to iterate over a swath of LED values between the starting and ending positions to properly assign the spoke colors
+            let pos = state.position(spoke);
 
-            //let pos = (led.angle + spoke as f32 * offset_angle).rem(CIRCLE_RADIANS);
+            // Assume linear interpolation between states from the absolute position
+            let angular_distance = angular_error(pos.pos - pos.prev).abs();
+            let percentage_through_arc = if angular_distance > 1e-3 {
+                angular_error(led.angle - pos.prev) / angular_distance
+            } else {
+                1.0
+            };
 
-            let px = img.get_pixel(pos, led.id);
+            // Determine the corresponding estimated spoke position value
+            let est_pos = estimator.get_spoke(spoke);
+            let est_dist = (est_pos.pos - est_pos.prev).abs();
+
+            // Determine the calculated position based on linear interpolation of the state estimate
+            let calc_pos = (est_pos.prev + est_dist * percentage_through_arc).rem(CIRCLE_RADIANS);
+
+            // Compute the resulting pixel value from the calculated position
+            let px = img.get_pixel(calc_pos, led.id);
             sprite.color = Color::srgb_u8(px.red, px.green, px.blue);
         } else {
+            // Default to fading the current color with the given fade time
             led.fade = (led.fade - time.delta_secs() / settings.fade).max(0.0);
             sprite.color = sprite.color.with_alpha(led.fade);
         }

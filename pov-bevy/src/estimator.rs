@@ -17,25 +17,24 @@ impl PositionEstimator {
         self.update_spokes();
     }
 
-    pub fn contains(&self, x: f32) -> bool {
-        for spoke in &self.spokes {
-            if spoke.contains(x) {
-                return true;
-            }
-        }
-
-        false
-    }
+    //pub fn contains(&self, x: f32) -> bool {
+    //    self.spokes.iter().any(|s| s.contains(x))
+    //}
 
     fn update_spokes(&mut self) {
+        let base_pos = self.pos.get_current_pos();
         for (i, s) in self.spokes.iter_mut().enumerate() {
             s.prev = s.pos;
-            s.pos = (self.pos.get_current_pos() + (i as f32) * Self::OFFSET).rem(CIRCLE_RADIANS);
+            s.pos = (base_pos + (i as f32) * Self::OFFSET).rem(CIRCLE_RADIANS);
         }
     }
 
     pub fn has_rotated(&self) -> bool {
         self.has_rotated_spoke(0)
+    }
+
+    pub fn get_spoke(&self, spoke: usize) -> &SpokePos {
+        &self.spokes[spoke]
     }
 
     pub fn has_rotated_spoke(&self, spoke: usize) -> bool {

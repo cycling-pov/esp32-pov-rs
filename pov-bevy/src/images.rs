@@ -1,8 +1,5 @@
 use bevy::prelude::*;
-use pov_algs::{
-    LedGeometry,
-    images::{Bitmap, PolarBitmap},
-};
+use pov_algs::{LedGeometry, images::PolarBitmap};
 use pov_images::default::{DEFAULT_IMAGE, ImageOption, create_default_images};
 
 #[derive(Event)]
@@ -33,9 +30,9 @@ impl ImageState {
         &self.polar_selections[0]
     }
 
-    pub fn current_image(&self) -> &Bitmap<256> {
-        self.selections[self.index].image.current_image()
-    }
+    //pub fn current_image(&self) -> &Bitmap<256> {
+    //    self.selections[self.index].image.current_image()
+    //}
 
     pub fn current_name(&self) -> &str {
         &self.selections[self.index].name

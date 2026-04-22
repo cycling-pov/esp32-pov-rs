@@ -5,7 +5,7 @@ use std::{
 };
 
 use image::{AnimationDecoder, codecs::gif::GifDecoder, imageops::resize};
-use pov_algs::images::{Bitmap, PolarBitmap};
+use pov_algs::images::Bitmap;
 
 fn read_single_image<T: BufRead + Seek, const N: usize>(input: T) -> Bitmap<N> {
     let mut img = Bitmap::<N>::default();

@@ -22,9 +22,9 @@ impl Plugin for RotationPlugin {
     fn build(&self, app: &mut bevy::app::App) {
         app.insert_resource(RotationSettings {
             rate: 12.0,
-            fade: 0.2,
+            fade: 0.3,
         })
-        .insert_resource(RotationState::default())
+        .insert_resource(RotationState::new(NUM_SPOKES))
         .add_systems(
             PreUpdate,
             (
@@ -132,14 +132,8 @@ impl RotationState {
             .is_some_and(|x| x.has_rotated())
     }
 
-    pub fn position(&self, spoke: usize) -> f32 {
-        self.spoke_positions[spoke].pos
-    }
-}
-
-impl Default for RotationState {
-    fn default() -> Self {
-        Self::new(NUM_SPOKES)
+    pub fn position(&self, spoke: usize) -> &SpokePos {
+        &self.spoke_positions[spoke]
     }
 }
 
