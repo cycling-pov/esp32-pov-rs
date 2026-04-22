@@ -212,7 +212,7 @@ fn setup(
     let led_len: f32 = geometry.wheel_radius - radius_hub - geometry.wheel_thickness;
 
     // The number of LED spokes to use in the simulation
-    const NUM_LED_SPOKES: usize = 144;
+    const NUM_LED_SPOKES: usize = 144 * 2;
 
     // Spawn the elements required for each virtual LED spoke
     for d in 0..NUM_LED_SPOKES {
