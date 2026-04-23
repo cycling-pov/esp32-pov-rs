@@ -1,6 +1,9 @@
 use bevy::prelude::*;
-use pov_algs::{LedGeometry, images::PolarBitmap};
-use pov_images::default::{DEFAULT_IMAGE, ImageOption, create_default_images};
+use pov_algs::LedGeometry;
+use pov_images::{
+    DefaultImageType,
+    default::{ImageOption, create_default_images},
+};
 
 #[derive(Event)]
 pub struct ImageChanged {
@@ -9,7 +12,6 @@ pub struct ImageChanged {
 
 #[derive(Resource)]
 pub struct ImageState {
-    polar_selections: Vec<PolarBitmap>,
     selections: Vec<ImageOption>,
     index: usize,
 }
@@ -17,22 +19,14 @@ pub struct ImageState {
 impl ImageState {
     pub fn new<T: LedGeometry>(geometry: &T) -> Self {
         Self {
-            polar_selections: vec![PolarBitmap::from_bitmap(
-                &DEFAULT_IMAGE,
-                geometry.led_unit_positions(),
-            )],
-            selections: create_default_images(),
+            selections: create_default_images(geometry.led_unit_positions()),
             index: 0,
         }
     }
 
-    pub fn current_polar(&self) -> &PolarBitmap {
-        &self.polar_selections[0]
+    pub fn current_image(&self) -> &DefaultImageType {
+        self.selections[self.index].image.current_image()
     }
-
-    //pub fn current_image(&self) -> &Bitmap<256> {
-    //    self.selections[self.index].image.current_image()
-    //}
 
     pub fn current_name(&self) -> &str {
         &self.selections[self.index].name

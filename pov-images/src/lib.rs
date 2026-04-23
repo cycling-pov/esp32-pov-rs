@@ -2,115 +2,133 @@ use std::{
     fs::File,
     io::{BufRead, BufReader, Cursor, Seek},
     path::Path,
+    sync::Arc,
 };
 
-use image::{AnimationDecoder, codecs::gif::GifDecoder, imageops::resize};
-use pov_algs::images::Bitmap;
+use image::{AnimationDecoder, Pixel, RgbaImage, codecs::gif::GifDecoder};
+use pov_algs::images::PolarBitmap;
 
-fn read_single_image<T: BufRead + Seek, const N: usize>(input: T) -> Bitmap<N> {
-    let mut img = Bitmap::<N>::default();
+/// Constructs the polar bitmap from a square bitmap with provided LED radii, in percentages from [0, 1],
+/// from the center of the bitmap
+pub fn polar_from_image<const N: usize, const R: usize>(
+    image: &RgbaImage,
+    radii: &[f32],
+) -> PolarBitmap<N, R> {
+    let mut polar = PolarBitmap::<N, R>::default();
+
+    fn get_nearest(image: &RgbaImage, x: f32, y: f32) -> pov_algs::images::Pixel {
+        let width = image.width();
+        let height = image.height();
+
+        let diff_x: f32 = (width / 2) as f32;
+        let diff_y: f32 = (height / 2) as f32;
+        let xi = ((diff_x * x + diff_x) as i32).clamp(0, width as i32 - 1) as u32;
+        let yi = ((diff_y * y + diff_y) as i32).clamp(0, height as i32 - 1) as u32;
+        let px = image.get_pixel(xi, yi).to_rgb();
+
+        pov_algs::images::Pixel {
+            red: px[0],
+            green: px[1],
+            blue: px[2],
+        }
+    }
+
+    for i in 0..R {
+        let (s, c) = PolarBitmap::<N, R>::index_to_radians(i).sin_cos();
+
+        for j in 0..N {
+            let r = radii[j];
+            polar.pixels[i][j] = get_nearest(image, r * c, r * s);
+        }
+    }
+
+    polar
+}
+
+fn read_single_image<T: BufRead + Seek, const N: usize, const R: usize>(
+    input: T,
+    radii: &[f32],
+) -> PolarBitmap<N, R> {
     let img_load = image::ImageReader::new(input)
         .with_guessed_format()
         .unwrap()
         .decode()
         .unwrap();
-    let img_sized = resize(
-        &img_load,
-        N as u32,
-        N as u32,
-        image::imageops::FilterType::Triangle,
-    );
 
-    for i in 0..N {
-        for j in 0..N {
-            let pxval = img_sized.get_pixel(i as u32, j as u32).0;
-            img.pixels[i][j] = pov_algs::images::Pixel {
-                red: pxval[0],
-                green: pxval[1],
-                blue: pxval[2],
-            };
-        }
-    }
-
-    img
+    polar_from_image(&img_load.into(), radii)
 }
 
-pub fn image_from_file<const N: usize>(file: &Path) -> Bitmap<N> {
-    read_single_image(BufReader::new(File::open(file).unwrap()))
+pub fn image_from_file<const N: usize, const R: usize>(
+    file: &Path,
+    radii: &[f32],
+) -> PolarBitmap<N, R> {
+    read_single_image(BufReader::new(File::open(file).unwrap()), radii)
 }
 
-pub fn image_from_data<const N: usize>(data: &[u8]) -> Bitmap<N> {
-    read_single_image(Cursor::new(data))
+pub fn image_from_data<const N: usize, const R: usize>(
+    data: &[u8],
+    radii: &[f32],
+) -> PolarBitmap<N, R> {
+    read_single_image(Cursor::new(data), radii)
 }
 
-fn read_gif<T: BufRead + Seek, const N: usize>(input: T) -> Vec<Bitmap<N>> {
+fn read_gif<T: BufRead + Seek, const N: usize, const R: usize>(
+    input: T,
+    radii: &[f32],
+) -> Vec<PolarBitmap<N, R>> {
     let img_load = GifDecoder::new(input)
         .unwrap()
         .into_frames()
         .collect_frames()
         .unwrap();
 
-    let mut output = Vec::new();
-
-    for f in img_load {
-        let buf = resize(
-            f.buffer(),
-            N as u32,
-            N as u32,
-            image::imageops::FilterType::Triangle,
-        );
-
-        let mut img = pov_algs::images::Bitmap::<N>::default();
-
-        for i in 0..N {
-            for j in 0..N {
-                let pxval = buf.get_pixel(i as u32, j as u32).0;
-                img.pixels[i][j] = pov_algs::images::Pixel {
-                    red: pxval[0],
-                    green: pxval[1],
-                    blue: pxval[2],
-                };
-            }
-        }
-
-        output.push(img);
-    }
-
-    output
+    img_load
+        .into_iter()
+        .map(|x| polar_from_image(x.buffer(), radii))
+        .collect()
 }
 
-pub fn frames_from_file<const N: usize>(file: &Path) -> Vec<pov_algs::images::Bitmap<N>> {
-    read_gif(BufReader::new(File::open(file).unwrap()))
+pub fn frames_from_file<const N: usize, const R: usize>(
+    file: &Path,
+    radii: &[f32],
+) -> Vec<PolarBitmap<N, R>> {
+    read_gif(BufReader::new(File::open(file).unwrap()), radii)
 }
 
-pub fn frames_from_data<const N: usize>(data: &[u8]) -> Vec<pov_algs::images::Bitmap<N>> {
-    read_gif(BufReader::new(Cursor::new(data)))
+pub fn frames_from_data<const N: usize, const R: usize>(
+    data: &[u8],
+    radii: &[f32],
+) -> Vec<PolarBitmap<N, R>> {
+    read_gif(BufReader::new(Cursor::new(data)), radii)
 }
+
+/// The default number of LEDS
+pub const DEFAULT_LEDS: usize = 40;
 
 /// Defines the default image type
-type ImageType = Bitmap<256>;
+pub type DefaultImageType = PolarBitmap<DEFAULT_LEDS, 360>;
 
 /// Generic image selection for processing in the event loop
 pub trait ImageSelection: Send + Sync {
-    fn current_image(&self) -> &ImageType;
+    fn current_image(&self) -> &DefaultImageType;
     fn step_dt(&mut self, dt: f32);
     fn step_rotation(&mut self);
 }
 
 /// Implements a static image
-pub struct Image<'a> {
-    image: &'a ImageType,
+pub struct Image {
+    image: DefaultImageType,
 }
 
-impl<'a> Image<'a> {
-    pub fn new(image: &'a ImageType) -> Self {
+impl Image {
+    pub fn new(image: DefaultImageType) -> Self {
         Self { image }
     }
 }
 
-impl<'a> ImageSelection for Image<'a> {
-    fn current_image(&self) -> &ImageType {
-        self.image
+impl<'a> ImageSelection for Image {
+    fn current_image(&self) -> &DefaultImageType {
+        &self.image
     }
 
     fn step_dt(&mut self, _dt: f32) {}
@@ -119,19 +137,19 @@ impl<'a> ImageSelection for Image<'a> {
 }
 
 /// Implements a video that increments once per wheel rotation
-pub struct VideoRotation<'a> {
-    images: &'a [ImageType],
+pub struct VideoRotation {
+    images: Vec<Arc<DefaultImageType>>,
     index: usize,
 }
 
-impl<'a> VideoRotation<'a> {
-    pub fn new(images: &'a [ImageType]) -> Self {
+impl VideoRotation {
+    pub fn new(images: Vec<Arc<DefaultImageType>>) -> Self {
         Self { images, index: 0 }
     }
 }
 
-impl<'a> ImageSelection for VideoRotation<'a> {
-    fn current_image(&self) -> &ImageType {
+impl ImageSelection for VideoRotation {
+    fn current_image(&self) -> &DefaultImageType {
         &self.images[self.index]
     }
 
@@ -143,15 +161,15 @@ impl<'a> ImageSelection for VideoRotation<'a> {
 }
 
 /// Implements a video that increments frames based on timing
-pub struct VideoTime<'a> {
-    images: &'a [ImageType],
+pub struct VideoTime {
+    images: Vec<Arc<DefaultImageType>>,
     index: usize,
     frame_time: f32,
     current_time: f32,
 }
 
-impl<'a> VideoTime<'a> {
-    pub fn new(images: &'a [ImageType], frame_time: f32) -> Self {
+impl<'a> VideoTime {
+    pub fn new(images: Vec<Arc<DefaultImageType>>, frame_time: f32) -> Self {
         Self {
             images,
             index: 0,
@@ -161,8 +179,8 @@ impl<'a> VideoTime<'a> {
     }
 }
 
-impl<'a> ImageSelection for VideoTime<'a> {
-    fn current_image(&self) -> &ImageType {
+impl ImageSelection for VideoTime {
+    fn current_image(&self) -> &DefaultImageType {
         &self.images[self.index]
     }
 
@@ -180,33 +198,36 @@ impl<'a> ImageSelection for VideoTime<'a> {
 #[cfg(feature = "default-images")]
 pub mod default {
     use crate::{Image, ImageSelection, VideoRotation, VideoTime};
-    use std::sync::LazyLock;
+    use std::sync::Arc;
 
-    use super::{Bitmap, frames_from_data, image_from_data};
+    use super::{frames_from_data, image_from_data};
 
-    pub static DEFAULT_IMAGE: LazyLock<super::Bitmap<256>> =
-        LazyLock::new(|| image_from_data::<256>(include_bytes!("../earth.jpg")));
-    pub static DEFAULT_MOVIE: LazyLock<Vec<Bitmap<256>>> =
-        LazyLock::new(|| frames_from_data::<256>(include_bytes!("../cat-space.gif")));
+    static DEFAULT_IMAGE_DATA: &[u8] = include_bytes!("../earth.jpg");
+    static DEFAULT_MOVIE_DATA: &[u8] = include_bytes!("../cat-space.gif");
 
     pub struct ImageOption {
         pub name: String,
         pub image: Box<dyn ImageSelection>,
     }
 
-    pub fn create_default_images() -> Vec<ImageOption> {
+    pub fn create_default_images(radii: &[f32]) -> Vec<ImageOption> {
+        let frames = frames_from_data(DEFAULT_MOVIE_DATA, radii)
+            .into_iter()
+            .map(|x| Arc::new(x))
+            .collect::<Vec<_>>();
+
         vec![
             ImageOption {
                 name: "earth".into(),
-                image: Box::new(Image::new(&DEFAULT_IMAGE)),
+                image: Box::new(Image::new(image_from_data(DEFAULT_IMAGE_DATA, radii))),
             },
             ImageOption {
                 name: "cat (rot)".into(),
-                image: Box::new(VideoRotation::new(DEFAULT_MOVIE.as_slice())),
+                image: Box::new(VideoRotation::new(frames.clone())),
             },
             ImageOption {
                 name: "cat (dt)".into(),
-                image: Box::new(VideoTime::new(DEFAULT_MOVIE.as_slice(), 0.05)),
+                image: Box::new(VideoTime::new(frames, 0.05)),
             },
         ]
     }

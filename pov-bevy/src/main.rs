@@ -15,6 +15,7 @@ use bevy::{
     window::WindowTheme,
 };
 use pov_algs::{CIRCLE_RADIANS, DEGREES_TO_RADIANS, LedGeometry, angular_error};
+use pov_images::DEFAULT_LEDS;
 
 use crate::{
     estimator::PositionEstimator,
@@ -24,7 +25,7 @@ use crate::{
 };
 
 fn main() {
-    let geometry = SimGeometry::new(NUM_SPOKES, 40);
+    let geometry = SimGeometry::new(NUM_SPOKES, DEFAULT_LEDS);
 
     let mut app = App::new();
     app.add_plugins((
@@ -346,7 +347,7 @@ fn update_pattern(
     images: Res<ImageState>,
 ) {
     //let img = images.current_image();
-    let img = images.current_polar();
+    let img = images.current_image();
 
     for (mut led, mut sprite) in &mut query {
         if let Some(spoke) = state.contains(led.angle) {
