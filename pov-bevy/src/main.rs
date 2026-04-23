@@ -3,8 +3,6 @@ mod images;
 mod state;
 mod theme;
 
-use std::{f32, ops::Rem};
-
 use bevy::{
     asset::RenderAssetUsages,
     dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin, FrameTimeGraphConfig},
@@ -368,7 +366,8 @@ fn update_pattern(
             let est_dist = (est_pos.pos - est_pos.prev).abs();
 
             // Determine the calculated position based on linear interpolation of the state estimate
-            let calc_pos = (est_pos.prev + est_dist * percentage_through_arc).rem(CIRCLE_RADIANS);
+            let calc_pos =
+                (est_pos.prev + est_dist * percentage_through_arc).rem_euclid(CIRCLE_RADIANS);
 
             // Compute the resulting pixel value from the calculated position
             let px = img.get_pixel(calc_pos, led.id);

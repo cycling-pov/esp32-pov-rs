@@ -1,5 +1,3 @@
-use std::ops::Rem;
-
 use bevy::{
     app::{Plugin, PreUpdate},
     ecs::resource::Resource,
@@ -108,7 +106,7 @@ impl RotationState {
 
         let init_angle = if let Some(pos) = self.spoke_positions.first_mut() {
             pos.prev = pos.pos;
-            pos.pos = (pos.pos + dt * settings.rate).rem(CIRCLE_RADIANS);
+            pos.pos = (pos.pos + dt * settings.rate).rem_euclid(CIRCLE_RADIANS);
             pos.pos
         } else {
             panic!("unable to get spoke values");
@@ -116,7 +114,7 @@ impl RotationState {
 
         for pos in &mut self.spoke_positions[1..] {
             pos.prev = pos.pos;
-            pos.pos = (init_angle + angle_offset).rem(CIRCLE_RADIANS);
+            pos.pos = (init_angle + angle_offset).rem_euclid(CIRCLE_RADIANS);
         }
     }
 

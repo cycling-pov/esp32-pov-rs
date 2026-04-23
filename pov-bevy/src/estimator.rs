@@ -1,7 +1,6 @@
 use crate::state::{NUM_SPOKES, SpokePos};
 use bevy::prelude::*;
 use pov_algs::CIRCLE_RADIANS;
-use std::ops::Rem;
 
 #[derive(Debug, Resource)]
 pub struct PositionEstimator {
@@ -17,15 +16,11 @@ impl PositionEstimator {
         self.update_spokes();
     }
 
-    //pub fn contains(&self, x: f32) -> bool {
-    //    self.spokes.iter().any(|s| s.contains(x))
-    //}
-
     fn update_spokes(&mut self) {
         let base_pos = self.pos.get_current_pos();
         for (i, s) in self.spokes.iter_mut().enumerate() {
             s.prev = s.pos;
-            s.pos = (base_pos + (i as f32) * Self::OFFSET).rem(CIRCLE_RADIANS);
+            s.pos = (base_pos + (i as f32) * Self::OFFSET).rem_euclid(CIRCLE_RADIANS);
         }
     }
 
@@ -50,7 +45,8 @@ impl Default for PositionEstimator {
         };
 
         for (i, s) in val.spokes.iter_mut().enumerate() {
-            s.pos = (val.pos.get_current_pos() + (i as f32) * Self::OFFSET).rem(CIRCLE_RADIANS);
+            s.pos =
+                (val.pos.get_current_pos() + (i as f32) * Self::OFFSET).rem_euclid(CIRCLE_RADIANS);
             s.prev = s.pos;
         }
 
