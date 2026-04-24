@@ -12,6 +12,7 @@ pov-images = { path = "../pov-images", version = "*" }
 [features]
 default = ["fps"]
 fps = ["bevy/bevy_dev_tools"]
+log_estimator = []
 
 [package.metadata.bundle]
 name = "pov-sim"

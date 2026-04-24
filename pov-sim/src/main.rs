@@ -13,7 +13,7 @@ use bevy::{
     text::TextColor,
     window::WindowTheme,
 };
-use pov_algs::{CIRCLE_RADIANS, DEGREES_TO_RADIANS, LedGeometry, angular_error};
+use pov_algs::{Angle, LedGeometry};
 use pov_images::DEFAULT_LEDS;
 
 use crate::{
@@ -26,22 +26,41 @@ use crate::{
 fn main() {
     let geometry = SimGeometry::new(NUM_SPOKES, DEFAULT_LEDS);
 
-    let mut app = App::new();
-    app.add_plugins((
-        DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "POV SIM".into(),
-                name: Some("povsim.app".into()),
-                resolution: (1024, 768).into(),
-                fit_canvas_to_parent: true,
-                prevent_default_event_handling: false,
-                window_theme: Some(WindowTheme::Dark),
-                ..Default::default()
-            }),
+    let default_window = DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window {
+            title: "POV SIM".into(),
+            name: Some("povsim.app".into()),
+            resolution: (1024, 768).into(),
+            fit_canvas_to_parent: true,
+            prevent_default_event_handling: false,
+            window_theme: Some(WindowTheme::Dark),
             ..Default::default()
         }),
-        #[cfg(feature = "fps")]
-        FpsOverlayPlugin {
+        ..Default::default()
+    });
+
+    let mut app = App::new();
+    app.add_plugins(default_window)
+        .insert_resource(ImageState::new(&geometry))
+        .insert_resource(PositionEstimator::default())
+        .insert_resource(ClearColor(Color::srgb_u8(255, 255, 255)))
+        .insert_resource(geometry)
+        .add_systems(Startup, setup)
+        .add_systems(Update, update_estimator_text)
+        .add_plugins(RotationPlugin)
+        .add_plugins(ThemePlugin)
+        .add_observer(set_theme);
+
+    app.add_systems(Update, (update_estimator, update_pattern));
+
+    app.add_systems(
+        PreUpdate,
+        set_next_image.run_if(input_just_pressed(KeyCode::KeyA)),
+    );
+
+    #[cfg(feature = "fps")]
+    {
+        app.add_plugins(FpsOverlayPlugin {
             config: FpsOverlayConfig {
                 text_config: TextFont {
                     font_size: 11.0,
@@ -56,39 +75,21 @@ fn main() {
                 },
                 ..Default::default()
             },
-        },
-    ))
-    .insert_resource(ImageState::new(&geometry))
-    .insert_resource(PositionEstimator::default())
-    .insert_resource(ClearColor(Color::srgb_u8(255, 255, 255)))
-    .insert_resource(geometry)
-    .add_systems(Startup, setup)
-    .add_systems(Update, update_estimator_text)
-    .add_plugins(RotationPlugin)
-    .add_plugins(ThemePlugin)
-    .add_observer(set_theme);
+        });
+        app.add_systems(
+            PreUpdate,
+            (
+                toggle_fps_viewer.run_if(input_just_pressed(KeyCode::KeyF)),
+                toggle_fps_graph.run_if(input_just_pressed(KeyCode::KeyG)),
+            ),
+        );
+    }
 
-    app.add_systems(
-        PreUpdate,
-        set_next_image.run_if(input_just_pressed(KeyCode::KeyA)),
-    );
-
-    #[cfg(feature = "fps")]
-    app.add_systems(
-        PreUpdate,
-        toggle_fps_viewer.run_if(input_just_pressed(KeyCode::KeyF)),
-    );
-
-    #[cfg(feature = "fps")]
-    app.add_systems(
-        PreUpdate,
-        toggle_fps_graph.run_if(input_just_pressed(KeyCode::KeyG)),
-    );
+    #[cfg(feature = "log_estimator")]
+    app.add_systems(PostUpdate, log_estimator_data);
 
     app.add_observer(update_text);
     app.add_observer(update_text_image);
-
-    app.add_systems(Update, (update_estimator, update_pattern));
 
     app.run();
 }
@@ -96,7 +97,7 @@ fn main() {
 #[derive(Component)]
 struct Led {
     id: usize,
-    angle: f32,
+    angle: Angle,
     fade: f32,
 }
 
@@ -229,8 +230,8 @@ fn setup(
 
     // Spawn the elements required for each virtual LED spoke
     for d in 0..NUM_LED_SPOKES {
-        let angle = (d as f32 * 360.0 / NUM_LED_SPOKES as f32) * DEGREES_TO_RADIANS;
-        let (s, c) = angle.sin_cos();
+        let angle = Angle::from_radians(d as f32 * Angle::CIRCLE.radians() / NUM_LED_SPOKES as f32);
+        let (s, c) = angle.radians().sin_cos();
 
         for (i, r) in geometry.radii.iter().enumerate() {
             let radius_val = (led_len + radius_hub) * r;
@@ -300,6 +301,30 @@ fn toggle_fps_viewer(mut config: ResMut<FpsOverlayConfig>) {
     config.enabled = !config.enabled;
 }
 
+#[cfg(feature = "log_estimator")]
+fn log_estimator_data(
+    state: Res<RotationState>,
+    estimator: Res<PositionEstimator>,
+    time: Res<Time>,
+) {
+    use std::{fs::File, io::Write, path::Path};
+
+    let mut f = File::options()
+        .append(true)
+        .create(true)
+        .open(Path::new("log.csv"))
+        .unwrap();
+
+    write!(
+        f,
+        "{},{},{}\n",
+        time.elapsed_secs_f64(),
+        state.position(0).pos.get_radians(),
+        estimator.get_spoke(0).pos.get_radians()
+    )
+    .unwrap();
+}
+
 #[cfg(feature = "fps")]
 fn toggle_fps_graph(mut config: ResMut<FpsOverlayConfig>) {
     config.frame_time_graph_config.enabled = !config.frame_time_graph_config.enabled;
@@ -308,7 +333,11 @@ fn toggle_fps_graph(mut config: ResMut<FpsOverlayConfig>) {
 fn update_text(event: On<RotationSettings>, mut query: Query<&mut Text, With<TextStatUpdate>>) {
     let e = event.event();
     for mut t in &mut query {
-        t.0 = format!("Rotation Rate: {:0.2}\nFade Time: {:0.2}", e.rate, e.fade);
+        t.0 = format!(
+            "Rotation Rate: {:0.2}\nFade Time: {:0.2}",
+            e.rate.radians_secs(),
+            e.fade
+        );
     }
 }
 
@@ -336,9 +365,9 @@ fn update_estimator(
     mut estimator: ResMut<PositionEstimator>,
 ) {
     let spoke_tick = (0..state.num_spokes()).find(|i| state.has_rotated_spoke(*i));
-    estimator.step(time.delta_secs(), spoke_tick);
+    estimator.step(time.delta(), spoke_tick);
 
-    images.step_dt(time.delta_secs());
+    images.step_dt(time.delta());
     if estimator.has_rotated() {
         images.step_rotation();
     }
@@ -352,9 +381,9 @@ fn update_estimator_text(
     for mut t in &mut query {
         t.0 = format!(
             "Est: {:0.1} ({:0.1}), {:0.2} rad/s",
-            estimator.pos.get_current_pos(),
-            estimator.pos.get_current_pos() - state.position(0).pos,
-            estimator.pos.get_current_rate()
+            estimator.pos.get_current_pos().radians(),
+            (estimator.pos.get_current_pos() - state.position(0).pos).radians(),
+            estimator.pos.get_current_rate().radians_secs()
         );
     }
 }
@@ -378,20 +407,20 @@ fn update_pattern(
             let pos = state.position(spoke);
 
             // Assume linear interpolation between states from the absolute position
-            let angular_distance = angular_error(pos.pos - pos.prev).abs();
+            let angular_distance = Angle::error(pos.pos, pos.prev).radians().abs();
             let percentage_through_arc = if angular_distance > 1e-3 {
-                angular_error(led.angle - pos.prev) / angular_distance
+                Angle::error(led.angle, pos.prev).radians() / angular_distance
             } else {
                 1.0
             };
 
             // Determine the corresponding estimated spoke position value
             let est_pos = estimator.get_spoke(spoke);
-            let est_dist = (est_pos.pos - est_pos.prev).abs();
+            let est_dist = (est_pos.pos.radians() - est_pos.prev.radians()).abs();
 
             // Determine the calculated position based on linear interpolation of the state estimate
-            let calc_pos =
-                (est_pos.prev + est_dist * percentage_through_arc).rem_euclid(CIRCLE_RADIANS);
+            let calc_pos = (est_pos.prev + Angle::from_radians(est_dist * percentage_through_arc))
+                .constrain_circle();
 
             // Compute the resulting pixel value from the calculated position
             let px = img.get_pixel(calc_pos, led.id);

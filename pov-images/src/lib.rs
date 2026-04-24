@@ -3,6 +3,7 @@ use std::{
     io::{BufRead, BufReader, Cursor, Seek},
     path::Path,
     sync::Arc,
+    time::Duration,
 };
 
 use image::{AnimationDecoder, Pixel, RgbaImage, codecs::gif::GifDecoder};
@@ -111,7 +112,7 @@ pub type DefaultImageType = PolarBitmap<DEFAULT_LEDS, 360>;
 /// Generic image selection for processing in the event loop
 pub trait ImageSelection: Send + Sync {
     fn current_image(&self) -> &DefaultImageType;
-    fn step_dt(&mut self, dt: f32);
+    fn step_dt(&mut self, dt: Duration);
     fn step_rotation(&mut self);
 }
 
@@ -131,7 +132,7 @@ impl<'a> ImageSelection for Image {
         &self.image
     }
 
-    fn step_dt(&mut self, _dt: f32) {}
+    fn step_dt(&mut self, _dt: Duration) {}
 
     fn step_rotation(&mut self) {}
 }
@@ -153,7 +154,7 @@ impl ImageSelection for VideoRotation {
         &self.images[self.index]
     }
 
-    fn step_dt(&mut self, _dt: f32) {}
+    fn step_dt(&mut self, _dt: Duration) {}
 
     fn step_rotation(&mut self) {
         self.index = (self.index + 1) % self.images.len();
@@ -164,17 +165,17 @@ impl ImageSelection for VideoRotation {
 pub struct VideoTime {
     images: Vec<Arc<DefaultImageType>>,
     index: usize,
-    frame_time: f32,
-    current_time: f32,
+    frame_time: Duration,
+    current_time: Duration,
 }
 
 impl<'a> VideoTime {
-    pub fn new(images: Vec<Arc<DefaultImageType>>, frame_time: f32) -> Self {
+    pub fn new(images: Vec<Arc<DefaultImageType>>, frame_time: Duration) -> Self {
         Self {
             images,
             index: 0,
             frame_time,
-            current_time: 0.0,
+            current_time: Duration::ZERO,
         }
     }
 }
@@ -184,7 +185,7 @@ impl ImageSelection for VideoTime {
         &self.images[self.index]
     }
 
-    fn step_dt(&mut self, dt: f32) {
+    fn step_dt(&mut self, dt: Duration) {
         self.current_time += dt;
         while self.current_time >= self.frame_time {
             self.current_time -= self.frame_time;
@@ -198,7 +199,7 @@ impl ImageSelection for VideoTime {
 #[cfg(feature = "default-images")]
 pub mod default {
     use crate::{Image, ImageSelection, VideoRotation, VideoTime};
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
     use super::{frames_from_data, image_from_data};
 
@@ -227,7 +228,7 @@ pub mod default {
             },
             ImageOption {
                 name: "cat (dt)".into(),
-                image: Box::new(VideoTime::new(frames, 0.05)),
+                image: Box::new(VideoTime::new(frames, Duration::from_secs_f32(0.05))),
             },
         ]
     }

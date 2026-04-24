@@ -1,10 +1,12 @@
+use std::time::Duration;
+
 use bevy::{
     app::{Plugin, PreUpdate},
     ecs::resource::Resource,
     input::{common_conditions::input_pressed, keyboard::KeyCode},
     prelude::*,
 };
-use pov_algs::{CIRCLE_RADIANS, DEGREES_TO_RADIANS, angular_error};
+use pov_algs::{Angle, AngularVelocity};
 
 pub const NUM_SPOKES: usize = 2;
 
@@ -12,14 +14,14 @@ pub struct RotationPlugin;
 
 #[derive(Resource, Event, Default, Debug, Clone, Copy)]
 pub struct RotationSettings {
-    pub rate: f32,
+    pub rate: AngularVelocity,
     pub fade: f32,
 }
 
 impl Plugin for RotationPlugin {
     fn build(&self, app: &mut bevy::app::App) {
         app.insert_resource(RotationSettings {
-            rate: 12.0,
+            rate: AngularVelocity::from_radians_secs(12.0),
             fade: 0.3,
         })
         .insert_resource(RotationState::new(NUM_SPOKES))
@@ -45,16 +47,16 @@ pub struct RotationState {
 
 #[derive(Default, Debug, Clone, Copy)]
 pub struct SpokePos {
-    pub pos: f32,
-    pub prev: f32,
+    pub pos: Angle,
+    pub prev: Angle,
 }
 
 impl SpokePos {
     pub const fn has_rotated(&self) -> bool {
-        self.prev > self.pos
+        self.prev.radians() > self.pos.radians()
     }
 
-    pub fn contains(&self, x: f32) -> bool {
+    pub fn contains(&self, x: Angle) -> bool {
         let r1 = if self.pos > self.prev {
             x >= self.prev && x <= self.pos
         } else if self.pos != self.prev {
@@ -63,7 +65,7 @@ impl SpokePos {
             false
         };
 
-        let r2 = angular_error(x - self.pos).abs() < 1.0 * DEGREES_TO_RADIANS;
+        let r2 = Angle::error(x, self.pos).abs() < Angle::from_degrees(1.0);
 
         r1 || r2
     }
@@ -79,7 +81,7 @@ impl RotationState {
         s
     }
 
-    pub fn contains(&self, angle: f32) -> Option<usize> {
+    pub fn contains(&self, angle: Angle) -> Option<usize> {
         self.spoke_positions
             .iter()
             .enumerate()
@@ -95,18 +97,18 @@ impl RotationState {
     pub fn reset(&mut self) {
         let offset = self.offset_angle();
         for (i, pos) in self.spoke_positions.iter_mut().enumerate() {
-            let current = offset * (i as f32);
+            let current = Angle::from_radians(offset.radians() * (i as f32));
             pos.pos = current;
             pos.prev = current;
         }
     }
 
-    pub fn step(&mut self, settings: &RotationSettings, dt: f32) {
+    pub fn step(&mut self, settings: &RotationSettings, dt: Duration) {
         let angle_offset = self.offset_angle();
 
         let init_angle = if let Some(pos) = self.spoke_positions.first_mut() {
             pos.prev = pos.pos;
-            pos.pos = (pos.pos + dt * settings.rate).rem_euclid(CIRCLE_RADIANS);
+            pos.pos = (pos.pos + settings.rate * dt).constrain_circle();
             pos.pos
         } else {
             panic!("unable to get spoke values");
@@ -114,14 +116,14 @@ impl RotationState {
 
         for pos in &mut self.spoke_positions[1..] {
             pos.prev = pos.pos;
-            pos.pos = (init_angle + angle_offset).rem_euclid(CIRCLE_RADIANS);
+            pos.pos = (init_angle + angle_offset).constrain_circle();
         }
     }
 
-    fn offset_angle(&self) -> f32 {
+    fn offset_angle(&self) -> Angle {
         let num_spokes = self.spoke_positions.len();
         assert!(num_spokes > 0);
-        CIRCLE_RADIANS / num_spokes as f32
+        Angle::from_radians(Angle::CIRCLE.radians() / num_spokes as f32)
     }
 
     pub fn has_rotated_spoke(&self, spoke: usize) -> bool {
@@ -140,7 +142,7 @@ fn update_rotation_state(
     mut state: ResMut<RotationState>,
     settings: Res<RotationSettings>,
 ) {
-    state.step(&settings, time.delta_secs());
+    state.step(&settings, time.delta());
 }
 
 fn rotation_change_input(
@@ -165,7 +167,9 @@ fn rotation_change_input(
         0.0
     };
 
-    settings.rate = (settings.rate + 4.0 * speed_dir * time.delta_secs()).clamp(0.0, 20.0);
+    settings.rate = AngularVelocity::from_radians_secs(
+        (settings.rate.radians_secs() + 4.0 * speed_dir * time.delta_secs()).clamp(0.0, 20.0),
+    );
     settings.fade = (settings.fade + 0.5 * fade_dir * time.delta_secs()).clamp(0.1, 2.0);
 
     commands.trigger(*settings);

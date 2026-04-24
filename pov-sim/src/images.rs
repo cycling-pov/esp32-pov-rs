@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use bevy::prelude::*;
 use pov_algs::LedGeometry;
 use pov_images::{
@@ -37,7 +39,7 @@ impl ImageState {
         self.index = (self.index + 1) % len;
     }
 
-    pub fn step_dt(&mut self, dt: f32) {
+    pub fn step_dt(&mut self, dt: Duration) {
         let idx = self.index;
         self.selections[idx].image.step_dt(dt);
     }

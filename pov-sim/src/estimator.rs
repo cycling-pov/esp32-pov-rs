@@ -1,6 +1,8 @@
+use std::time::Duration;
+
 use crate::state::{NUM_SPOKES, SpokePos};
 use bevy::prelude::*;
-use pov_algs::CIRCLE_RADIANS;
+use pov_algs::Angle;
 
 #[derive(Debug, Resource)]
 pub struct PositionEstimator {
@@ -9,9 +11,9 @@ pub struct PositionEstimator {
 }
 
 impl PositionEstimator {
-    const OFFSET: f32 = CIRCLE_RADIANS / NUM_SPOKES as f32;
+    const OFFSET: Angle = Angle::from_radians(Angle::CIRCLE.radians() / NUM_SPOKES as f32);
 
-    pub fn step(&mut self, dt: f32, tick: Option<usize>) {
+    pub fn step(&mut self, dt: Duration, tick: Option<usize>) {
         self.pos.step(dt, tick);
         self.update_spokes();
     }
@@ -20,7 +22,8 @@ impl PositionEstimator {
         let base_pos = self.pos.get_current_pos();
         for (i, s) in self.spokes.iter_mut().enumerate() {
             s.prev = s.pos;
-            s.pos = (base_pos + (i as f32) * Self::OFFSET).rem_euclid(CIRCLE_RADIANS);
+            s.pos = (base_pos + Angle::from_radians((i as f32) * Self::OFFSET.radians()))
+                .constrain_circle();
         }
     }
 
@@ -45,8 +48,8 @@ impl Default for PositionEstimator {
         };
 
         for (i, s) in val.spokes.iter_mut().enumerate() {
-            s.pos =
-                (val.pos.get_current_pos() + (i as f32) * Self::OFFSET).rem_euclid(CIRCLE_RADIANS);
+            let angle_offset = Angle::from_radians(i as f32 * Self::OFFSET.radians());
+            s.pos = (val.pos.get_current_pos() + angle_offset).constrain_circle();
             s.prev = s.pos;
         }
 
