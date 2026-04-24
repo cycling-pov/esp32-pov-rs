@@ -24,9 +24,6 @@ jobs:
 
       - name: Checkout the repository
         uses: actions/checkout@v5
-        with:
-          submodules: true
-          ssh-key: ${{ secrets.DEPLOY_KEY }}
 
       - name: Build the executable
         run: cargo build --release --target x86_64-unknown-linux-gnu
@@ -50,9 +47,6 @@ jobs:
 
       - name: Checkout the repository
         uses: actions/checkout@v5
-        with:
-          submodules: true
-          ssh-key: ${{ secrets.DEPLOY_KEY }}
 
       - name: Build the executable
         run: cargo build --release --target x86_64-apple-darwin --target aarch64-apple-darwin
@@ -85,9 +79,6 @@ jobs:
 
       - name: Checkout the repository
         uses: actions/checkout@v5
-        with:
-          submodules: true
-          ssh-key: ${{ secrets.DEPLOY_KEY }}
 
       - name: Build the executable
         run: cargo build --release --target x86_64-pc-windows-msvc
