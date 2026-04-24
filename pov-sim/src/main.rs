@@ -3,9 +3,10 @@ mod images;
 mod state;
 mod theme;
 
+#[cfg(feature = "fps")]
+use bevy::dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin, FrameTimeGraphConfig};
 use bevy::{
     asset::RenderAssetUsages,
-    dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin, FrameTimeGraphConfig},
     input::common_conditions::input_just_pressed,
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
@@ -39,6 +40,7 @@ fn main() {
             }),
             ..Default::default()
         }),
+        #[cfg(feature = "fps")]
         FpsOverlayPlugin {
             config: FpsOverlayConfig {
                 text_config: TextFont {
@@ -46,9 +48,9 @@ fn main() {
                     ..Default::default()
                 },
                 refresh_interval: core::time::Duration::from_millis(100),
-                enabled: true,
+                enabled: false,
                 frame_time_graph_config: FrameTimeGraphConfig {
-                    enabled: true,
+                    enabled: false,
                     min_fps: 30.0,
                     target_fps: 60.0,
                 },
@@ -69,6 +71,18 @@ fn main() {
     app.add_systems(
         PreUpdate,
         set_next_image.run_if(input_just_pressed(KeyCode::KeyA)),
+    );
+
+    #[cfg(feature = "fps")]
+    app.add_systems(
+        PreUpdate,
+        toggle_fps_viewer.run_if(input_just_pressed(KeyCode::KeyF)),
+    );
+
+    #[cfg(feature = "fps")]
+    app.add_systems(
+        PreUpdate,
+        toggle_fps_graph.run_if(input_just_pressed(KeyCode::KeyG)),
     );
 
     app.add_observer(update_text);
@@ -279,6 +293,16 @@ fn setup(
     commands.trigger(ImageChanged {
         name: image_state.current_name().into(),
     });
+}
+
+#[cfg(feature = "fps")]
+fn toggle_fps_viewer(mut config: ResMut<FpsOverlayConfig>) {
+    config.enabled = !config.enabled;
+}
+
+#[cfg(feature = "fps")]
+fn toggle_fps_graph(mut config: ResMut<FpsOverlayConfig>) {
+    config.frame_time_graph_config.enabled = !config.frame_time_graph_config.enabled;
 }
 
 fn update_text(event: On<RotationSettings>, mut query: Query<&mut Text, With<TextStatUpdate>>) {

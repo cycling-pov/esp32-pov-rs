@@ -1,0 +1,120 @@
+name: Deploy
+
+on:
+  push:
+    tags:
+      - "release/v*"
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libx11-dev libasound2-dev libudev-dev libxkbcommon-x11-0 libwayland-dev libxkbcommon-dev
+
+      - name: Checkout the repository
+        uses: actions/checkout@v5
+        with:
+          submodules: true
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
+
+      - name: Build the executable
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Package binary
+        run: tar -czvf pov-sim-linux-x86_64.tar.gz -C target/x86_64-unknown-linux-gnu/release pov-sim
+
+      - name: Upload release binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: pov-sim-linux-x86_64.tar.gz
+          path: pov-sim-linux-x86_64.tar.gz
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - name: Checkout the repository
+        uses: actions/checkout@v5
+        with:
+          submodules: true
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
+
+      - name: Build the executable
+        run: cargo build --release --target x86_64-apple-darwin --target aarch64-apple-darwin
+
+      - name: Create a fat executable
+        run: lipo -create -output target/pov-sim target/x86_64-apple-darwin/release/pov-sim target/aarch64-apple-darwin/release/pov-sim
+
+      - name: Create a bundle
+        run: |
+          cargo install cargo-bundle --locked
+          cargo bundle --release --target aarch64-apple-darwin --package pov-sim
+          cp target/pov-sim target/aarch64-apple-darwin/release/bundle/osx/pov-sim.app/Contents/MacOS/pov-sim
+
+      - name: Package binary
+        run: tar -czvf pov-sim-macos.tar.gz -C target/aarch64-apple-darwin/release/bundle/osx pov-sim.app
+
+      - name: Upload release binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: pov-sim-macos.tar.gz
+          path: pov-sim-macos.tar.gz
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Checkout the repository
+        uses: actions/checkout@v5
+        with:
+          submodules: true
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
+
+      - name: Build the executable
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Package binary
+        shell: pwsh
+        run: Compress-Archive -Path target/x86_64-pc-windows-msvc/release/pov-sim.exe -DestinationPath pov-sim-windows.zip -Force
+
+      - name: Upload release binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: pov-sim-windows.zip
+          path: pov-sim-windows.zip
+
+  release:
+    name: Publish release
+    needs: [macos, linux, windows]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: release-artifacts/*

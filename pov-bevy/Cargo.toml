@@ -1,9 +1,0 @@
-[package]
-name = "pov-bevy"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-bevy = { version = "0.18", features = ["bevy_dev_tools", "dynamic_linking"] }
-pov-algs = { path = "../pov-algs", version = "*" }
-pov-images = { path = "../pov-images", version = "*" }
