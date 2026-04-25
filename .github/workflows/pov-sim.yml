@@ -73,18 +73,10 @@ jobs:
         working-directory: tools/pov-sim
         run: lipo -create -output dist/pov-sim target/x86_64-apple-darwin/release/pov-sim target/aarch64-apple-darwin/release/pov-sim
 
-      - name: Create a bundle
-        working-directory: tools/pov-sim
-        run: |
-          cargo install cargo-bundle --locked
-          cargo bundle --release --target aarch64-apple-darwin --package pov-sim
-          cp dist/pov-sim target/aarch64-apple-darwin/release/bundle/osx/pov-sim.app/Contents/MacOS
-
       - name: Package binary
         working-directory: tools/pov-sim
         run: |
-          tar -czvf pov-sim-macos.tar.gz -C target/aarch64-apple-darwin/release/bundle/osx pov-sim.app
-          tar -czvf pov-sim-macos.tar.gz -C dist images images.json
+          tar -czvf pov-sim-macos.tar.gz -C dist pov-sim images images.json
 
       - name: Upload release binaries
         uses: actions/upload-artifact@v7
