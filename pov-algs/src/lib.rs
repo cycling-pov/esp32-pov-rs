@@ -45,10 +45,13 @@ impl Angle {
 
     /// Provides the angular error between [-pi, pi)
     pub fn error(a: Angle, b: Angle) -> Angle {
-        Self(
-            ((a.0 - b.0) + core::f32::consts::PI).rem(Self::CIRCLE.radians())
-                - core::f32::consts::PI,
-        )
+        let mut vals =
+            ((a.radians() - b.radians()) + core::f32::consts::PI).rem(Self::CIRCLE.radians());
+        if vals < 0.0 {
+            vals += Self::CIRCLE.radians();
+        }
+
+        Self(vals - core::f32::consts::PI)
     }
 
     /// Constraints to within a circle

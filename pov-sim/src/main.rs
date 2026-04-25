@@ -67,7 +67,7 @@ fn main() {
                     ..Default::default()
                 },
                 refresh_interval: core::time::Duration::from_millis(100),
-                enabled: false,
+                enabled: true,
                 frame_time_graph_config: FrameTimeGraphConfig {
                     enabled: false,
                     min_fps: 30.0,
@@ -400,6 +400,8 @@ fn update_pattern(
     //let img = images.current_image();
     let img = images.current_image();
 
+    let mut max_val = 0.0f32;
+
     for (mut led, mut sprite) in &mut query {
         if let Some(spoke) = state.contains(led.angle) {
             led.fade = 1.0;
@@ -416,11 +418,13 @@ fn update_pattern(
 
             // Determine the corresponding estimated spoke position value
             let est_pos = estimator.get_spoke(spoke);
-            let est_dist = (est_pos.pos.radians() - est_pos.prev.radians()).abs();
+            let est_dist = Angle::error(est_pos.pos, est_pos.prev).abs();
+            max_val = max_val.max(est_dist.radians());
 
             // Determine the calculated position based on linear interpolation of the state estimate
-            let calc_pos = (est_pos.prev + Angle::from_radians(est_dist * percentage_through_arc))
-                .constrain_circle();
+            let calc_pos = (est_pos.prev
+                + Angle::from_radians(est_dist.radians() * percentage_through_arc))
+            .constrain_circle();
 
             // Compute the resulting pixel value from the calculated position
             let px = img.get_pixel(calc_pos, led.id);

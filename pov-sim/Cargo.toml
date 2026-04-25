@@ -5,7 +5,7 @@ edition = "2024"
 description = "POV Cycling Wheel Simulator"
 
 [dependencies]
-bevy = { version = "0.18" }
+bevy = { version = "0.18", features = ["wayland"] }
 pov-algs = { path = "../pov-algs", version = "*" }
 pov-images = { path = "../pov-images", version = "*" }
 
