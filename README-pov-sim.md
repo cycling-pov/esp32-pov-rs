@@ -29,3 +29,7 @@ The simulation provides several keyboard commands for modifying the state of the
 * `T` toggles the theme (light/dark)
 * `Up`/`Down` changes the current rotation rate
 * `Left`/`Right` changes the light fade duration
+
+## 4. Config File
+
+A config file exists to support loading in images dynamically for testing. An example config file can be found in the `tools/pov-sim` folder. This shows an example of configuration for a static image, a movie with a given frame rate, and a movie that steps a frame once per wheel rotation.
