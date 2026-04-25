@@ -1531,6 +1531,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "pov-algs"
+version = "0.1.0"
+dependencies = [
+ "zerocopy",
+]
+
+[[package]]
 name = "pov-proto"
 version = "0.1.0"
 dependencies = [
