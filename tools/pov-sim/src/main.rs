@@ -3,6 +3,8 @@ mod images;
 mod state;
 mod theme;
 
+use std::{fs::File, path::PathBuf};
+
 #[cfg(feature = "fps")]
 use bevy::dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin, FrameTimeGraphConfig};
 use bevy::{
@@ -18,12 +20,26 @@ use pov_images::DEFAULT_LEDS;
 
 use crate::{
     estimator::PositionEstimator,
-    images::{ImageChanged, ImageState},
+    images::{ImageChanged, ImageConfig, ImageState},
     state::{NUM_SPOKES, RotationPlugin, RotationSettings, RotationState},
     theme::{ThemePlugin, ThemeState},
 };
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    #[arg(short, long, default_value = "images.json")]
+    config_file: PathBuf,
+}
 
 fn main() {
+    let args = Args::parse();
+    let image_config: ImageConfig = {
+        let f = File::open(&args.config_file).expect("unable to open config file");
+        serde_json::from_reader(f).expect("unable to parse image config")
+    };
+
     let geometry = SimGeometry::new(NUM_SPOKES, DEFAULT_LEDS);
 
     let default_window = DefaultPlugins.set(WindowPlugin {
@@ -41,7 +57,7 @@ fn main() {
 
     let mut app = App::new();
     app.add_plugins(default_window)
-        .insert_resource(ImageState::new(&geometry))
+        .insert_resource(ImageState::new(&geometry, &image_config))
         .insert_resource(PositionEstimator::default())
         .insert_resource(ClearColor(Color::srgb_u8(255, 255, 255)))
         .insert_resource(geometry)

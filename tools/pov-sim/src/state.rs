@@ -22,7 +22,7 @@ impl Plugin for RotationPlugin {
     fn build(&self, app: &mut bevy::app::App) {
         app.insert_resource(RotationSettings {
             rate: AngularVelocity::from_radians_secs(12.0),
-            fade: 0.3,
+            fade: 0.2,
         })
         .insert_resource(RotationState::new(NUM_SPOKES))
         .add_systems(

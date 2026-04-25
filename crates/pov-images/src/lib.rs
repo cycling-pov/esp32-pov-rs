@@ -117,17 +117,17 @@ pub trait ImageSelection: Send + Sync {
 }
 
 /// Implements a static image
-pub struct Image {
+pub struct StaticImage {
     image: DefaultImageType,
 }
 
-impl Image {
+impl StaticImage {
     pub fn new(image: DefaultImageType) -> Self {
         Self { image }
     }
 }
 
-impl<'a> ImageSelection for Image {
+impl<'a> ImageSelection for StaticImage {
     fn current_image(&self) -> &DefaultImageType {
         &self.image
     }
@@ -194,42 +194,4 @@ impl ImageSelection for VideoTime {
     }
 
     fn step_rotation(&mut self) {}
-}
-
-#[cfg(feature = "default-images")]
-pub mod default {
-    use crate::{Image, ImageSelection, VideoRotation, VideoTime};
-    use std::{sync::Arc, time::Duration};
-
-    use super::{frames_from_data, image_from_data};
-
-    static DEFAULT_IMAGE_DATA: &[u8] = include_bytes!("../earth.jpg");
-    static DEFAULT_MOVIE_DATA: &[u8] = include_bytes!("../cat-space.gif");
-
-    pub struct ImageOption {
-        pub name: String,
-        pub image: Box<dyn ImageSelection>,
-    }
-
-    pub fn create_default_images(radii: &[f32]) -> Vec<ImageOption> {
-        let frames = frames_from_data(DEFAULT_MOVIE_DATA, radii)
-            .into_iter()
-            .map(|x| Arc::new(x))
-            .collect::<Vec<_>>();
-
-        vec![
-            ImageOption {
-                name: "earth".into(),
-                image: Box::new(Image::new(image_from_data(DEFAULT_IMAGE_DATA, radii))),
-            },
-            ImageOption {
-                name: "cat (rot)".into(),
-                image: Box::new(VideoRotation::new(frames.clone())),
-            },
-            ImageOption {
-                name: "cat (dt)".into(),
-                image: Box::new(VideoTime::new(frames, Duration::from_secs_f32(0.05))),
-            },
-        ]
-    }
 }

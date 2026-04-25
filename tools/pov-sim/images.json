@@ -1,0 +1,15 @@
+{
+  "images": [
+    { "name": "earth", "path": "images/earth.jpg", "img_type": "Static" },
+    {
+      "name": "cat (dt)",
+      "path": "images/cat-space.gif",
+      "img_type": { "MovieTime": 0.2 }
+    },
+    {
+      "name": "cat (step)",
+      "path": "images/cat-space.gif",
+      "img_type": "MovieRotation"
+    }
+  ]
+}

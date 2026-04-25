@@ -6,8 +6,11 @@ description = "POV Cycling Wheel Simulator"
 
 [dependencies]
 bevy = { version = "0.18", features = ["wayland"] }
+clap = { version = "4.6.1", features = ["derive"] }
 pov-algs = { path = "../../crates/pov-algs", version = "*" }
 pov-images = { path = "../../crates/pov-images", version = "*" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 [features]
 default = ["fps"]
@@ -17,3 +20,10 @@ log_estimator = []
 [package.metadata.bundle]
 name = "pov-sim"
 identifier = "io.github.cycling-pov.pov-sim"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+debug = false
