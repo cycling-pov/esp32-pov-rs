@@ -54,6 +54,11 @@ Host CLI for sending commands, images, and downloads through the bridge.
 
 - README: [README-pov-sender-cli.md](README-pov-sender-cli.md)
 
+### pov-sim
+Simulation tool to help preview images and algorithms on a workstation.
+
+- README: [README-pov-sim.md](README-pov-sim.md)
+
 ## 3. Build Firmware Crates
 
 From the repository root:
