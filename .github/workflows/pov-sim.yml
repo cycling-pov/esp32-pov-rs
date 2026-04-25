@@ -1,9 +1,9 @@
-name: Deploy
+name: POV SIM CI
 
 on:
   push:
     tags:
-      - "release/v*"
+      - "pov-sim/v*"
 
 permissions:
   contents: write
