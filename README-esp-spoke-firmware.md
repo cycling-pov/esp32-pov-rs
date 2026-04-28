@@ -25,6 +25,12 @@ Connect the board over USB, then run:
 cargo run -p esp-spoke-firmware
 ```
 
+Use the following command to test the ADC monitor mode.
+```sh
+cargo run -p esp-spoke-firmware --bin=adc-test-software
+```
+
+
 This will:
 
 - build the firmware

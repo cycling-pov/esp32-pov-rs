@@ -10,6 +10,11 @@ default-run = "esp-spoke-firmware"
 name = "esp-spoke-firmware"
 path = "./src/bin/main.rs"
 
+[[bin]]
+name = "adc-test-software"
+path = "./src/angles/adc_testbench.rs"
+
+
 [features]
 default = ["espnow"]
 waveshare-matrix = []

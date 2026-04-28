@@ -7,6 +7,7 @@ compile_error!(
 
 extern crate alloc;
 
+pub mod angles;
 pub mod bitmap;
 pub mod led;
 pub mod networking;
