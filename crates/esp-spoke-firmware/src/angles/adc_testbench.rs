@@ -94,13 +94,8 @@ async fn main(spawner: Spawner) -> ! {
     // Example for a single monitor channel.
     // let mut hall_monitor = AdcMonitor::new(peripherals.ADC1, hall_pin2, config.clone());
 
-    let mut hall_monitor = AdcMonitor::new_dual(
-        peripherals.ADC1,
-        hall_pin1,
-        hall_pin2,
-        config.clone(),
-        config.clone(),
-    );
+    let mut hall_monitor =
+        AdcMonitor::new_dual(peripherals.ADC1, hall_pin1, hall_pin2, config, config);
     hall_monitor.start();
 
     unwrap!(spawner.spawn(hall_monitor_task()));
