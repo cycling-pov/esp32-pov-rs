@@ -1,3 +1,4 @@
+use defmt::{info, warn};
 use pov_proto::image::Encoding;
 use sequential_storage::{
     cache::NoCache,
@@ -50,68 +51,114 @@ impl<'a> PostcardValue<'a> for ImageSlotState {}
 
 // ── ConfigStore ───────────────────────────────────────────────────────────────
 
-pub struct ConfigStore<'d> {
-    storage: MapStorage<u8, AsyncFlash<'d>, NoCache>,
-}
+/// Manages the config partition (slot metadata, active slot index).
+///
+/// Flash is not owned; callers pass `&mut AsyncFlash<'_>` for each operation,
+/// allowing a single flash instance to be shared across multiple stores.
+pub struct ConfigStore;
 
-impl<'d> ConfigStore<'d> {
-    pub fn new(flash: AsyncFlash<'d>) -> Self {
-        Self {
-            storage: MapStorage::new(flash, MapConfig::new(CONFIG_FLASH_RANGE), NoCache::new()),
-        }
+impl ConfigStore {
+    pub fn new() -> Self {
+        Self
     }
 
     /// Return which slot is currently active, or `None` if not set.
-    pub async fn get_active_slot(&mut self, buf: &mut [u8]) -> Option<u8> {
-        self.storage
+    pub async fn get_active_slot(
+        &mut self,
+        flash: &mut AsyncFlash<'_>,
+        buf: &mut [u8],
+    ) -> Option<u8> {
+        info!("config:get_active_slot start");
+        let mut storage =
+            MapStorage::<u8, _, _>::new(flash, MapConfig::new(CONFIG_FLASH_RANGE), NoCache::new());
+        let slot = storage
             .fetch_item::<ActiveSlotIndex>(buf, &KEY_ACTIVE_SLOT)
             .await
             .ok()
             .flatten()
-            .map(|v| v.0)
+            .map(|v| v.0);
+        info!("config:get_active_slot result={:?}", slot);
+        slot
     }
 
     /// Persist the active slot index.
-    pub async fn set_active_slot(&mut self, slot: u8, buf: &mut [u8]) -> Result<(), ()> {
-        self.storage
+    pub async fn set_active_slot(
+        &mut self,
+        flash: &mut AsyncFlash<'_>,
+        slot: u8,
+        buf: &mut [u8],
+    ) -> Result<(), ()> {
+        info!("config:set_active_slot slot={}", slot);
+        let mut storage =
+            MapStorage::<u8, _, _>::new(flash, MapConfig::new(CONFIG_FLASH_RANGE), NoCache::new());
+        let result = storage
             .store_item(buf, &KEY_ACTIVE_SLOT, &ActiveSlotIndex(slot))
             .await
-            .map_err(|_| ())
+            .map_err(|_| ());
+        if result.is_err() {
+            warn!("config:set_active_slot failed slot={}", slot);
+        }
+        result
     }
 
     /// Return the stored state of `slot` (0 or 1), defaulting to `Empty`.
-    pub async fn get_slot_state(&mut self, slot: usize, buf: &mut [u8]) -> ImageSlotState {
+    pub async fn get_slot_state(
+        &mut self,
+        flash: &mut AsyncFlash<'_>,
+        slot: usize,
+        buf: &mut [u8],
+    ) -> ImageSlotState {
+        info!("config:get_slot_state slot={}", slot);
         let key = if slot == 0 {
             KEY_SLOT0_STATE
         } else {
             KEY_SLOT1_STATE
         };
-        match self.storage.fetch_item::<ImageSlotState>(buf, &key).await {
+        let mut storage =
+            MapStorage::<u8, _, _>::new(flash, MapConfig::new(CONFIG_FLASH_RANGE), NoCache::new());
+        let state = match storage.fetch_item::<ImageSlotState>(buf, &key).await {
             Ok(Some(state)) => state,
             _ => ImageSlotState::Empty,
-        }
+        };
+        info!("config:get_slot_state slot={} state={:?}", slot, state);
+        state
     }
 
     /// Persist the state of `slot` (0 or 1).
     pub async fn set_slot_state(
         &mut self,
+        flash: &mut AsyncFlash<'_>,
         slot: usize,
         state: &ImageSlotState,
         buf: &mut [u8],
     ) -> Result<(), ()> {
+        info!("config:set_slot_state slot={} state={:?}", slot, state);
         let key = if slot == 0 {
             KEY_SLOT0_STATE
         } else {
             KEY_SLOT1_STATE
         };
-        self.storage
-            .store_item(buf, &key, state)
-            .await
-            .map_err(|_| ())
+        let mut storage =
+            MapStorage::<u8, _, _>::new(flash, MapConfig::new(CONFIG_FLASH_RANGE), NoCache::new());
+        let result = storage.store_item(buf, &key, state).await.map_err(|_| ());
+        if result.is_err() {
+            warn!(
+                "config:set_slot_state failed slot={} state={:?}",
+                slot, state
+            );
+        }
+        result
     }
 
     /// Erase all config data (e.g. factory reset).
-    pub async fn erase_all(&mut self) -> Result<(), ()> {
-        self.storage.erase_all().await.map_err(|_| ())
+    pub async fn erase_all(&mut self, flash: &mut AsyncFlash<'_>) -> Result<(), ()> {
+        info!("config:erase_all start");
+        let mut storage =
+            MapStorage::<u8, _, _>::new(flash, MapConfig::new(CONFIG_FLASH_RANGE), NoCache::new());
+        let result = storage.erase_all().await.map_err(|_| ());
+        if result.is_err() {
+            warn!("config:erase_all failed");
+        }
+        result
     }
 }

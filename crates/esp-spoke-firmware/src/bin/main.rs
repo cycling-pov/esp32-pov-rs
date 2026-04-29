@@ -8,6 +8,8 @@
 #![deny(clippy::large_stack_frames)]
 
 use defmt::info;
+#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+use defmt::warn;
 use embassy_executor::Spawner;
 #[cfg(feature = "heap-stats")]
 use embassy_time::{Duration, Timer};
@@ -28,6 +30,13 @@ use esp_spoke_firmware::led;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use esp_spoke_firmware::led::LedCommand;
 use esp_spoke_firmware::networking;
+#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+use esp_spoke_firmware::storage;
+
+#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+use embassy_embedded_hal::adapter::BlockingAsync;
+#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+use esp_storage::FlashStorage;
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -80,7 +89,18 @@ async fn main(spawner: Spawner) -> ! {
     {
         let usb = esp_hal::usb_serial_jtag::UsbSerialJtag::new(peripherals.USB_DEVICE).into_async();
         networking::start_usb_serial_backend(spawner, usb);
+        info!("Serial backend initialized");
     }
+
+    #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+    let flash = BlockingAsync::new(FlashStorage::new(peripherals.FLASH));
+
+    info!("Flash storage initialized");
+
+    #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+    storage::init(flash, spawner);
+
+    info!(" storage initialized");
 
     #[cfg(feature = "waveshare-matrix")]
     led::init_waveshare(peripherals.RMT, peripherals.GPIO14, spawner);
@@ -93,10 +113,14 @@ async fn main(spawner: Spawner) -> ! {
         spawner,
     );
 
+    info!("LED initialization completed");
+
     loop {
         // Forward networking events to the active LED task.
         #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
         {
+            info!("Loop: waiting for network event");
+
             match select(
                 networking::receive_command(),
                 networking::receive_download(),
@@ -104,10 +128,35 @@ async fn main(spawner: Spawner) -> ! {
             .await
             {
                 Either::First(Some(command)) => {
-                    led::try_send_led_command(LedCommand::Frame(command));
+                    let transfer_id = command.transfer_id;
+                    let command_kind = command.command;
+                    if !led::try_send_led_command(LedCommand::Frame(command)) {
+                        warn!(
+                            "main:dropped frame transfer_id={} command={:?}",
+                            transfer_id, command_kind
+                        );
+                    } else {
+                        info!(
+                            "main:forwarded frame transfer_id={} command={:?}",
+                            transfer_id, command_kind
+                        );
+                    }
                 }
                 Either::Second(Some(download)) => {
-                    led::try_send_led_command(LedCommand::Download(download));
+                    let transfer_id = download.transfer_id;
+                    let download_kind = download.kind;
+                    let byte_len = download.len;
+                    if !led::try_send_led_command(LedCommand::Download(download)) {
+                        warn!(
+                            "main:dropped download transfer_id={} kind={:?} bytes={}",
+                            transfer_id, download_kind, byte_len
+                        );
+                    } else {
+                        info!(
+                            "main:forwarded download transfer_id={} kind={:?} bytes={}",
+                            transfer_id, download_kind, byte_len
+                        );
+                    }
                 }
                 _ => {}
             }

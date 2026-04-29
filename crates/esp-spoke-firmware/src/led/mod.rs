@@ -6,6 +6,8 @@ mod waveshare_matrix;
 
 use alloc::boxed::Box;
 
+use defmt::{info, warn};
+
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use embassy_executor::Spawner;
 
@@ -39,7 +41,27 @@ static LED_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, LedCommand, 4> = Ch
 /// Try to send a command to the active LED output task.
 /// Returns `true` if the command was enqueued, `false` if the channel is full.
 pub fn try_send_led_command(cmd: LedCommand) -> bool {
-    LED_COMMAND_CHANNEL.try_send(cmd).is_ok()
+    match &cmd {
+        LedCommand::Frame(frame) => {
+            info!(
+                "led:enqueue frame transfer_id={} command={:?}",
+                frame.transfer_id, frame.command
+            );
+        }
+        LedCommand::Download(download) => {
+            info!(
+                "led:enqueue download transfer_id={} kind={:?} bytes={} crc32=0x{:08x}",
+                download.transfer_id, download.kind, download.len, download.crc32
+            );
+        }
+    }
+
+    if LED_COMMAND_CHANNEL.try_send(cmd).is_ok() {
+        true
+    } else {
+        warn!("led:enqueue failed channel full");
+        false
+    }
 }
 
 #[cfg(feature = "waveshare-matrix")]
