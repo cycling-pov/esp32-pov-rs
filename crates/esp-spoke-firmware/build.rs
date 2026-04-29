@@ -6,10 +6,42 @@ const GENERATED_BITMAP_HEIGHT: u32 = 64;
 
 fn main() {
     generate_asset_bitmap();
+    copy_partition_table();
     linker_be_nice();
     println!("cargo:rustc-link-arg=-Tdefmt.x");
     // make sure linkall.x is the last linker script (otherwise might cause problems with flip-link)
     println!("cargo:rustc-link-arg=-Tlinkall.x");
+}
+
+/// Copy the correct partition-table CSV into `target/` based on the active
+/// flash-size feature.  The runner in `.cargo/config.toml` always points at
+/// `target/esp-spoke-firmware-partitions.csv`, so this keeps it up-to-date
+/// automatically whenever the active feature changes.
+fn copy_partition_table() {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR");
+    let manifest_path = PathBuf::from(&manifest_dir);
+
+    let csv_name = if cfg!(feature = "flash-16mb") {
+        "partitions-16mb.csv"
+    } else {
+        // default: flash-4mb
+        "partitions-4mb.csv"
+    };
+    let src = manifest_path.join(csv_name);
+
+    // Write to `<workspace_root>/target/esp-spoke-firmware-partitions.csv`.
+    // CARGO_MANIFEST_DIR is `crates/esp-spoke-firmware`, so `../..` reaches the workspace root.
+    let dest = manifest_path
+        .join("../..")
+        .join("target")
+        .join("esp-spoke-firmware-partitions.csv");
+
+    std::fs::copy(&src, &dest)
+        .unwrap_or_else(|e| panic!("failed to copy {csv_name} to target/: {e}"));
+
+    println!("cargo:rerun-if-changed={}", src.display());
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_FLASH_16MB");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_FLASH_4MB");
 }
 
 fn generate_asset_bitmap() {

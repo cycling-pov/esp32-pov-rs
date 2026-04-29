@@ -11,3 +11,4 @@ pub mod angles;
 pub mod bitmap;
 pub mod led;
 pub mod networking;
+pub mod storage;

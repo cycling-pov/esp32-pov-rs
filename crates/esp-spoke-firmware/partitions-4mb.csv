@@ -1,0 +1,25 @@
+# ESP32-S3 partition table for esp-spoke-firmware (4 MB flash)
+#
+# Partition layout:
+#   0x000000 - 0x008FFF  (36 KB)   Bootloader (reserved by hardware)
+#   0x009000 - 0x00EFFF  (24 KB)   NVS
+#   0x00F000 - 0x00FFFF   (4 KB)   PHY calibration data
+#   0x010000 - 0x011FFF   (8 KB)   OTA data (active slot tracking)
+#   0x020000 - 0x11FFFF   (1 MB)   Factory app (initial firmware)
+#   0x120000 - 0x21FFFF   (1 MB)   OTA slot 0 (app firmware)
+#   0x220000 - 0x31FFFF   (1 MB)   OTA slot 1 (app firmware)
+#   0x320000 - 0x32FFFF  (64 KB)   POV config (sequential-storage map)
+#   0x330000 - 0x348FFF (100 KB)   POV image slot 0 (sequential-storage queue)
+#   0x349000 - 0x361FFF (100 KB)   POV image slot 1 (sequential-storage queue)
+#   0x362000 - 0x3FFFFF (~632 KB)  Reserved (future: GIF slots, coredump, etc.)
+#
+# Name,      Type, SubType, Offset,   Size
+nvs,         data, nvs,     0x9000,   0x6000
+phy_init,    data, phy,     0xF000,   0x1000
+otadata,     data, ota,     0x10000,  0x2000
+factory,     app,  factory, 0x20000,  0x100000
+ota_0,       app,  ota_0,   0x120000, 0x100000
+ota_1,       app,  ota_1,   0x220000, 0x100000
+pov_config,  data, undefined, 0x320000, 0x10000
+pov_img_0,   data, undefined, 0x330000, 0x19000
+pov_img_1,   data, undefined, 0x349000, 0x19000

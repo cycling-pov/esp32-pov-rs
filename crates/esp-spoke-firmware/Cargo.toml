@@ -16,7 +16,7 @@ path = "./src/angles/adc_testbench.rs"
 
 
 [features]
-default = ["espnow"]
+default = ["espnow", "flash-4mb"]
 waveshare-matrix = []
 sk9822-strip = []
 heap-stats = []
@@ -24,6 +24,8 @@ ble = ["dep:bt-hci", "dep:trouble-host", "esp-radio/ble"]
 espnow = ["esp-radio/esp-now", "esp-radio/wifi"]
 coexistence = ["esp-radio/coex"]
 usb-serial = []
+flash-4mb = []
+flash-16mb = []
 
 [dependencies]
 esp-hal = { version = "~1.0", features = ["defmt", "esp32s3", "unstable"] }
@@ -69,6 +71,13 @@ smart-leds-trait = "0.3.2"
 static_cell      = "2.1.1"
 postcard  = { version = "1", default-features = false }
 pov-proto = { path = "../pov-proto", features = ["bridge", "defmt", "image-decode"] }
+sequential-storage = { version = "7.2.0", features = ["defmt", "postcard"] }
+esp-storage = { version = "0.8.1", features = ["esp32s3"] }
+embassy-embedded-hal = "0.6.0"
+serde = { version = "1", default-features = false, features = ["derive"] }
+
+[profile.dev.package.esp-storage]
+opt-level = 3
 
 [build-dependencies]
 image = { version = "0.25.6", default-features = false, features = ["png"] }
