@@ -83,3 +83,90 @@ impl<const IMAGE_COUNT: usize, const PIXEL_COUNT: usize> BitmapStorage
         })
     }
 }
+
+// ---------------------------------------------------------------------------
+// SwappingImageStorage
+// ---------------------------------------------------------------------------
+
+/// Which pixels are currently returned by `bitmap(0)`.
+#[derive(Clone, Copy)]
+enum ActiveImage {
+    Builtin,
+    Downloaded,
+}
+
+/// A `BitmapStorage` with exactly one logical bitmap (index 0) whose pixel
+/// source can be switched between a static built-in image and a single
+/// in-memory download buffer.
+///
+/// - `bitmap(0)` returns the active pixels (builtin or download buffer).
+/// - `bitmap_mut(0)` always returns the download buffer for writing.
+/// - `activate_builtin()` / `activate_downloaded()` select the source.
+pub struct SwappingImageStorage<const PIXEL_COUNT: usize> {
+    metadata: BitmapStorageMetadata,
+    builtin: &'static [RGB8; PIXEL_COUNT],
+    download_buf: [RGB8; PIXEL_COUNT],
+    active: ActiveImage,
+}
+
+impl<const PIXEL_COUNT: usize> SwappingImageStorage<PIXEL_COUNT> {
+    pub fn new(metadata: BitmapStorageMetadata, builtin: &'static [RGB8; PIXEL_COUNT]) -> Self {
+        assert!(metadata.pixel_count() == PIXEL_COUNT);
+        Self {
+            metadata,
+            builtin,
+            download_buf: [RGB8::default(); PIXEL_COUNT],
+            active: ActiveImage::Builtin,
+        }
+    }
+}
+
+impl<const PIXEL_COUNT: usize> BitmapStorage for SwappingImageStorage<PIXEL_COUNT> {
+    fn metadata(&self) -> BitmapStorageMetadata {
+        self.metadata
+    }
+
+    fn bitmap_count(&self) -> usize {
+        1
+    }
+
+    fn bitmap(&self, index: usize) -> Result<Bitmap<'_>, BitmapError> {
+        if index != 0 {
+            return Err(BitmapError::InvalidIndex {
+                index,
+                bitmap_count: 1,
+            });
+        }
+        match self.active {
+            ActiveImage::Builtin => Ok(Bitmap::new(self.metadata, self.builtin)),
+            ActiveImage::Downloaded => Ok(Bitmap::new(self.metadata, &self.download_buf)),
+        }
+    }
+
+    fn bitmap_mut(&mut self, index: usize) -> Result<BitmapMut<'_>, BitmapError> {
+        if index != 0 {
+            return Err(BitmapError::InvalidIndex {
+                index,
+                bitmap_count: 1,
+            });
+        }
+        Ok(BitmapMut::new(self.metadata, &mut self.download_buf))
+    }
+
+    fn activate_builtin(&mut self) {
+        self.active = ActiveImage::Builtin;
+    }
+
+    fn activate_downloaded(&mut self) {
+        self.active = ActiveImage::Downloaded;
+    }
+}
+
+/// Create a heap-allocated `SwappingImageStorage` initialised with the
+/// compile-time generated built-in image.
+pub fn generated_swapping_storage() -> Box<SwappingImageStorage<GENERATED_BITMAP_PIXEL_COUNT>> {
+    Box::new(SwappingImageStorage::new(
+        GENERATED_BITMAP_METADATA,
+        &BUILTIN_IMAGES[0],
+    ))
+}

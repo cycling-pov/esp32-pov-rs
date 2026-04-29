@@ -57,6 +57,12 @@ impl<'a> PostcardValue<'a> for ImageSlotState {}
 /// allowing a single flash instance to be shared across multiple stores.
 pub struct ConfigStore;
 
+impl Default for ConfigStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ConfigStore {
     pub fn new() -> Self {
         Self

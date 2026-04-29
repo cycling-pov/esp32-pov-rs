@@ -138,4 +138,12 @@ pub trait BitmapStorage {
     fn bitmap(&self, index: usize) -> Result<Bitmap<'_>, BitmapError>;
 
     fn bitmap_mut(&mut self, index: usize) -> Result<BitmapMut<'_>, BitmapError>;
+
+    /// Switch the active bitmap to the static built-in image.
+    /// Implementations that do not support swapping may ignore this.
+    fn activate_builtin(&mut self) {}
+
+    /// Switch the active bitmap to the decoded download buffer.
+    /// Implementations that do not support swapping may ignore this.
+    fn activate_downloaded(&mut self) {}
 }
