@@ -1,11 +1,12 @@
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use defmt::{info, warn};
+use defmt::{error, info, warn};
 use embassy_embedded_hal::adapter::BlockingAsync;
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
+use esp_bootloader_esp_idf::partitions;
 use esp_storage::FlashStorage;
 
 use self::config::{ConfigStore, ImageSlotState};
@@ -14,29 +15,8 @@ use self::image_file::ImageFileStore;
 pub mod config;
 pub mod image_file;
 
-// At least one flash-size feature must be enabled (checked at compile time).
-// Note: flash-4mb and flash-16mb are mutually exclusive at runtime; enabling
-// both (e.g. via --all-features) is only expected in tooling contexts such as
-// cargo clippy --all-features, where the constants resolve to the same values.
-#[cfg(not(any(feature = "flash-4mb", feature = "flash-16mb")))]
-compile_error!(
-    "esp-spoke-firmware: one of the 'flash-4mb' or 'flash-16mb' features must be enabled"
-);
-
 /// Async flash type used throughout the storage module.
 pub type AsyncFlash<'d> = BlockingAsync<FlashStorage<'d>>;
-
-/// Flash range for the `pov_config` partition (64 KB).
-#[cfg(any(feature = "flash-4mb", feature = "flash-16mb"))]
-pub const CONFIG_FLASH_RANGE: Range<u32> = 0x320000..0x330000;
-
-/// Flash range for the `pov_img_0` partition (100 KB).
-#[cfg(any(feature = "flash-4mb", feature = "flash-16mb"))]
-pub const IMG0_FLASH_RANGE: Range<u32> = 0x330000..0x349000;
-
-/// Flash range for the `pov_img_1` partition (100 KB).
-#[cfg(any(feature = "flash-4mb", feature = "flash-16mb"))]
-pub const IMG1_FLASH_RANGE: Range<u32> = 0x349000..0x362000;
 
 /// Maximum bytes per queue push; kept well below the 4096-byte page limit.
 pub const CHUNK_SIZE: usize = 3840;
@@ -140,13 +120,49 @@ pub async fn write_slot_data(slot: usize, data: &[u8]) -> Result<u16, ()> {
     }
 }
 
+fn find_partition_range(table: &partitions::PartitionTable<'_>, label: &str) -> Option<Range<u32>> {
+    table
+        .iter()
+        .find(|e| e.label_as_str() == label)
+        .map(|e| e.offset()..e.offset() + e.len())
+}
+
 #[embassy_executor::task]
-pub async fn storage_task(mut flash: AsyncFlash<'static>) -> ! {
+pub async fn storage_task(mut flash: FlashStorage<'static>) -> ! {
     info!("storage:task started");
 
-    let mut config_store = ConfigStore::new();
-    let mut img0_store = ImageFileStore::new(0);
-    let mut img1_store = ImageFileStore::new(1);
+    let mut partition_table_raw = [0u8; partitions::PARTITION_TABLE_MAX_LEN];
+    let partition_table = partitions::read_partition_table(&mut flash, &mut partition_table_raw)
+        .expect("storage:task failed to read partition table");
+
+    let config_range = find_partition_range(&partition_table, "pov_config").unwrap_or_else(|| {
+        error!("storage:task partition 'pov_config' not found");
+        panic!()
+    });
+    let img0_range = find_partition_range(&partition_table, "pov_img_0").unwrap_or_else(|| {
+        error!("storage:task partition 'pov_img_0' not found");
+        panic!()
+    });
+    let img1_range = find_partition_range(&partition_table, "pov_img_1").unwrap_or_else(|| {
+        error!("storage:task partition 'pov_img_1' not found");
+        panic!()
+    });
+
+    info!(
+        "storage:task partitions: config={:#x}..{:#x} img0={:#x}..{:#x} img1={:#x}..{:#x}",
+        config_range.start,
+        config_range.end,
+        img0_range.start,
+        img0_range.end,
+        img1_range.start,
+        img1_range.end
+    );
+
+    let mut flash = BlockingAsync::new(flash);
+
+    let mut config_store = ConfigStore::new(config_range);
+    let mut img0_store = ImageFileStore::new(0, img0_range);
+    let mut img1_store = ImageFileStore::new(1, img1_range);
 
     let mut config_scratch = [0u8; 256];
     let mut chunk_read_buf = [0u8; CHUNK_SIZE];
@@ -240,7 +256,7 @@ pub async fn storage_task(mut flash: AsyncFlash<'static>) -> ! {
     }
 }
 
-pub fn init(flash: AsyncFlash<'static>, spawner: Spawner) {
+pub fn init(flash: FlashStorage<'static>, spawner: Spawner) {
     spawner
         .spawn(storage_task(flash))
         .expect("failed to spawn storage_task");

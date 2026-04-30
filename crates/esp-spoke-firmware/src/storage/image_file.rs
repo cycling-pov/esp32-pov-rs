@@ -1,10 +1,12 @@
+use core::ops::Range;
+
 use defmt::{info, warn};
 use sequential_storage::{
     cache::NoCache,
     queue::{QueueConfig, QueueStorage},
 };
 
-use super::{AsyncFlash, CHUNK_SIZE, IMG0_FLASH_RANGE, IMG1_FLASH_RANGE};
+use super::{AsyncFlash, CHUNK_SIZE};
 
 /// Manages a single image-file slot backed by a sequential-storage queue.
 ///
@@ -20,19 +22,16 @@ use super::{AsyncFlash, CHUNK_SIZE, IMG0_FLASH_RANGE, IMG1_FLASH_RANGE};
 /// allowing a single flash instance to be shared across multiple stores.
 pub struct ImageFileStore {
     slot: usize,
+    flash_range: Range<u32>,
 }
 
 impl ImageFileStore {
-    pub fn new(slot: usize) -> Self {
-        Self { slot }
+    pub fn new(slot: usize, flash_range: Range<u32>) -> Self {
+        Self { slot, flash_range }
     }
 
-    fn flash_range(&self) -> core::ops::Range<u32> {
-        if self.slot == 0 {
-            IMG0_FLASH_RANGE
-        } else {
-            IMG1_FLASH_RANGE
-        }
+    fn flash_range(&self) -> Range<u32> {
+        self.flash_range.clone()
     }
 
     /// Erase the slot and push `data` in `CHUNK_SIZE`-byte chunks.

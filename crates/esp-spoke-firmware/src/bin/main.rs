@@ -34,7 +34,6 @@ use esp_spoke_firmware::networking;
 use esp_spoke_firmware::storage;
 
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
-use embassy_embedded_hal::adapter::BlockingAsync;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use esp_storage::FlashStorage;
 
@@ -93,7 +92,7 @@ async fn main(spawner: Spawner) -> ! {
     }
 
     #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
-    let flash = BlockingAsync::new(FlashStorage::new(peripherals.FLASH));
+    let flash = FlashStorage::new(peripherals.FLASH);
 
     info!("Flash storage initialized");
 
