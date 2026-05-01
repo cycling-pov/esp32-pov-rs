@@ -48,7 +48,9 @@ enum StorageRequest {
         kind: DownloadKind,
     },
     /// Mark the slot as Empty, discarding any in-progress write.
-    AbortSlot { slot: usize },
+    AbortSlot {
+        slot: usize,
+    },
 }
 
 enum StorageResponse {
@@ -205,12 +207,15 @@ fn find_partition_range(table: &partitions::PartitionTable<'_>, label: &str) -> 
 }
 
 #[embassy_executor::task]
-pub async fn storage_task(mut flash: FlashStorage<'static>) -> ! {
+pub async fn storage_task(flash: esp_hal::peripherals::FLASH<'static>) -> ! {
     info!("storage:task started");
 
+    let mut flash_storage = FlashStorage::new(flash);
+
     let mut partition_table_raw = [0u8; partitions::PARTITION_TABLE_MAX_LEN];
-    let partition_table = partitions::read_partition_table(&mut flash, &mut partition_table_raw)
-        .expect("storage:task failed to read partition table");
+    let partition_table =
+        partitions::read_partition_table(&mut flash_storage, &mut partition_table_raw)
+            .expect("storage:task failed to read partition table");
 
     let config_range = find_partition_range(&partition_table, "pov_config").unwrap_or_else(|| {
         error!("storage:task partition 'pov_config' not found");
@@ -235,7 +240,7 @@ pub async fn storage_task(mut flash: FlashStorage<'static>) -> ! {
         img1_range.end
     );
 
-    let mut flash = BlockingAsync::new(flash);
+    let mut flash_async = BlockingAsync::new(flash_storage);
 
     let mut config_store = ConfigStore::new(config_range);
     let mut img0_store = ImageFileStore::new(0, img0_range);
@@ -249,7 +254,7 @@ pub async fn storage_task(mut flash: FlashStorage<'static>) -> ! {
         match req {
             StorageRequest::GetActiveSlot => {
                 let slot = config_store
-                    .get_active_slot(&mut flash, &mut config_scratch)
+                    .get_active_slot(&mut flash_async, &mut config_scratch)
                     .await;
                 STORAGE_RESPONSE_CHANNEL
                     .send(StorageResponse::ActiveSlot(slot))
@@ -257,7 +262,7 @@ pub async fn storage_task(mut flash: FlashStorage<'static>) -> ! {
             }
             StorageRequest::SetActiveSlot(slot) => {
                 let result = config_store
-                    .set_active_slot(&mut flash, slot, &mut config_scratch)
+                    .set_active_slot(&mut flash_async, slot, &mut config_scratch)
                     .await;
                 STORAGE_RESPONSE_CHANNEL
                     .send(StorageResponse::SetActiveSlot(result))
@@ -266,7 +271,7 @@ pub async fn storage_task(mut flash: FlashStorage<'static>) -> ! {
             StorageRequest::GetSlotState(slot) => {
                 let state = if is_valid_slot(slot) {
                     config_store
-                        .get_slot_state(&mut flash, slot, &mut config_scratch)
+                        .get_slot_state(&mut flash_async, slot, &mut config_scratch)
                         .await
                 } else {
                     warn!("storage:get_slot_state invalid slot={}", slot);
@@ -279,7 +284,7 @@ pub async fn storage_task(mut flash: FlashStorage<'static>) -> ! {
             StorageRequest::SetSlotState(slot, state) => {
                 let result = if is_valid_slot(slot) {
                     config_store
-                        .set_slot_state(&mut flash, slot, &state, &mut config_scratch)
+                        .set_slot_state(&mut flash_async, slot, &state, &mut config_scratch)
                         .await
                 } else {
                     warn!("storage:set_slot_state invalid slot={}", slot);
@@ -293,7 +298,7 @@ pub async fn storage_task(mut flash: FlashStorage<'static>) -> ! {
                 // Read the raw image bytes written by the streaming write path.
                 let result = if is_valid_slot(slot) {
                     let state = config_store
-                        .get_slot_state(&mut flash, slot, &mut config_scratch)
+                        .get_slot_state(&mut flash_async, slot, &mut config_scratch)
                         .await;
                     if let ImageSlotState::Valid { total_bytes, .. } = state {
                         let aligned = ((total_bytes as usize) + 3) & !3;
@@ -304,17 +309,14 @@ pub async fn storage_task(mut flash: FlashStorage<'static>) -> ! {
                             &mut img1_store
                         };
                         store
-                            .read_raw(&mut flash, total_bytes, &mut bytes)
+                            .read_raw(&mut flash_async, total_bytes, &mut bytes)
                             .await
                             .map(|_| {
                                 bytes.truncate(total_bytes as usize);
                                 bytes
                             })
                     } else {
-                        warn!(
-                            "storage:read_slot_data slot={} not in Valid state",
-                            slot
-                        );
+                        warn!("storage:read_slot_data slot={} not in Valid state", slot);
                         Err(())
                     }
                 } else {
@@ -330,7 +332,7 @@ pub async fn storage_task(mut flash: FlashStorage<'static>) -> ! {
                 // Pick the slot that is NOT currently active, so we don't
                 // clobber the image that is still being displayed.
                 let active = config_store
-                    .get_active_slot(&mut flash, &mut config_scratch)
+                    .get_active_slot(&mut flash_async, &mut config_scratch)
                     .await;
                 let slot = match active {
                     Some(a) => (a as usize + 1) % DOWNLOADABLE_IMAGE_SLOTS,
@@ -341,7 +343,7 @@ pub async fn storage_task(mut flash: FlashStorage<'static>) -> ! {
                 let result = async {
                     config_store
                         .set_slot_state(
-                            &mut flash,
+                            &mut flash_async,
                             slot,
                             &ImageSlotState::Writing,
                             &mut config_scratch,
@@ -352,7 +354,7 @@ pub async fn storage_task(mut flash: FlashStorage<'static>) -> ! {
                     } else {
                         &mut img1_store
                     };
-                    store.erase_for_streaming(&mut flash).await?;
+                    store.erase_for_streaming(&mut flash_async).await?;
                     Ok(slot)
                 }
                 .await;
@@ -371,7 +373,7 @@ pub async fn storage_task(mut flash: FlashStorage<'static>) -> ! {
                     } else {
                         &mut img1_store
                     };
-                    store.write_at_offset(&mut flash, offset, &data).await
+                    store.write_at_offset(&mut flash_async, offset, &data).await
                 } else {
                     warn!("storage:write_slot_chunk invalid slot={}", slot);
                     Err(())
@@ -392,7 +394,7 @@ pub async fn storage_task(mut flash: FlashStorage<'static>) -> ! {
                         expected_crc32,
                         total_bytes,
                         kind,
-                        &mut flash,
+                        &mut flash_async,
                         &mut config_store,
                         &mut img0_store,
                         &mut img1_store,
@@ -413,7 +415,7 @@ pub async fn storage_task(mut flash: FlashStorage<'static>) -> ! {
                     info!("storage:abort_slot slot={}", slot);
                     config_store
                         .set_slot_state(
-                            &mut flash,
+                            &mut flash_async,
                             slot,
                             &ImageSlotState::Empty,
                             &mut config_scratch,
@@ -470,11 +472,7 @@ async fn commit_slot_inner(
     //    Header layout: magic[3] + version[1] + encoding[1] = 5 bytes.
     //    Read 8 bytes (word-aligned) and inspect the first 5.
     let mut header_buf = [0u8; 8];
-    if store
-        .read_raw(flash, 8, &mut header_buf)
-        .await
-        .is_err()
-    {
+    if store.read_raw(flash, 8, &mut header_buf).await.is_err() {
         warn!("storage:commit_slot header read failed slot={}", slot);
         config_store
             .set_slot_state(flash, slot, &ImageSlotState::Empty, config_scratch)
@@ -520,7 +518,7 @@ async fn commit_slot_inner(
         }
     };
 
-    let chunk_count = (total_bytes as u32).div_ceil(CHUNK_SIZE as u32) as u16;
+    let chunk_count = (total_bytes).div_ceil(CHUNK_SIZE as u32) as u16;
 
     // 4. Persist the Valid state and update the active slot pointer.
     let state = ImageSlotState::Valid {
@@ -543,7 +541,7 @@ async fn commit_slot_inner(
     Ok(())
 }
 
-pub fn init(flash: FlashStorage<'static>, spawner: Spawner) {
+pub fn init(flash: esp_hal::peripherals::FLASH<'static>, spawner: Spawner) {
     spawner
         .spawn(storage_task(flash))
         .expect("failed to spawn storage_task");

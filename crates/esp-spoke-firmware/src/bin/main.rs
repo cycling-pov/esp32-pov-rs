@@ -34,10 +34,6 @@ use esp_spoke_firmware::networking;
 use esp_spoke_firmware::storage;
 
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
-#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
-use esp_storage::FlashStorage;
-
-#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use pov_proto::transfer::DownloadKind;
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
@@ -87,13 +83,12 @@ async fn main(spawner: Spawner) -> ! {
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0);
+    info!("Embassy initialized!");
 
     #[cfg(feature = "heap-stats")]
     spawner
         .spawn(heap_stats_task())
         .expect("failed to spawn heap stats task");
-
-    info!("Embassy initialized!");
 
     networking::init(peripherals.WIFI, peripherals.BT, spawner).await;
 
@@ -105,14 +100,10 @@ async fn main(spawner: Spawner) -> ! {
     }
 
     #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
-    let flash = FlashStorage::new(peripherals.FLASH);
-
-    info!("Flash storage initialized");
-
-    #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
-    storage::init(flash, spawner);
-
-    info!(" storage initialized");
+    {
+        storage::init(peripherals.FLASH, spawner);
+        info!("Flash storage initialized");
+    }
 
     #[cfg(feature = "waveshare-matrix")]
     led::init_waveshare(peripherals.RMT, peripherals.GPIO14, spawner);
@@ -137,12 +128,7 @@ async fn main(spawner: Spawner) -> ! {
         {
             info!("Loop: waiting for network event");
 
-            match select(
-                networking::receive_command(),
-                networking::receive_chunk(),
-            )
-            .await
-            {
+            match select(networking::receive_command(), networking::receive_chunk()).await {
                 Either::First(Some(command)) => {
                     let transfer_id = command.transfer_id;
                     let command_kind = command.command;
@@ -172,7 +158,7 @@ async fn main(spawner: Spawner) -> ! {
 
                     // If a new transfer has started, abort the previous one and
                     // allocate a fresh flash slot.
-                    if active.as_ref().map_or(true, |a| a.transfer_id != transfer_id) {
+                    if active.as_ref().is_none_or(|a| a.transfer_id != transfer_id) {
                         if let Some(old) = active.take() {
                             info!(
                                 "main:new transfer {} aborts previous transfer {} in slot {}",
@@ -205,56 +191,54 @@ async fn main(spawner: Spawner) -> ! {
                         }
                     }
 
-                    if let Some(ref a) = active {
-                        if a.transfer_id == transfer_id {
-                            let slot = a.slot;
-                            let byte_offset = chunk.byte_offset;
-                            let is_final = chunk.is_final;
+                    if let Some(ref a) = active
+                        && a.transfer_id == transfer_id
+                    {
+                        let slot = a.slot;
+                        let byte_offset = chunk.byte_offset;
+                        let is_final = chunk.is_final;
 
-                            if storage::write_slot_chunk(slot, byte_offset, &chunk.data)
-                                .await
-                                .is_err()
+                        if storage::write_slot_chunk(slot, byte_offset, &chunk.data)
+                            .await
+                            .is_err()
+                        {
+                            warn!(
+                                "main:write_slot_chunk failed slot={} offset={} transfer_id={}",
+                                slot, byte_offset, transfer_id
+                            );
+                        }
+
+                        if is_final {
+                            let a = active.take().unwrap();
+                            info!(
+                                "main:committing slot={} transfer_id={} crc32={=u32:#010x} bytes={}",
+                                a.slot, a.transfer_id, a.expected_crc32, a.total_len
+                            );
+                            match storage::commit_slot(
+                                a.slot,
+                                a.expected_crc32,
+                                a.total_len,
+                                a.kind,
+                            )
+                            .await
                             {
-                                warn!(
-                                    "main:write_slot_chunk failed slot={} offset={} transfer_id={}",
-                                    slot, byte_offset, transfer_id
-                                );
-                            }
-
-                            if is_final {
-                                let a = active.take().unwrap();
-                                info!(
-                                    "main:committing slot={} transfer_id={} crc32={=u32:#010x} bytes={}",
-                                    a.slot, a.transfer_id, a.expected_crc32, a.total_len
-                                );
-                                match storage::commit_slot(
-                                    a.slot,
-                                    a.expected_crc32,
-                                    a.total_len,
-                                    a.kind,
-                                )
-                                .await
-                                {
-                                    Ok(()) => {
-                                        info!(
-                                            "main:transfer {} committed to slot {}",
-                                            a.transfer_id, a.slot
-                                        );
-                                        if !led::try_send_led_command(LedCommand::LoadSlot(
-                                            a.slot,
-                                        )) {
-                                            warn!(
-                                                "main:dropped load_slot slot={} led channel full",
-                                                a.slot
-                                            );
-                                        }
-                                    }
-                                    Err(()) => {
+                                Ok(()) => {
+                                    info!(
+                                        "main:transfer {} committed to slot {}",
+                                        a.transfer_id, a.slot
+                                    );
+                                    if !led::try_send_led_command(LedCommand::LoadSlot(a.slot)) {
                                         warn!(
-                                            "main:commit failed for transfer {} slot {} (CRC mismatch or header error)",
-                                            a.transfer_id, a.slot
+                                            "main:dropped load_slot slot={} led channel full",
+                                            a.slot
                                         );
                                     }
+                                }
+                                Err(()) => {
+                                    warn!(
+                                        "main:commit failed for transfer {} slot {} (CRC mismatch or header error)",
+                                        a.transfer_id, a.slot
+                                    );
                                 }
                             }
                         }

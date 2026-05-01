@@ -169,8 +169,6 @@ async fn render_active_bitmap(
     info!("Bitmap rendering not implemented yet");
 }
 
-
-
 async fn apply_command(
     led_strip: &mut Sk9822Strip<'_, SK9822_LED_COUNT>,
     bitmap_store: &mut impl BitmapStorage,
