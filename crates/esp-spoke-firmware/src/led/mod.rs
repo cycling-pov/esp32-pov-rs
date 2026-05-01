@@ -4,8 +4,6 @@ mod strip;
 #[cfg(feature = "waveshare-matrix")]
 mod waveshare_matrix;
 
-use alloc::boxed::Box;
-
 use defmt::{info, warn};
 
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
@@ -28,12 +26,11 @@ pub use waveshare_matrix::WaveshareMatrix;
 #[cfg(feature = "waveshare-matrix")]
 pub use waveshare_matrix::WaveshareMatrixPins;
 
-use crate::networking::CompletedDownload;
-
 /// Commands that can be sent to any LED output task.
 pub enum LedCommand {
     Frame(CommandFrame),
-    Download(Box<CompletedDownload>),
+    /// Load the image stored in the given flash slot and begin displaying it.
+    LoadSlot(usize),
 }
 
 static LED_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, LedCommand, 4> = Channel::new();
@@ -48,11 +45,8 @@ pub fn try_send_led_command(cmd: LedCommand) -> bool {
                 frame.transfer_id, frame.command
             );
         }
-        LedCommand::Download(download) => {
-            info!(
-                "led:enqueue download transfer_id={} kind={:?} bytes={} crc32=0x{:08x}",
-                download.transfer_id, download.kind, download.len, download.crc32
-            );
+        LedCommand::LoadSlot(slot) => {
+            info!("led:enqueue load_slot slot={}", slot);
         }
     }
 

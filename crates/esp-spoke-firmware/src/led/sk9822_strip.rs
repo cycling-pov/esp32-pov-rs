@@ -9,15 +9,14 @@ use esp_hal::{
     spi::master::SpiDma,
 };
 use pov_proto::image::{DecodeMode, decode_into_rgb8};
-use pov_proto::transfer::{DownloadKind, SpokeCommand};
+use pov_proto::transfer::SpokeCommand;
 use smart_leds_trait::RGB8;
 use static_cell::StaticCell;
 
 use crate::bitmap::{BitmapStorage, generated_swapping_storage};
 use crate::led::{LedCommand, LedError, LedStrip, LedTimings};
-use crate::networking::CompletedDownload;
 use crate::storage;
-use crate::storage::config::{ImageKind, ImageSlotState};
+use crate::storage::config::ImageSlotState;
 
 pub const SK9822_LED_COUNT: usize = 30;
 
@@ -167,117 +166,10 @@ async fn render_active_bitmap(
     bitmap_store: &impl BitmapStorage,
 ) {
     let _image_bitmap = bitmap_store.bitmap(0).expect("missing bitmap");
-
     info!("Bitmap rendering not implemented yet");
 }
 
-async fn apply_downloaded_image(
-    led_strip: &mut Sk9822Strip<'_, SK9822_LED_COUNT>,
-    bitmap_store: &mut impl BitmapStorage,
-    current_display_slot: &mut Option<usize>,
-    next_flash_slot: &mut usize,
-    decode_scratch: &mut [u8],
-    download: &CompletedDownload,
-) {
-    let metadata = bitmap_store.metadata();
-    let pixel_count = metadata.pixel_count();
 
-    info!(
-        "sk9822:download start transfer_id={} kind={:?} bytes={} crc32=0x{:08x}",
-        download.transfer_id, download.kind, download.len, download.crc32
-    );
-
-    let flash_slot = *next_flash_slot;
-    *next_flash_slot = (*next_flash_slot + 1) % 2;
-    info!(
-        "sk9822:download flash_slot={} next_flash_slot={}",
-        flash_slot, *next_flash_slot
-    );
-
-    let decoded = {
-        let mut writable = bitmap_store
-            .bitmap_mut(0)
-            .expect("missing writable image slot");
-
-        match decode_into_rgb8(
-            download.payload(),
-            decode_scratch,
-            writable.pixels_mut(),
-            DecodeMode::ExactPixels,
-        ) {
-            Ok(decoded) => decoded,
-            Err(err) => {
-                info!(
-                    "ignoring transfer {}: failed to decode framed payload ({:?})",
-                    download.transfer_id, err
-                );
-                return;
-            }
-        }
-    };
-    info!(
-        "decoded transfer {} as {:?} ({} bytes, {} pixels)",
-        download.transfer_id, decoded, download.len, pixel_count
-    );
-
-    bitmap_store.activate_downloaded();
-    *current_display_slot = Some(flash_slot);
-
-    // TODO: Use LED translation utility to map the bitmap to LED strip commands. For now, just set the LEDs to white
-    led_strip.fill(smart_leds_trait::RGB8 {
-        r: 255,
-        g: 255,
-        b: 255,
-    });
-    led_strip
-        .show()
-        .await
-        .expect("failed to show downloaded bitmap on SK9822 strip");
-
-    info!(
-        "applied downloaded image transfer {} ({} bytes, crc32=0x{:08x})",
-        download.transfer_id, download.len, download.crc32
-    );
-
-    // Persist the raw compressed payload to flash (two-phase commit).
-    info!(
-        "sk9822:flash persist begin transfer_id={} slot={}",
-        download.transfer_id, flash_slot
-    );
-    if storage::set_slot_state(flash_slot, ImageSlotState::Writing)
-        .await
-        .is_ok()
-    {
-        match storage::write_slot_data(flash_slot, download.payload()).await {
-            Ok(chunk_count) => {
-                let state = ImageSlotState::Valid {
-                    chunk_count,
-                    total_bytes: download.len as u32,
-                    kind: ImageKind::Static,
-                    encoding: decoded,
-                };
-                if storage::set_slot_state(flash_slot, state).await.is_err() {
-                    warn!("failed to mark flash slot {} as Valid", flash_slot);
-                }
-                if storage::set_active_slot(flash_slot as u8).await.is_err() {
-                    warn!("failed to set active slot to {}", flash_slot);
-                }
-                info!(
-                    "persisted transfer {} to flash slot {}",
-                    download.transfer_id, flash_slot
-                );
-            }
-            Err(()) => {
-                warn!(
-                    "failed to write flash slot {} for transfer {}",
-                    flash_slot, download.transfer_id
-                );
-            }
-        }
-    } else {
-        warn!("failed to mark flash slot {} as Writing", flash_slot);
-    }
-}
 
 async fn apply_command(
     led_strip: &mut Sk9822Strip<'_, SK9822_LED_COUNT>,
@@ -359,7 +251,6 @@ pub async fn sk9822_strip_task(mut led_strip: Sk9822Strip<'static, SK9822_LED_CO
 
     let mut bitmap_store = generated_swapping_storage();
     let mut current_display_slot: Option<usize> = None;
-    let mut next_flash_slot = 0usize;
     let mut randomizing = false;
     let rng = Rng::new();
 
@@ -380,7 +271,6 @@ pub async fn sk9822_strip_task(mut led_strip: Sk9822Strip<'static, SK9822_LED_CO
                     slot
                 );
                 current_display_slot = Some(slot);
-                next_flash_slot = (slot + 1) % 2;
                 break;
             } else {
                 info!("sk9822:boot failed to load flash slot {}", slot);
@@ -433,29 +323,16 @@ pub async fn sk9822_strip_task(mut led_strip: Sk9822Strip<'static, SK9822_LED_CO
                 )
                 .await;
             }
-            LedCommand::Download(download) => match download.kind {
-                DownloadKind::DisplayImage => {
-                    info!(
-                        "sk9822:loop handling display download transfer_id={} bytes={}",
-                        download.transfer_id, download.len
-                    );
-                    apply_downloaded_image(
-                        &mut led_strip,
-                        &mut *bitmap_store,
-                        &mut current_display_slot,
-                        &mut next_flash_slot,
-                        decode_scratch,
-                        &download,
-                    )
-                    .await
+            LedCommand::LoadSlot(slot) => {
+                info!("sk9822:loop load_slot slot={}", slot);
+                if load_flash_slot(slot, &mut *bitmap_store, decode_scratch).await {
+                    current_display_slot = Some(slot);
+                    render_active_bitmap(&mut led_strip, &*bitmap_store).await;
+                    info!("sk9822:loop loaded flash slot {}", slot);
+                } else {
+                    warn!("sk9822:loop failed to load flash slot {}", slot);
                 }
-                DownloadKind::OtaImage | DownloadKind::Video => {
-                    info!(
-                        "ignoring unsupported download kind on SK9822 target: kind={:?} transfer_id={} bytes={}",
-                        download.kind, download.transfer_id, download.len
-                    );
-                }
-            },
+            }
         }
     }
 }

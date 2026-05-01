@@ -3,15 +3,15 @@ use core::cell::RefCell;
 use critical_section::Mutex;
 use defmt::{info, warn};
 use pov_proto::transfer::{
-    CommandFrame, CompletedTransfer, DownloadChunk, Packet, ParseError, TransferAssembly,
+    ChunkResult, CommandFrame, DownloadChunk, DownloadKind, Packet, ParseError, TransferAssembly,
     parse_packet,
 };
 
 /// BLE extended advertising limits manufacturer-specific payload to ~250 bytes.
 pub const BLE_MAX_CHUNK_PAYLOAD: usize = 224;
 /// ESP-NOW 2.0 supports up to 1470-byte packets including pov-proto metadata.
-/// Keep chunk payload below the transport MTU so postcard framing fits too.
-pub const ESPNOW_MAX_CHUNK_PAYLOAD: usize = 1450;
+/// Keep chunk payload at a multiple of 4 so flash write offsets are word-aligned.
+pub const ESPNOW_MAX_CHUNK_PAYLOAD: usize = 1448;
 pub const MAX_TRANSFER_BYTES: usize = 10 * 1024;
 
 #[cfg(feature = "ble")]
@@ -21,12 +21,26 @@ const ESPNOW_MAX_CHUNKS: usize = MAX_TRANSFER_BYTES.div_ceil(ESPNOW_MAX_CHUNK_PA
 
 pub type IngestError = ParseError;
 
-pub enum IngestedPacket {
-    Download(alloc::boxed::Box<CompletedDownload>),
-    Command(CommandFrame),
+/// A single received chunk, ready to be streamed to storage.
+///
+/// `data` is a heap-allocated copy of the raw chunk payload (compressed image
+/// bytes at `byte_offset` within the full transfer).  `is_final` is `true`
+/// when this chunk completes the transfer; the caller should commit the slot
+/// after persisting this chunk.
+pub struct NetworkChunk {
+    pub transfer_id: usize,
+    pub byte_offset: u32,
+    pub kind: DownloadKind,
+    pub total_len: u32,
+    pub expected_crc32: u32,
+    pub data: alloc::boxed::Box<[u8]>,
+    pub is_final: bool,
 }
 
-pub type CompletedDownload = CompletedTransfer<MAX_TRANSFER_BYTES>;
+pub enum IngestedPacket {
+    Chunk(NetworkChunk),
+    Command(CommandFrame),
+}
 
 #[cfg(feature = "ble")]
 type BleAssembly = TransferAssembly<BLE_MAX_CHUNK_PAYLOAD, MAX_TRANSFER_BYTES, BLE_MAX_CHUNKS>;
@@ -92,42 +106,63 @@ fn ingest_chunk<const MCP: usize, const MC: usize>(
         }
     }
 
+    // Capture fields from chunk before it is moved into push_download.
+    let transfer_id = chunk.transfer_id;
+    let byte_offset = (chunk.chunk_index * MCP) as u32;
+    let kind = chunk.kind;
+    let total_len = chunk.total_len as u32;
+    let expected_crc32 = chunk.crc32;
+    // Copy the payload into a heap allocation before the borrow ends.
+    let data: alloc::boxed::Box<[u8]> = chunk.payload.into();
+
     let result = critical_section::with(|cs| assembly.borrow_ref_mut(cs).push_download(chunk));
 
     match result {
-        Ok(Some(completed)) => {
-            info!(
-                "transfer complete: kind={:?} transfer_id={=usize} bytes={=usize} crc32={=u32}",
-                completed.kind, completed.transfer_id, completed.len, completed.crc32
-            );
-            Ok(Some(IngestedPacket::Download(alloc::boxed::Box::new(
-                completed,
-            ))))
-        }
-        Ok(None) => {
+        Ok(ChunkResult::Received { .. }) => {
             let (received, total) = critical_section::with(|cs| {
                 let a = assembly.borrow_ref(cs);
                 (a.received_count(), a.chunk_count())
             });
             info!(
-                "chunk stored: kind={:?} transfer_id={=usize} chunk={=usize}/{=usize} have={=usize}/{=usize}",
-                chunk.kind,
-                chunk.transfer_id,
-                chunk.chunk_index + 1,
-                chunk.chunk_count,
-                received,
-                total,
+                "chunk stored: kind={:?} transfer_id={=usize} offset={=u32} have={=usize}/{=usize}",
+                kind, transfer_id, byte_offset, received, total,
+            );
+            Ok(Some(IngestedPacket::Chunk(NetworkChunk {
+                transfer_id,
+                byte_offset,
+                kind,
+                total_len,
+                expected_crc32,
+                data,
+                is_final: false,
+            })))
+        }
+        Ok(ChunkResult::ReceivedAndComplete { complete, .. }) => {
+            info!(
+                "transfer complete: kind={:?} transfer_id={=usize} bytes={=usize} crc32={=u32}",
+                complete.kind, complete.transfer_id, complete.total_len, complete.expected_crc32
+            );
+            Ok(Some(IngestedPacket::Chunk(NetworkChunk {
+                transfer_id,
+                byte_offset,
+                kind,
+                total_len,
+                expected_crc32,
+                data,
+                is_final: true,
+            })))
+        }
+        Ok(ChunkResult::Duplicate) => {
+            info!(
+                "duplicate chunk ignored: transfer_id={=usize} offset={=u32}",
+                transfer_id, byte_offset
             );
             Ok(None)
         }
         Err(err) => {
             warn!(
-                "chunk rejected: kind={:?} transfer_id={=usize} chunk={=usize}/{=usize} reason={:?}",
-                chunk.kind,
-                chunk.transfer_id,
-                chunk.chunk_index + 1,
-                chunk.chunk_count,
-                err
+                "chunk rejected: kind={:?} transfer_id={=usize} offset={=u32} reason={:?}",
+                kind, transfer_id, byte_offset, err
             );
             Err(err)
         }

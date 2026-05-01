@@ -9,15 +9,14 @@ use esp_hal::{
 };
 use esp_hal_smartled::{SmartLedsAdapter, buffer_size};
 use pov_proto::image::{DecodeMode, decode_into_rgb8};
-use pov_proto::transfer::{CommandFrame, DownloadKind, SpokeCommand};
+use pov_proto::transfer::{CommandFrame, SpokeCommand};
 use smart_leds_trait::{RGB8, SmartLedsWrite as _};
 use static_cell::StaticCell;
 
 use crate::bitmap::{BitmapStorage, generated_swapping_storage};
 use crate::led::{LedCommand, LedError, LedStrip, LedTimings};
-use crate::networking::CompletedDownload;
 use crate::storage;
-use crate::storage::config::{ImageKind, ImageSlotState};
+use crate::storage::config::ImageSlotState;
 
 // The Waveshare Matrix has very poor thermal design. The manufacturer recommends limiting
 // the brightness to 50%. We'll cap the brightness to 1% to prevent overheating and because
@@ -148,115 +147,6 @@ async fn render_active_bitmap(
     led_strip.show().await.expect("failed to update LED strip");
 }
 
-async fn apply_downloaded_image(
-    led_strip: &mut WaveshareMatrix<'_>,
-    bitmap_store: &mut impl BitmapStorage,
-    current_display_slot: &mut Option<usize>,
-    next_flash_slot: &mut usize,
-    decode_scratch: &mut [u8],
-    download: &CompletedDownload,
-) {
-    let metadata = bitmap_store.metadata();
-    let pixel_count = metadata.pixel_count();
-
-    info!(
-        "waveshare:download start transfer_id={} kind={:?} bytes={} crc32=0x{:08x}",
-        download.transfer_id, download.kind, download.len, download.crc32
-    );
-
-    let flash_slot = *next_flash_slot;
-    *next_flash_slot = (*next_flash_slot + 1) % 2;
-    info!(
-        "waveshare:download flash_slot={} next_flash_slot={}",
-        flash_slot, *next_flash_slot
-    );
-
-    let decoded = {
-        let mut writable = bitmap_store
-            .bitmap_mut(0)
-            .expect("missing writable image slot");
-
-        match decode_into_rgb8(
-            download.payload(),
-            decode_scratch,
-            writable.pixels_mut(),
-            DecodeMode::ExactPixels,
-        ) {
-            Ok(decoded) => decoded,
-            Err(err) => {
-                info!(
-                    "ignoring transfer {}: failed to decode framed payload ({:?})",
-                    download.transfer_id, err
-                );
-                return;
-            }
-        }
-    };
-    info!(
-        "decoded transfer {} as {:?} ({} bytes, {} pixels)",
-        download.transfer_id, decoded, download.len, pixel_count
-    );
-
-    bitmap_store.activate_downloaded();
-
-    let target_width = 8;
-    let target_height = WaveshareMatrix::LED_COUNT / target_width;
-    bitmap_store
-        .bitmap(0)
-        .expect("missing active bitmap")
-        .scale_into(target_width, target_height, led_strip.pixels_mut())
-        .expect("failed to scale downloaded bitmap");
-    led_strip
-        .show()
-        .await
-        .expect("failed to show downloaded bitmap on LED strip");
-    *current_display_slot = Some(flash_slot);
-
-    info!(
-        "applied downloaded image transfer {} ({} bytes, crc32=0x{:08x})",
-        download.transfer_id, download.len, download.crc32
-    );
-
-    // Persist the raw compressed payload to flash (two-phase commit).
-    info!(
-        "waveshare:flash persist begin transfer_id={} slot={}",
-        download.transfer_id, flash_slot
-    );
-    if storage::set_slot_state(flash_slot, ImageSlotState::Writing)
-        .await
-        .is_ok()
-    {
-        match storage::write_slot_data(flash_slot, download.payload()).await {
-            Ok(chunk_count) => {
-                let state = ImageSlotState::Valid {
-                    chunk_count,
-                    total_bytes: download.len as u32,
-                    kind: ImageKind::Static,
-                    encoding: decoded,
-                };
-                if storage::set_slot_state(flash_slot, state).await.is_err() {
-                    warn!("failed to mark flash slot {} as Valid", flash_slot);
-                }
-                if storage::set_active_slot(flash_slot as u8).await.is_err() {
-                    warn!("failed to set active slot to {}", flash_slot);
-                }
-                info!(
-                    "persisted transfer {} to flash slot {}",
-                    download.transfer_id, flash_slot
-                );
-            }
-            Err(()) => {
-                warn!(
-                    "failed to write flash slot {} for transfer {}",
-                    flash_slot, download.transfer_id
-                );
-            }
-        }
-    } else {
-        warn!("failed to mark flash slot {} as Writing", flash_slot);
-    }
-}
-
 async fn apply_command(
     led_strip: &mut WaveshareMatrix<'_>,
     bitmap_store: &mut impl BitmapStorage,
@@ -332,7 +222,6 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
 
     let mut bitmap_store = generated_swapping_storage();
     let mut current_display_slot: Option<usize> = None;
-    let mut next_flash_slot = 0usize;
     let mut randomizing = false;
     let rng = Rng::new();
 
@@ -353,7 +242,6 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
                     slot
                 );
                 current_display_slot = Some(slot);
-                next_flash_slot = (slot + 1) % 2;
                 break;
             } else {
                 info!("waveshare:boot failed to load flash slot {}", slot);
@@ -406,29 +294,16 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
                 )
                 .await;
             }
-            LedCommand::Download(download) => match download.kind {
-                DownloadKind::DisplayImage => {
-                    info!(
-                        "waveshare:loop handling display download transfer_id={} bytes={}",
-                        download.transfer_id, download.len
-                    );
-                    apply_downloaded_image(
-                        &mut led_strip,
-                        &mut *bitmap_store,
-                        &mut current_display_slot,
-                        &mut next_flash_slot,
-                        decode_scratch,
-                        &download,
-                    )
-                    .await
+            LedCommand::LoadSlot(slot) => {
+                info!("waveshare:loop load_slot slot={}", slot);
+                if load_flash_slot(slot, &mut *bitmap_store, decode_scratch).await {
+                    current_display_slot = Some(slot);
+                    render_active_bitmap(&mut led_strip, &*bitmap_store).await;
+                    info!("waveshare:loop loaded flash slot {}", slot);
+                } else {
+                    warn!("waveshare:loop failed to load flash slot {}", slot);
                 }
-                DownloadKind::OtaImage | DownloadKind::Video => {
-                    info!(
-                        "ignoring unsupported download kind on waveshare target: kind={:?} transfer_id={} bytes={}",
-                        download.kind, download.transfer_id, download.len
-                    );
-                }
-            },
+            }
         }
     }
 }

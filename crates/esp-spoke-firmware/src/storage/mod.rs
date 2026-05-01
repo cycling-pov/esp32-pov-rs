@@ -8,8 +8,10 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use esp_bootloader_esp_idf::partitions;
 use esp_storage::FlashStorage;
+use pov_proto::image::Encoding;
+use pov_proto::transfer::DownloadKind;
 
-use self::config::{ConfigStore, ImageSlotState};
+use self::config::{ConfigStore, ImageKind, ImageSlotState};
 use self::image_file::ImageFileStore;
 
 pub mod config;
@@ -18,7 +20,7 @@ pub mod image_file;
 /// Async flash type used throughout the storage module.
 pub type AsyncFlash<'d> = BlockingAsync<FlashStorage<'d>>;
 
-/// Maximum bytes per queue push; kept well below the 4096-byte page limit.
+/// Maximum bytes per raw flash write block (used for reads/CRC verification).
 pub const CHUNK_SIZE: usize = 3840;
 
 const DOWNLOADABLE_IMAGE_SLOTS: usize = 2;
@@ -29,7 +31,24 @@ enum StorageRequest {
     GetSlotState(usize),
     SetSlotState(usize, ImageSlotState),
     ReadSlotData(usize),
-    WriteSlotData { slot: usize, data: Vec<u8> },
+    // ---- streaming write API ----
+    /// Begin a new streaming write: erase the chosen slot and return its index.
+    BeginSlotWrite,
+    /// Write a chunk of image data at the given byte offset within the slot.
+    WriteSlotChunk {
+        slot: usize,
+        offset: u32,
+        data: Vec<u8>,
+    },
+    /// Verify the CRC of the written data and commit the slot as Valid.
+    CommitSlot {
+        slot: usize,
+        expected_crc32: u32,
+        total_bytes: u32,
+        kind: DownloadKind,
+    },
+    /// Mark the slot as Empty, discarding any in-progress write.
+    AbortSlot { slot: usize },
 }
 
 enum StorageResponse {
@@ -38,7 +57,12 @@ enum StorageResponse {
     SlotState(ImageSlotState),
     SetSlotState(Result<(), ()>),
     ReadSlotData(Result<Vec<u8>, ()>),
-    WriteSlotData(Result<u16, ()>),
+    // ---- streaming write API ----
+    /// Returns the slot index allocated for this write, or Err on failure.
+    BeginSlotWrite(Result<usize, ()>),
+    WriteSlotChunk(Result<(), ()>),
+    CommitSlot(Result<(), ()>),
+    AbortSlot(Result<(), ()>),
 }
 
 static STORAGE_REQUEST_CHANNEL: Channel<CriticalSectionRawMutex, StorageRequest, 4> =
@@ -105,16 +129,69 @@ pub async fn read_slot_data(slot: usize) -> Result<Vec<u8>, ()> {
     }
 }
 
-pub async fn write_slot_data(slot: usize, data: &[u8]) -> Result<u16, ()> {
-    match rpc(StorageRequest::WriteSlotData {
+/// Allocate a flash slot for a new streaming write.
+///
+/// The storage task picks the slot that is not currently active, erases it,
+/// and marks it as `Writing`.  Returns the slot index on success.
+pub async fn begin_slot_write() -> Result<usize, ()> {
+    match rpc(StorageRequest::BeginSlotWrite).await {
+        StorageResponse::BeginSlotWrite(result) => result,
+        _ => {
+            warn!("storage:rpc begin_slot_write received unexpected response");
+            Err(())
+        }
+    }
+}
+
+/// Write a chunk of image data at `offset` within the given slot.
+pub async fn write_slot_chunk(slot: usize, offset: u32, data: &[u8]) -> Result<(), ()> {
+    match rpc(StorageRequest::WriteSlotChunk {
         slot,
+        offset,
         data: data.to_vec(),
     })
     .await
     {
-        StorageResponse::WriteSlotData(result) => result,
+        StorageResponse::WriteSlotChunk(result) => result,
         _ => {
-            warn!("storage:rpc write_slot_data received unexpected response");
+            warn!("storage:rpc write_slot_chunk received unexpected response");
+            Err(())
+        }
+    }
+}
+
+/// Verify the CRC of the written data and, if it matches, commit the slot.
+///
+/// On success the slot is marked `Valid` and becomes the active slot.
+/// On failure (CRC mismatch or I/O error) the slot is marked `Empty`.
+pub async fn commit_slot(
+    slot: usize,
+    expected_crc32: u32,
+    total_bytes: u32,
+    kind: DownloadKind,
+) -> Result<(), ()> {
+    match rpc(StorageRequest::CommitSlot {
+        slot,
+        expected_crc32,
+        total_bytes,
+        kind,
+    })
+    .await
+    {
+        StorageResponse::CommitSlot(result) => result,
+        _ => {
+            warn!("storage:rpc commit_slot received unexpected response");
+            Err(())
+        }
+    }
+}
+
+/// Abort an in-progress slot write, marking it `Empty`.
+pub async fn abort_slot(slot: usize) -> Result<(), ()> {
+    match rpc(StorageRequest::AbortSlot { slot }).await {
+        StorageResponse::AbortSlot(result) => result,
+        _ => {
+            warn!("storage:rpc abort_slot received unexpected response");
             Err(())
         }
     }
@@ -213,19 +290,33 @@ pub async fn storage_task(mut flash: FlashStorage<'static>) -> ! {
                     .await;
             }
             StorageRequest::ReadSlotData(slot) => {
+                // Read the raw image bytes written by the streaming write path.
                 let result = if is_valid_slot(slot) {
-                    let mut bytes: Vec<u8> = Vec::new();
-                    let store = if slot == 0 {
-                        &mut img0_store
+                    let state = config_store
+                        .get_slot_state(&mut flash, slot, &mut config_scratch)
+                        .await;
+                    if let ImageSlotState::Valid { total_bytes, .. } = state {
+                        let aligned = ((total_bytes as usize) + 3) & !3;
+                        let mut bytes: Vec<u8> = alloc::vec![0u8; aligned];
+                        let store = if slot == 0 {
+                            &mut img0_store
+                        } else {
+                            &mut img1_store
+                        };
+                        store
+                            .read_raw(&mut flash, total_bytes, &mut bytes)
+                            .await
+                            .map(|_| {
+                                bytes.truncate(total_bytes as usize);
+                                bytes
+                            })
                     } else {
-                        &mut img1_store
-                    };
-                    store
-                        .read_all(&mut flash, &mut chunk_read_buf, |chunk| {
-                            bytes.extend_from_slice(chunk)
-                        })
-                        .await
-                        .map(|_| bytes)
+                        warn!(
+                            "storage:read_slot_data slot={} not in Valid state",
+                            slot
+                        );
+                        Err(())
+                    }
                 } else {
                     warn!("storage:read_slot_data invalid slot={}", slot);
                     Err(())
@@ -235,25 +326,221 @@ pub async fn storage_task(mut flash: FlashStorage<'static>) -> ! {
                     .send(StorageResponse::ReadSlotData(result))
                     .await;
             }
-            StorageRequest::WriteSlotData { slot, data } => {
+            StorageRequest::BeginSlotWrite => {
+                // Pick the slot that is NOT currently active, so we don't
+                // clobber the image that is still being displayed.
+                let active = config_store
+                    .get_active_slot(&mut flash, &mut config_scratch)
+                    .await;
+                let slot = match active {
+                    Some(a) => (a as usize + 1) % DOWNLOADABLE_IMAGE_SLOTS,
+                    None => 0,
+                };
+                info!("storage:begin_slot_write slot={}", slot);
+
+                let result = async {
+                    config_store
+                        .set_slot_state(
+                            &mut flash,
+                            slot,
+                            &ImageSlotState::Writing,
+                            &mut config_scratch,
+                        )
+                        .await?;
+                    let store = if slot == 0 {
+                        &mut img0_store
+                    } else {
+                        &mut img1_store
+                    };
+                    store.erase_for_streaming(&mut flash).await?;
+                    Ok(slot)
+                }
+                .await;
+
+                if result.is_err() {
+                    warn!("storage:begin_slot_write failed slot={}", slot);
+                }
+                STORAGE_RESPONSE_CHANNEL
+                    .send(StorageResponse::BeginSlotWrite(result))
+                    .await;
+            }
+            StorageRequest::WriteSlotChunk { slot, offset, data } => {
                 let result = if is_valid_slot(slot) {
                     let store = if slot == 0 {
                         &mut img0_store
                     } else {
                         &mut img1_store
                     };
-                    store.write_all(&mut flash, &data).await
+                    store.write_at_offset(&mut flash, offset, &data).await
                 } else {
-                    warn!("storage:write_slot_data invalid slot={}", slot);
+                    warn!("storage:write_slot_chunk invalid slot={}", slot);
                     Err(())
                 };
-
                 STORAGE_RESPONSE_CHANNEL
-                    .send(StorageResponse::WriteSlotData(result))
+                    .send(StorageResponse::WriteSlotChunk(result))
+                    .await;
+            }
+            StorageRequest::CommitSlot {
+                slot,
+                expected_crc32,
+                total_bytes,
+                kind,
+            } => {
+                let result = if is_valid_slot(slot) {
+                    commit_slot_inner(
+                        slot,
+                        expected_crc32,
+                        total_bytes,
+                        kind,
+                        &mut flash,
+                        &mut config_store,
+                        &mut img0_store,
+                        &mut img1_store,
+                        &mut config_scratch,
+                        &mut chunk_read_buf,
+                    )
+                    .await
+                } else {
+                    warn!("storage:commit_slot invalid slot={}", slot);
+                    Err(())
+                };
+                STORAGE_RESPONSE_CHANNEL
+                    .send(StorageResponse::CommitSlot(result))
+                    .await;
+            }
+            StorageRequest::AbortSlot { slot } => {
+                let result = if is_valid_slot(slot) {
+                    info!("storage:abort_slot slot={}", slot);
+                    config_store
+                        .set_slot_state(
+                            &mut flash,
+                            slot,
+                            &ImageSlotState::Empty,
+                            &mut config_scratch,
+                        )
+                        .await
+                } else {
+                    warn!("storage:abort_slot invalid slot={}", slot);
+                    Err(())
+                };
+                STORAGE_RESPONSE_CHANNEL
+                    .send(StorageResponse::AbortSlot(result))
                     .await;
             }
         }
     }
+}
+
+/// Verify CRC, parse the image header, and commit the slot as Valid.
+///
+/// On failure the slot is marked `Empty` and `Err(())` is returned.
+#[allow(clippy::too_many_arguments)]
+async fn commit_slot_inner(
+    slot: usize,
+    expected_crc32: u32,
+    total_bytes: u32,
+    kind: DownloadKind,
+    flash: &mut AsyncFlash<'_>,
+    config_store: &mut ConfigStore,
+    img0_store: &mut ImageFileStore,
+    img1_store: &mut ImageFileStore,
+    config_scratch: &mut [u8],
+    chunk_read_buf: &mut [u8],
+) -> Result<(), ()> {
+    let store = if slot == 0 { img0_store } else { img1_store };
+
+    // 1. Verify CRC by reading back the data from flash.
+    info!(
+        "storage:commit_slot verifying CRC slot={} total_bytes={} expected_crc32={=u32:#010x}",
+        slot, total_bytes, expected_crc32
+    );
+    if let Err(()) = store
+        .verify_crc(flash, total_bytes, expected_crc32, chunk_read_buf)
+        .await
+    {
+        warn!("storage:commit_slot CRC mismatch, aborting slot={}", slot);
+        config_store
+            .set_slot_state(flash, slot, &ImageSlotState::Empty, config_scratch)
+            .await
+            .ok();
+        return Err(());
+    }
+
+    // 2. Read the image header to extract the encoding.
+    //    Header layout: magic[3] + version[1] + encoding[1] = 5 bytes.
+    //    Read 8 bytes (word-aligned) and inspect the first 5.
+    let mut header_buf = [0u8; 8];
+    if store
+        .read_raw(flash, 8, &mut header_buf)
+        .await
+        .is_err()
+    {
+        warn!("storage:commit_slot header read failed slot={}", slot);
+        config_store
+            .set_slot_state(flash, slot, &ImageSlotState::Empty, config_scratch)
+            .await
+            .ok();
+        return Err(());
+    }
+
+    let magic = &header_buf[..3];
+    let version = header_buf[3];
+    let encoding_byte = header_buf[4];
+
+    if magic != b"POV" || version != 1 {
+        warn!(
+            "storage:commit_slot invalid image header slot={} magic={=[u8]:?} version={}",
+            slot, magic, version
+        );
+        config_store
+            .set_slot_state(flash, slot, &ImageSlotState::Empty, config_scratch)
+            .await
+            .ok();
+        return Err(());
+    }
+
+    let encoding = postcard::from_bytes::<Encoding>(&[encoding_byte]).map_err(|_| {
+        warn!(
+            "storage:commit_slot unknown encoding byte={} slot={}",
+            encoding_byte, slot
+        );
+    })?;
+
+    // 3. Map DownloadKind → ImageKind.
+    let image_kind = match kind {
+        DownloadKind::DisplayImage => ImageKind::Static,
+        DownloadKind::Video => ImageKind::Video,
+        DownloadKind::OtaImage => {
+            warn!("storage:commit_slot unexpected OtaImage kind for image slot");
+            config_store
+                .set_slot_state(flash, slot, &ImageSlotState::Empty, config_scratch)
+                .await
+                .ok();
+            return Err(());
+        }
+    };
+
+    let chunk_count = (total_bytes as u32).div_ceil(CHUNK_SIZE as u32) as u16;
+
+    // 4. Persist the Valid state and update the active slot pointer.
+    let state = ImageSlotState::Valid {
+        chunk_count,
+        total_bytes,
+        kind: image_kind,
+        encoding,
+    };
+    config_store
+        .set_slot_state(flash, slot, &state, config_scratch)
+        .await?;
+    config_store
+        .set_active_slot(flash, slot as u8, config_scratch)
+        .await?;
+
+    info!(
+        "storage:commit_slot committed slot={} total_bytes={} crc32={=u32:#010x} encoding={:?}",
+        slot, total_bytes, expected_crc32, encoding
+    );
+    Ok(())
 }
 
 pub fn init(flash: FlashStorage<'static>, spawner: Spawner) {

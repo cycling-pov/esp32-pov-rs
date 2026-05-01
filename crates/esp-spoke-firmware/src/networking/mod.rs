@@ -1,5 +1,3 @@
-use alloc::boxed::Box;
-
 use defmt::{info, warn};
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -15,19 +13,19 @@ pub mod esp_now;
 pub mod usb_serial;
 
 pub use download::{
-    BLE_MAX_CHUNK_PAYLOAD, ESPNOW_MAX_CHUNK_PAYLOAD, IngestError, MAX_TRANSFER_BYTES,
+    BLE_MAX_CHUNK_PAYLOAD, ESPNOW_MAX_CHUNK_PAYLOAD, IngestError, MAX_TRANSFER_BYTES, NetworkChunk,
 };
 #[cfg(any(feature = "ble", feature = "espnow"))]
 use static_cell::StaticCell;
 
-pub type CompletedDownload = download::CompletedDownload;
-
-static DOWNLOAD_CHANNEL: Channel<CriticalSectionRawMutex, Box<CompletedDownload>, 2> =
-    Channel::new();
+/// Channel that carries individual image chunks to the main orchestration loop.
+/// Capacity 64 is large enough to buffer a full BLE transfer (≤46 chunks at
+/// 224 B each) during the initial flash-erase of the target slot.
+static CHUNK_CHANNEL: Channel<CriticalSectionRawMutex, NetworkChunk, 64> = Channel::new();
 static COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, CommandFrame, 4> = Channel::new();
 
-pub async fn receive_download() -> Option<Box<CompletedDownload>> {
-    DOWNLOAD_CHANNEL.receive().await.into()
+pub async fn receive_chunk() -> Option<NetworkChunk> {
+    CHUNK_CHANNEL.receive().await.into()
 }
 
 pub async fn receive_command() -> Option<CommandFrame> {
@@ -95,18 +93,20 @@ pub fn ingest_espnow_payload(payload: &[u8]) -> Result<(), IngestError> {
 fn route_ingested_packet(packet: Option<download::IngestedPacket>) -> Result<(), IngestError> {
     if let Some(packet) = packet {
         match packet {
-            download::IngestedPacket::Download(completed) => {
-                let kind = completed.kind;
-                let transfer_id = completed.transfer_id;
-                let crc32 = completed.crc32;
-                let byte_len = completed.len;
+            download::IngestedPacket::Chunk(chunk) => {
+                let transfer_id = chunk.transfer_id;
+                let byte_offset = chunk.byte_offset;
+                let is_final = chunk.is_final;
 
-                if DOWNLOAD_CHANNEL.sender().try_send(completed).is_err() {
-                    warn!("dropping completed download: channel full");
+                if CHUNK_CHANNEL.try_send(chunk).is_err() {
+                    warn!(
+                        "dropping chunk: channel full transfer_id={=usize} offset={=u32}",
+                        transfer_id, byte_offset
+                    );
                 } else {
                     info!(
-                        "queued completed download: kind={:?} transfer_id={=usize} bytes={=usize} crc32={=u32}",
-                        kind, transfer_id, byte_len, crc32
+                        "queued chunk: transfer_id={=usize} offset={=u32} is_final={=bool}",
+                        transfer_id, byte_offset, is_final
                     );
                 }
             }

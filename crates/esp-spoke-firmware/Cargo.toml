@@ -1,9 +1,9 @@
 [package]
-edition      = "2024"
-name         = "esp-spoke-firmware"
+edition = "2024"
+name = "esp-spoke-firmware"
 rust-version = "1.88"
-version      = "0.1.0"
-autobins     = false
+version = "0.1.0"
+autobins = false
 default-run = "esp-spoke-firmware"
 
 [[bin]]
@@ -31,14 +31,14 @@ flash-16mb = []
 esp-hal = { version = "~1.0", features = ["defmt", "esp32s3", "unstable"] }
 
 esp-rtos = { version = "0.2.0", features = [
-  "defmt",
-  "embassy",
-  "esp-alloc",
-  "esp-radio",
-  "esp32s3",
+    "defmt",
+    "embassy",
+    "esp-alloc",
+    "esp-radio",
+    "esp32s3",
 ] }
 
-defmt                  = "1.0.1"
+defmt = "1.0.1"
 esp-bootloader-esp-idf = { version = "0.4.0", features = ["defmt", "esp32s3"] }
 esp-hal-smartled = { version = "0.17.0", features = ["defmt", "esp32s3"] }
 
@@ -52,25 +52,34 @@ embedded-io-async = { version = "0.7.0", features = ["defmt"] }
 embedded-hal-async = "1.0.0"
 esp-alloc = { version = "0.9.0", features = ["defmt"] }
 esp-backtrace = { version = "0.18.1", features = [
-  "defmt",
-  "esp32s3",
-  "panic-handler",
+    "defmt",
+    "esp32s3",
+    "panic-handler",
 ] }
 esp-println = { version = "0.16.1", features = ["defmt-espflash", "esp32s3"] }
 esp-radio = { version = "0.17.0", features = [
-  "defmt",
-  "esp-alloc",
-  "esp32s3",
-  "unstable",
+    "defmt",
+    "esp-alloc",
+    "esp32s3",
+    "unstable",
 ] }
-trouble-host = { version = "0.5.0", features = ["gatt", "scan"], optional = true }
+trouble-host = { version = "0.5.0", features = [
+    "gatt",
+    "scan",
+], optional = true }
 
 critical-section = "1.2.0"
-rgb              = "0.8.52"
+rgb = "0.8.52"
 smart-leds-trait = "0.3.2"
-static_cell      = "2.1.1"
-postcard  = { version = "1", default-features = false }
-pov-proto = { path = "../pov-proto", features = ["bridge", "defmt", "image-decode"] }
+static_cell = "2.1.1"
+postcard = { version = "1", default-features = false }
+crc32fast = { version = "1", default-features = false }
+embedded-storage-async = "0.4"
+pov-proto = { path = "../pov-proto", features = [
+    "bridge",
+    "defmt",
+    "image-decode",
+] }
 sequential-storage = { version = "7.2.0", features = ["defmt", "postcard"] }
 esp-storage = { version = "0.8.1", features = ["esp32s3"] }
 embassy-embedded-hal = "0.6.0"

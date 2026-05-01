@@ -37,6 +37,9 @@ use esp_spoke_firmware::storage;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use esp_storage::FlashStorage;
 
+#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+use pov_proto::transfer::DownloadKind;
+
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -53,6 +56,16 @@ async fn heap_stats_task() -> ! {
         info!("heap stats:\n{}", esp_alloc::HEAP.stats());
         Timer::after(Duration::from_secs(30)).await;
     }
+}
+
+/// Tracks an in-progress streaming download being written to a flash slot.
+#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+struct ActiveTransfer {
+    transfer_id: usize,
+    slot: usize,
+    kind: DownloadKind,
+    expected_crc32: u32,
+    total_len: u32,
 }
 
 #[allow(
@@ -114,15 +127,19 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("LED initialization completed");
 
+    // Track the transfer currently being streamed to flash.
+    #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+    let mut active: Option<ActiveTransfer> = None;
+
     loop {
-        // Forward networking events to the active LED task.
+        // Forward networking events to the active LED task or storage layer.
         #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
         {
             info!("Loop: waiting for network event");
 
             match select(
                 networking::receive_command(),
-                networking::receive_download(),
+                networking::receive_chunk(),
             )
             .await
             {
@@ -141,20 +158,106 @@ async fn main(spawner: Spawner) -> ! {
                         );
                     }
                 }
-                Either::Second(Some(download)) => {
-                    let transfer_id = download.transfer_id;
-                    let download_kind = download.kind;
-                    let byte_len = download.len;
-                    if !led::try_send_led_command(LedCommand::Download(download)) {
-                        warn!(
-                            "main:dropped download transfer_id={} kind={:?} bytes={}",
-                            transfer_id, download_kind, byte_len
-                        );
-                    } else {
+                Either::Second(Some(chunk)) => {
+                    // Only handle DisplayImage downloads; silently drop others.
+                    if chunk.kind != DownloadKind::DisplayImage {
                         info!(
-                            "main:forwarded download transfer_id={} kind={:?} bytes={}",
-                            transfer_id, download_kind, byte_len
+                            "main:ignoring non-display download kind={:?} transfer_id={}",
+                            chunk.kind, chunk.transfer_id
                         );
+                        continue;
+                    }
+
+                    let transfer_id = chunk.transfer_id;
+
+                    // If a new transfer has started, abort the previous one and
+                    // allocate a fresh flash slot.
+                    if active.as_ref().map_or(true, |a| a.transfer_id != transfer_id) {
+                        if let Some(old) = active.take() {
+                            info!(
+                                "main:new transfer {} aborts previous transfer {} in slot {}",
+                                transfer_id, old.transfer_id, old.slot
+                            );
+                            storage::abort_slot(old.slot).await.ok();
+                        }
+                        match storage::begin_slot_write().await {
+                            Ok(slot) => {
+                                info!(
+                                    "main:began slot write slot={} transfer_id={}",
+                                    slot, transfer_id
+                                );
+                                active = Some(ActiveTransfer {
+                                    transfer_id,
+                                    slot,
+                                    kind: chunk.kind,
+                                    expected_crc32: chunk.expected_crc32,
+                                    total_len: chunk.total_len,
+                                });
+                            }
+                            Err(()) => {
+                                warn!(
+                                    "main:begin_slot_write failed for transfer_id={}",
+                                    transfer_id
+                                );
+                                // Drop this chunk; the next one will retry begin_slot_write.
+                                continue;
+                            }
+                        }
+                    }
+
+                    if let Some(ref a) = active {
+                        if a.transfer_id == transfer_id {
+                            let slot = a.slot;
+                            let byte_offset = chunk.byte_offset;
+                            let is_final = chunk.is_final;
+
+                            if storage::write_slot_chunk(slot, byte_offset, &chunk.data)
+                                .await
+                                .is_err()
+                            {
+                                warn!(
+                                    "main:write_slot_chunk failed slot={} offset={} transfer_id={}",
+                                    slot, byte_offset, transfer_id
+                                );
+                            }
+
+                            if is_final {
+                                let a = active.take().unwrap();
+                                info!(
+                                    "main:committing slot={} transfer_id={} crc32={=u32:#010x} bytes={}",
+                                    a.slot, a.transfer_id, a.expected_crc32, a.total_len
+                                );
+                                match storage::commit_slot(
+                                    a.slot,
+                                    a.expected_crc32,
+                                    a.total_len,
+                                    a.kind,
+                                )
+                                .await
+                                {
+                                    Ok(()) => {
+                                        info!(
+                                            "main:transfer {} committed to slot {}",
+                                            a.transfer_id, a.slot
+                                        );
+                                        if !led::try_send_led_command(LedCommand::LoadSlot(
+                                            a.slot,
+                                        )) {
+                                            warn!(
+                                                "main:dropped load_slot slot={} led channel full",
+                                                a.slot
+                                            );
+                                        }
+                                    }
+                                    Err(()) => {
+                                        warn!(
+                                            "main:commit failed for transfer {} slot {} (CRC mismatch or header error)",
+                                            a.transfer_id, a.slot
+                                        );
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 _ => {}

@@ -176,6 +176,10 @@ pub fn encode_packet(packet: Packet<'_>, out: &mut [u8]) -> Result<usize, Encode
 // ---------------------------------------------------------------------------
 
 /// A fully assembled and CRC-verified image transfer payload.
+///
+/// Note: this type is retained for compatibility with sender-side code.
+/// The receiver-side ([`TransferAssembly`]) no longer emits this type;
+/// use [`ChunkResult`] and [`TransferComplete`] instead.
 #[derive(Clone, Debug)]
 pub struct CompletedTransfer<const MAX_BYTES: usize> {
     pub kind: DownloadKind,
@@ -191,9 +195,43 @@ impl<const MAX_BYTES: usize> CompletedTransfer<MAX_BYTES> {
     }
 }
 
+/// Metadata returned when all chunks of a transfer have been received.
+///
+/// CRC verification is intentionally deferred to the consumer (e.g. the
+/// storage layer), which verifies after writing the data to its backing store.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct TransferComplete {
+    pub kind: DownloadKind,
+    pub transfer_id: usize,
+    pub expected_crc32: u32,
+    pub total_len: usize,
+}
+
+/// Result of pushing a single chunk into a [`TransferAssembly`].
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum ChunkResult {
+    /// The chunk was accepted and is not the final one.  `byte_offset` is the
+    /// chunk's position in the assembled payload (= `chunk_index * MAX_CHUNK_PAYLOAD`).
+    Received { byte_offset: usize },
+    /// This was the last missing chunk.  The data at `byte_offset` still needs
+    /// to be persisted before calling commit.
+    ReceivedAndComplete {
+        byte_offset: usize,
+        complete: TransferComplete,
+    },
+    /// This chunk index was already seen; no action required.
+    Duplicate,
+}
+
 /// Accumulates out-of-order chunks for a single in-progress transfer and
-/// yields a [`CompletedTransfer`] when every chunk has been received and the
-/// CRC matches.
+/// signals completion when every chunk has been received.
+///
+/// Unlike the previous design the assembly no longer buffers the full payload
+/// in RAM.  Each chunk's payload must be forwarded to persistent storage by
+/// the caller as it arrives; the assembly only tracks which indices have been
+/// received.
 pub struct TransferAssembly<
     const MAX_CHUNK_PAYLOAD: usize,
     const MAX_TRANSFER_BYTES: usize,
@@ -206,8 +244,6 @@ pub struct TransferAssembly<
     crc32: u32,
     received: [bool; MAX_CHUNKS],
     received_count: usize,
-    payload_lengths: [usize; MAX_CHUNKS],
-    payload: [u8; MAX_TRANSFER_BYTES],
 }
 
 impl<const MAX_CHUNK_PAYLOAD: usize, const MAX_TRANSFER_BYTES: usize, const MAX_CHUNKS: usize>
@@ -222,8 +258,6 @@ impl<const MAX_CHUNK_PAYLOAD: usize, const MAX_TRANSFER_BYTES: usize, const MAX_
             crc32: 0,
             received: [false; MAX_CHUNKS],
             received_count: 0,
-            payload_lengths: [0; MAX_CHUNKS],
-            payload: [0; MAX_TRANSFER_BYTES],
         }
     }
 
@@ -251,14 +285,9 @@ impl<const MAX_CHUNK_PAYLOAD: usize, const MAX_TRANSFER_BYTES: usize, const MAX_
         self.crc32 = chunk.crc32;
         self.received = [false; MAX_CHUNKS];
         self.received_count = 0;
-        self.payload_lengths = [0; MAX_CHUNKS];
-        self.payload.fill(0);
     }
 
-    pub fn push_download(
-        &mut self,
-        chunk: DownloadChunk<'_>,
-    ) -> Result<Option<CompletedTransfer<MAX_TRANSFER_BYTES>>, ParseError> {
+    pub fn push_download(&mut self, chunk: DownloadChunk<'_>) -> Result<ChunkResult, ParseError> {
         validate_download(&chunk)?;
 
         if chunk.chunk_count > MAX_CHUNKS {
@@ -276,72 +305,39 @@ impl<const MAX_CHUNK_PAYLOAD: usize, const MAX_TRANSFER_BYTES: usize, const MAX_
             self.reset(&chunk);
         }
 
-        let start = chunk.chunk_index * MAX_CHUNK_PAYLOAD;
-        let end = start + chunk.payload.len();
-        if end > self.total_len || end > self.payload.len() {
+        let byte_offset = chunk.chunk_index * MAX_CHUNK_PAYLOAD;
+        let end = byte_offset + chunk.payload.len();
+        if end > self.total_len {
             return Err(ParseError::PayloadShapeMismatch);
         }
 
-        self.payload[start..end].copy_from_slice(chunk.payload);
-
-        if !self.received[chunk.chunk_index] {
-            self.received[chunk.chunk_index] = true;
-            self.received_count = self.received_count.saturating_add(1);
+        if self.received[chunk.chunk_index] {
+            return Ok(ChunkResult::Duplicate);
         }
 
-        self.payload_lengths[chunk.chunk_index] = chunk.payload.len();
+        self.received[chunk.chunk_index] = true;
+        self.received_count = self.received_count.saturating_add(1);
 
         if self.received_count != self.chunk_count {
-            return Ok(None);
+            return Ok(ChunkResult::Received { byte_offset });
         }
 
-        if !self.is_payload_shape_valid() {
-            return Err(ParseError::PayloadShapeMismatch);
-        }
-
-        let actual_crc = hash(&self.payload[..self.total_len]);
-        if actual_crc != self.crc32 {
-            return Err(ParseError::CrcMismatch {
-                expected: self.crc32,
-                actual: actual_crc,
-            });
-        }
-
-        let mut bytes = [0u8; MAX_TRANSFER_BYTES];
-        bytes[..self.total_len].copy_from_slice(&self.payload[..self.total_len]);
-        let completed = CompletedTransfer {
+        // All chunks received — signal completion without CRC check (deferred to storage).
+        let complete = TransferComplete {
             kind: self.kind,
             transfer_id: self.transfer_id,
-            crc32: self.crc32,
-            len: self.total_len,
-            bytes,
+            expected_crc32: self.crc32,
+            total_len: self.total_len,
         };
 
+        // Reset tracking for the next transfer.
         self.received_count = 0;
         self.received = [false; MAX_CHUNKS];
 
-        Ok(Some(completed))
-    }
-
-    fn is_payload_shape_valid(&self) -> bool {
-        if self.chunk_count == 0 {
-            return false;
-        }
-
-        for index in 0..self.chunk_count.saturating_sub(1) {
-            if self.payload_lengths[index] != MAX_CHUNK_PAYLOAD {
-                return false;
-            }
-        }
-
-        let tail_len = self.total_len % MAX_CHUNK_PAYLOAD;
-        let expected_last_len = if tail_len == 0 {
-            MAX_CHUNK_PAYLOAD
-        } else {
-            tail_len
-        };
-
-        self.payload_lengths[self.chunk_count - 1] == expected_last_len
+        Ok(ChunkResult::ReceivedAndComplete {
+            byte_offset,
+            complete,
+        })
     }
 }
 
