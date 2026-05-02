@@ -114,7 +114,7 @@ pub struct SwappingImageStorage<const PIXEL_COUNT: usize> {
     metadata: BitmapStorageMetadata,
     #[cfg(feature = "builtin-image")]
     builtin: &'static [RGB8; PIXEL_COUNT],
-    download_buf: [RGB8; PIXEL_COUNT],
+    image_from_flash: [RGB8; PIXEL_COUNT],
     #[cfg(feature = "builtin-image")]
     active: ActiveImage,
 }
@@ -126,7 +126,7 @@ impl<const PIXEL_COUNT: usize> SwappingImageStorage<PIXEL_COUNT> {
         Self {
             metadata,
             builtin,
-            download_buf: [RGB8::default(); PIXEL_COUNT],
+            image_from_flash: [RGB8::default(); PIXEL_COUNT],
             active: ActiveImage::Builtin,
         }
     }
@@ -138,7 +138,7 @@ impl<const PIXEL_COUNT: usize> SwappingImageStorage<PIXEL_COUNT> {
         assert!(metadata.pixel_count() == PIXEL_COUNT);
         Self {
             metadata,
-            download_buf: [RGB8::default(); PIXEL_COUNT],
+            image_from_flash: [RGB8::default(); PIXEL_COUNT],
         }
     }
 }
@@ -162,7 +162,7 @@ impl<const PIXEL_COUNT: usize> BitmapStorage for SwappingImageStorage<PIXEL_COUN
         }
         match self.active {
             ActiveImage::Builtin => Ok(Bitmap::new(self.metadata, self.builtin)),
-            ActiveImage::Downloaded => Ok(Bitmap::new(self.metadata, &self.download_buf)),
+            ActiveImage::Downloaded => Ok(Bitmap::new(self.metadata, &self.image_from_flash)),
         }
     }
 
@@ -173,7 +173,7 @@ impl<const PIXEL_COUNT: usize> BitmapStorage for SwappingImageStorage<PIXEL_COUN
                 bitmap_count: 1,
             });
         }
-        Ok(BitmapMut::new(self.metadata, &mut self.download_buf))
+        Ok(BitmapMut::new(self.metadata, &mut self.image_from_flash))
     }
 
     fn activate_builtin(&mut self) {
@@ -202,7 +202,7 @@ impl<const PIXEL_COUNT: usize> BitmapStorage for SwappingImageStorage<PIXEL_COUN
                 bitmap_count: 1,
             });
         }
-        Ok(Bitmap::new(self.metadata, &self.download_buf))
+        Ok(Bitmap::new(self.metadata, &self.image_from_flash))
     }
 
     fn bitmap_mut(&mut self, index: usize) -> Result<BitmapMut<'_>, BitmapError> {
@@ -212,7 +212,7 @@ impl<const PIXEL_COUNT: usize> BitmapStorage for SwappingImageStorage<PIXEL_COUN
                 bitmap_count: 1,
             });
         }
-        Ok(BitmapMut::new(self.metadata, &mut self.download_buf))
+        Ok(BitmapMut::new(self.metadata, &mut self.image_from_flash))
     }
 }
 

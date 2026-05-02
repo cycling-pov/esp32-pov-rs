@@ -11,7 +11,7 @@ cargo build -p esp-spoke-firmware
 
 This builds the project defaults. Use the `--features` flag to enable certain features like espnow and the waveshare matrix.
 
-During the build, the build script scans the `assets/` directory for PNG files and uses the first image it finds as the rendered source image.
+If the "builtin-image" feature is enabled, the build script scans the `assets/` directory for PNG files and uses the first image it finds as the rendered source image.
 
 If no image is found in `assets/`, the firmware falls back to a white display pattern.
 
