@@ -20,7 +20,7 @@ use crate::storage::config::ImageSlotState;
 
 pub const SK9822_LED_COUNT: usize = 30;
 
-const SK9822_RGB565_DECODE_SCRATCH_BYTES: usize = 1024 * 10;
+const SK9822_DECODE_SCRATCH_BYTES: usize = 1024 * 10;
 
 async fn load_flash_slot(
     slot: usize,
@@ -244,8 +244,8 @@ pub async fn sk9822_strip_task(mut led_strip: Sk9822Strip<'static, SK9822_LED_CO
         led_strip.timings()
     );
 
-    static DECODE_SCRATCH: StaticCell<[u8; SK9822_RGB565_DECODE_SCRATCH_BYTES]> = StaticCell::new();
-    let decode_scratch = DECODE_SCRATCH.init([0; SK9822_RGB565_DECODE_SCRATCH_BYTES]);
+    static DECODE_SCRATCH: StaticCell<[u8; SK9822_DECODE_SCRATCH_BYTES]> = StaticCell::new();
+    let decode_scratch = DECODE_SCRATCH.init([0; SK9822_DECODE_SCRATCH_BYTES]);
 
     let mut bitmap_store = generated_swapping_storage();
     let mut current_display_slot: Option<usize> = None;

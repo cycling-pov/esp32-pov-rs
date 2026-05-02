@@ -26,7 +26,7 @@ const WAVESHARE_MATRIX_BRIGHTNESS_LIMIT_PERCENT: u16 = 1;
 const WAVESHARE_MATRIX_LED_COUNT: usize = 64;
 const WAVESHARE_MATRIX_BUFFER_SIZE: usize = buffer_size(WAVESHARE_MATRIX_LED_COUNT);
 
-const WAVESHARE_RGB565_DECODE_SCRATCH_BYTES: usize = 1024 * 10;
+const WAVESHARE_DECODE_SCRATCH_BYTES: usize = 1024 * 10;
 
 async fn load_flash_slot(
     slot: usize,
@@ -216,9 +216,8 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
         led_strip.timings()
     );
 
-    static DECODE_SCRATCH: StaticCell<[u8; WAVESHARE_RGB565_DECODE_SCRATCH_BYTES]> =
-        StaticCell::new();
-    let decode_scratch = DECODE_SCRATCH.init([0; WAVESHARE_RGB565_DECODE_SCRATCH_BYTES]);
+    static DECODE_SCRATCH: StaticCell<[u8; WAVESHARE_DECODE_SCRATCH_BYTES]> = StaticCell::new();
+    let decode_scratch = DECODE_SCRATCH.init([0; WAVESHARE_DECODE_SCRATCH_BYTES]);
 
     let mut bitmap_store = generated_swapping_storage();
     let mut current_display_slot: Option<usize> = None;
