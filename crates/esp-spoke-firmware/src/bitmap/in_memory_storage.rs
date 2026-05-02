@@ -6,9 +6,12 @@ use crate::bitmap::{Bitmap, BitmapError, BitmapMut, BitmapStorage, BitmapStorage
 
 include!(concat!(env!("OUT_DIR"), "/asset_bitmap.rs"));
 
+#[cfg(feature = "builtin-image")]
 pub static BUILTIN_IMAGES: [[RGB8; GENERATED_BITMAP_PIXEL_COUNT]; 1] = [GENERATED_BITMAP];
+
 const DOWNLOADABLE_IMAGE_SLOTS: usize = 2;
 
+#[cfg(feature = "builtin-image")]
 pub fn generated_image_storage() -> Box<InMemoryImageStorage<1, GENERATED_BITMAP_PIXEL_COUNT>> {
     Box::new(InMemoryImageStorage::new(
         GENERATED_BITMAP_METADATA,
@@ -89,6 +92,8 @@ impl<const IMAGE_COUNT: usize, const PIXEL_COUNT: usize> BitmapStorage
 // ---------------------------------------------------------------------------
 
 /// Which pixels are currently returned by `bitmap(0)`.
+/// Only present when the `builtin-image` feature is enabled.
+#[cfg(feature = "builtin-image")]
 #[derive(Clone, Copy)]
 enum ActiveImage {
     Builtin,
@@ -99,16 +104,22 @@ enum ActiveImage {
 /// source can be switched between a static built-in image and a single
 /// in-memory download buffer.
 ///
+/// When the `builtin-image` feature is disabled, `bitmap(0)` always returns
+/// the download buffer — no built-in data is stored in ROM or RAM.
+///
 /// - `bitmap(0)` returns the active pixels (builtin or download buffer).
 /// - `bitmap_mut(0)` always returns the download buffer for writing.
 /// - `activate_builtin()` / `activate_downloaded()` select the source.
 pub struct SwappingImageStorage<const PIXEL_COUNT: usize> {
     metadata: BitmapStorageMetadata,
+    #[cfg(feature = "builtin-image")]
     builtin: &'static [RGB8; PIXEL_COUNT],
     download_buf: [RGB8; PIXEL_COUNT],
+    #[cfg(feature = "builtin-image")]
     active: ActiveImage,
 }
 
+#[cfg(feature = "builtin-image")]
 impl<const PIXEL_COUNT: usize> SwappingImageStorage<PIXEL_COUNT> {
     pub fn new(metadata: BitmapStorageMetadata, builtin: &'static [RGB8; PIXEL_COUNT]) -> Self {
         assert!(metadata.pixel_count() == PIXEL_COUNT);
@@ -121,6 +132,18 @@ impl<const PIXEL_COUNT: usize> SwappingImageStorage<PIXEL_COUNT> {
     }
 }
 
+#[cfg(not(feature = "builtin-image"))]
+impl<const PIXEL_COUNT: usize> SwappingImageStorage<PIXEL_COUNT> {
+    pub fn new(metadata: BitmapStorageMetadata) -> Self {
+        assert!(metadata.pixel_count() == PIXEL_COUNT);
+        Self {
+            metadata,
+            download_buf: [RGB8::default(); PIXEL_COUNT],
+        }
+    }
+}
+
+#[cfg(feature = "builtin-image")]
 impl<const PIXEL_COUNT: usize> BitmapStorage for SwappingImageStorage<PIXEL_COUNT> {
     fn metadata(&self) -> BitmapStorageMetadata {
         self.metadata
@@ -162,11 +185,50 @@ impl<const PIXEL_COUNT: usize> BitmapStorage for SwappingImageStorage<PIXEL_COUN
     }
 }
 
+#[cfg(not(feature = "builtin-image"))]
+impl<const PIXEL_COUNT: usize> BitmapStorage for SwappingImageStorage<PIXEL_COUNT> {
+    fn metadata(&self) -> BitmapStorageMetadata {
+        self.metadata
+    }
+
+    fn bitmap_count(&self) -> usize {
+        1
+    }
+
+    fn bitmap(&self, index: usize) -> Result<Bitmap<'_>, BitmapError> {
+        if index != 0 {
+            return Err(BitmapError::InvalidIndex {
+                index,
+                bitmap_count: 1,
+            });
+        }
+        Ok(Bitmap::new(self.metadata, &self.download_buf))
+    }
+
+    fn bitmap_mut(&mut self, index: usize) -> Result<BitmapMut<'_>, BitmapError> {
+        if index != 0 {
+            return Err(BitmapError::InvalidIndex {
+                index,
+                bitmap_count: 1,
+            });
+        }
+        Ok(BitmapMut::new(self.metadata, &mut self.download_buf))
+    }
+}
+
 /// Create a heap-allocated `SwappingImageStorage` initialised with the
 /// compile-time generated built-in image.
+#[cfg(feature = "builtin-image")]
 pub fn generated_swapping_storage() -> Box<SwappingImageStorage<GENERATED_BITMAP_PIXEL_COUNT>> {
     Box::new(SwappingImageStorage::new(
         GENERATED_BITMAP_METADATA,
         &BUILTIN_IMAGES[0],
     ))
+}
+
+/// Create a heap-allocated `SwappingImageStorage` with an empty download buffer.
+/// No built-in pixel data is allocated in ROM or RAM when `builtin-image` is off.
+#[cfg(not(feature = "builtin-image"))]
+pub fn generated_swapping_storage() -> Box<SwappingImageStorage<GENERATED_BITMAP_PIXEL_COUNT>> {
+    Box::new(SwappingImageStorage::new(GENERATED_BITMAP_METADATA))
 }

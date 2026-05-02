@@ -1,11 +1,17 @@
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+#[cfg(feature = "builtin-image")]
+use std::path::Path;
+use std::path::PathBuf;
 
 const GENERATED_BITMAP_WIDTH: u32 = 64;
 const GENERATED_BITMAP_HEIGHT: u32 = 64;
 
 fn main() {
+    #[cfg(feature = "builtin-image")]
     generate_asset_bitmap();
+    #[cfg(not(feature = "builtin-image"))]
+    generate_no_builtin_stub();
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_BUILTIN_IMAGE");
     copy_partition_table();
     linker_be_nice();
     println!("cargo:rustc-link-arg=-Tdefmt.x");
@@ -44,6 +50,7 @@ fn copy_partition_table() {
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_FLASH_4MB");
 }
 
+#[cfg(feature = "builtin-image")]
 fn generate_asset_bitmap() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("missing manifest dir");
     let assets_dir = Path::new(&manifest_dir).join("assets");
@@ -64,6 +71,7 @@ fn generate_asset_bitmap() {
         .unwrap_or_else(|error| panic!("failed to write {}: {error}", output_path.display()));
 }
 
+#[cfg(feature = "builtin-image")]
 fn asset_png_paths(assets_dir: &Path) -> Vec<PathBuf> {
     let mut image_paths = Vec::new();
 
@@ -89,6 +97,7 @@ fn asset_png_paths(assets_dir: &Path) -> Vec<PathBuf> {
     image_paths
 }
 
+#[cfg(feature = "builtin-image")]
 fn generate_bitmap_source_from_png(png_path: &Path) -> String {
     let image = image::ImageReader::open(png_path)
         .unwrap_or_else(|error| panic!("failed to open {}: {error}", png_path.display()))
@@ -142,6 +151,7 @@ fn generate_bitmap_source_from_png(png_path: &Path) -> String {
     generated
 }
 
+#[cfg(feature = "builtin-image")]
 fn generate_off_bitmap_source() -> String {
     let mut generated = String::new();
 
@@ -164,6 +174,31 @@ fn generate_off_bitmap_source() -> String {
     .expect("failed to write fallback pixel array");
 
     generated
+}
+
+/// Generate a stub `asset_bitmap.rs` when the `builtin-image` feature is off.
+/// Only metadata constants are emitted — no pixel array — so there is no ROM or RAM cost.
+#[cfg(not(feature = "builtin-image"))]
+fn generate_no_builtin_stub() {
+    let out_dir = std::env::var("OUT_DIR").expect("missing OUT_DIR");
+    let output_path = std::path::Path::new(&out_dir).join("asset_bitmap.rs");
+
+    let mut generated = String::new();
+    writeln!(
+        &mut generated,
+        "pub const GENERATED_BITMAP_METADATA: BitmapStorageMetadata = BitmapStorageMetadata {{ width: {}, height: {} }};",
+        GENERATED_BITMAP_WIDTH,
+        GENERATED_BITMAP_HEIGHT
+    )
+    .expect("failed to write stub metadata");
+    writeln!(
+        &mut generated,
+        "pub const GENERATED_BITMAP_PIXEL_COUNT: usize = GENERATED_BITMAP_METADATA.pixel_count();"
+    )
+    .expect("failed to write stub pixel count");
+
+    std::fs::write(&output_path, generated)
+        .unwrap_or_else(|error| panic!("failed to write {}: {error}", output_path.display()));
 }
 
 fn linker_be_nice() {

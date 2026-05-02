@@ -26,6 +26,7 @@ coexistence = ["esp-radio/coex"]
 usb-serial = []
 flash-4mb = []
 flash-16mb = []
+builtin-image = ["dep:image"]
 
 [dependencies]
 esp-hal = { version = "~1.0", features = ["defmt", "esp32s3", "unstable"] }
@@ -89,4 +90,6 @@ serde = { version = "1", default-features = false, features = ["derive"] }
 opt-level = 3
 
 [build-dependencies]
-image = { version = "0.25.6", default-features = false, features = ["png"] }
+image = { version = "0.25.6", default-features = false, features = [
+    "png",
+], optional = true }
