@@ -8,19 +8,21 @@ use esp_hal::{
     rng::Rng,
     spi::master::SpiDma,
 };
-use pov_proto::image::{DecodeMode, decode_into_rgb8};
+use pov_proto::image::{DecodeMode, Encoding, decode_into_rgb8};
 use pov_proto::transfer::SpokeCommand;
 use smart_leds_trait::RGB8;
 use static_cell::StaticCell;
 
-use crate::bitmap::{BitmapStorage, generated_swapping_storage};
+use crate::bitmap::{BitmapStorage, BitmapStorageMetadata, generated_swapping_storage};
 use crate::led::{LedCommand, LedError, LedStrip, LedTimings};
 use crate::storage;
 use crate::storage::config::ImageSlotState;
 
 pub const SK9822_LED_COUNT: usize = 30;
 
-const SK9822_DECODE_SCRATCH_BYTES: usize = 1024 * 10;
+// Must be large enough to hold the largest decompressed pixel payload:
+// polar 30×360×3 = 32 400 bytes; Cartesian 64×64×3 = 12 288 bytes.
+const SK9822_DECODE_SCRATCH_BYTES: usize = 1024 * 34;
 
 async fn load_flash_slot(
     slot: usize,
@@ -28,28 +30,42 @@ async fn load_flash_slot(
     decode_scratch: &mut [u8],
 ) -> bool {
     let state = storage::get_slot_state(slot).await;
-    if let ImageSlotState::Valid { .. } = state {
-        match storage::read_slot_data(slot).await {
-            Ok(img_bytes) => {
-                if let Ok(mut writable) = bitmap_store.bitmap_mut(0) {
-                    match decode_into_rgb8(
-                        &img_bytes,
-                        decode_scratch,
-                        writable.pixels_mut(),
-                        DecodeMode::ExactPixels,
-                    ) {
-                        Ok(_) => {
-                            bitmap_store.activate_downloaded();
-                            return true;
-                        }
-                        Err(err) => {
-                            info!("sk9822:load flash slot {} decode error: {:?}", slot, err);
-                        }
+    let encoding = match state {
+        ImageSlotState::Valid { encoding, .. } => encoding,
+        _ => return false,
+    };
+
+    // Determine pixel dimensions from encoding and update the download buffer
+    // metadata *before* calling bitmap_mut so the latter returns the right
+    // slice length for decode_into_rgb8.
+    let (width, height) = match encoding {
+        Encoding::Rgb888Deflate => (64usize, 64usize),
+        Encoding::PolarRgb888Deflate { leds, radials } => {
+            (leds as usize, radials as usize)
+        }
+    };
+    bitmap_store.set_downloaded_metadata(BitmapStorageMetadata { width, height });
+
+    match storage::read_slot_data(slot).await {
+        Ok(img_bytes) => {
+            if let Ok(mut writable) = bitmap_store.bitmap_mut(0) {
+                match decode_into_rgb8(
+                    &img_bytes,
+                    decode_scratch,
+                    writable.pixels_mut(),
+                    DecodeMode::ExactPixels,
+                ) {
+                    Ok(_) => {
+                        bitmap_store.activate_downloaded();
+                        return true;
+                    }
+                    Err(err) => {
+                        info!("sk9822:load flash slot {} decode error: {:?}", slot, err);
                     }
                 }
             }
-            Err(()) => info!("sk9822:load flash slot {} read error", slot),
         }
+        Err(()) => info!("sk9822:load flash slot {} read error", slot),
     }
     false
 }

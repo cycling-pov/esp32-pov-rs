@@ -88,6 +88,19 @@ impl<'a> BitmapMut<'a> {
         Self { metadata, pixels }
     }
 
+    /// Like `new`, but requires only that `pixels.len() >= metadata.pixel_count()`.
+    /// Only the first `metadata.pixel_count()` elements of `pixels` are stored.
+    /// Use this when the backing buffer is larger than the image being loaded
+    /// (e.g. a max-capacity buffer that holds both Cartesian and polar images).
+    pub fn new_with_capacity(metadata: BitmapStorageMetadata, pixels: &'a mut [RGB8]) -> Self {
+        let pixel_count = metadata.pixel_count();
+        assert!(pixels.len() >= pixel_count);
+        Self {
+            metadata,
+            pixels: &mut pixels[..pixel_count],
+        }
+    }
+
     pub fn as_bitmap(&self) -> Bitmap<'_> {
         Bitmap::new(self.metadata, self.pixels)
     }
@@ -146,4 +159,10 @@ pub trait BitmapStorage {
     /// Switch the active bitmap to the decoded download buffer.
     /// Implementations that do not support swapping may ignore this.
     fn activate_downloaded(&mut self) {}
+
+    /// Update the metadata (dimensions) of the download slot.
+    /// Called before decoding a newly downloaded image so that `bitmap()`
+    /// returns the correct width/height for the stored format.
+    /// Implementations that do not support swapping may ignore this.
+    fn set_downloaded_metadata(&mut self, _metadata: BitmapStorageMetadata) {}
 }

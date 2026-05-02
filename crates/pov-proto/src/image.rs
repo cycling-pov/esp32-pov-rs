@@ -6,7 +6,9 @@ pub const MAGIC: [u8; 3] = *b"POV";
 /// Wire format version.
 pub const WIRE_VERSION: u8 = 1;
 
-/// Fixed byte length of the image payload header (`MAGIC` + version + encoding).
+/// Minimum byte length of the image payload header (`MAGIC` + version + encoding
+/// discriminant).  Variable-length encoding variants may produce headers larger
+/// than this; the full header is always parsed via `postcard::take_from_bytes`.
 pub const HEADER_LEN: usize = 5;
 
 // ---------------------------------------------------------------------------
@@ -17,9 +19,20 @@ pub const HEADER_LEN: usize = 5;
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Encoding {
-    /// 24-bit RGB888 pixels compressed with zlib (DEFLATE + zlib header/
-    /// trailer, matching Python's `zlib.compress()`).
+    /// 24-bit RGB888 pixels laid out in row-major Cartesian (x, y) order,
+    /// compressed with zlib (DEFLATE + zlib header/trailer, matching Python's
+    /// `zlib.compress()`).
     Rgb888Deflate,
+    /// 24-bit RGB888 pixels laid out in polar order: `pixels[radial][led]`,
+    /// where `radial` is the angular position index (0 = 0°, `radials - 1` ≈
+    /// 360°) and `led` is the LED index along the spoke (0 = centre).
+    /// Compressed with zlib, same as `Rgb888Deflate`.
+    PolarRgb888Deflate {
+        /// Number of LEDs per radial strip (spoke length).
+        leds: u8,
+        /// Number of angular positions (radial strips) in the image.
+        radials: u16,
+    },
 }
 
 /// Wire representation of the image payload header.
@@ -147,6 +160,38 @@ pub fn decode_into_rgb8(
             decode_rgb888_to_rgb8(&scratch[..decoded_len], output, mode)?;
             Ok(Encoding::Rgb888Deflate)
         }
+        Encoding::PolarRgb888Deflate { leds, radials } => {
+            let pixel_count = leds as usize * radials as usize;
+            let max_raw = pixel_count * 3;
+            if scratch.len() < max_raw {
+                return Err(ImageWireError::ScratchTooSmall {
+                    needed: max_raw,
+                    actual: scratch.len(),
+                });
+            }
+            if output.len() != pixel_count {
+                return Err(ImageWireError::InvalidDecompressedLength {
+                    needed: pixel_count,
+                    actual: output.len(),
+                });
+            }
+
+            let decoded_len = match decompress_slice_iter_to_slice(
+                &mut scratch[..max_raw],
+                iter::once(image_payload),
+                true,
+                true,
+            ) {
+                Ok(n) => n,
+                Err(TINFLStatus::HasMoreOutput) => {
+                    return Err(ImageWireError::DeflateOutputTooLarge { max: max_raw });
+                }
+                Err(_) => return Err(ImageWireError::DeflateDecompressionFailed),
+            };
+
+            decode_rgb888_to_rgb8(&scratch[..decoded_len], output, DecodeMode::ExactPixels)?;
+            Ok(Encoding::PolarRgb888Deflate { leds, radials })
+        }
     }
 }
 
@@ -232,7 +277,7 @@ pub fn encode_rgb888_to_wire(rgb888: &[u8]) -> Result<Vec<u8>, ImageWireError> {
         encoding: Encoding::Rgb888Deflate,
     };
     let mut hdr_buf = [0u8; HEADER_LEN];
-    // ImageHeader always serializes to exactly HEADER_LEN bytes.
+    // Rgb888Deflate header serializes to exactly HEADER_LEN bytes.
     postcard::to_slice(&hdr, &mut hdr_buf).map_err(|_| ImageWireError::OutputBufferTooSmall {
         needed: HEADER_LEN,
         actual: 0,
@@ -240,6 +285,45 @@ pub fn encode_rgb888_to_wire(rgb888: &[u8]) -> Result<Vec<u8>, ImageWireError> {
 
     let mut out = Vec::with_capacity(HEADER_LEN + compressed.len());
     out.extend_from_slice(&hdr_buf);
+    out.extend_from_slice(&compressed);
+    Ok(out)
+}
+
+/// Encode polar RGB888 pixels into a framed image wire payload.
+///
+/// `pixels` must be `leds * radials * 3` bytes laid out as
+/// `pixels[radial * leds * 3 + led * 3 ..]` (radial-major, RGB888 per LED).
+///
+/// Compression uses zlib format (DEFLATE + zlib header/trailer) at level 9.
+#[cfg(feature = "image-encode")]
+pub fn encode_polar_rgb888_to_wire(
+    pixels: &[u8],
+    leds: u8,
+    radials: u16,
+) -> Result<Vec<u8>, ImageWireError> {
+    let expected_len = leds as usize * radials as usize * 3;
+    if pixels.len() != expected_len {
+        return Err(ImageWireError::InvalidRgb888Length { len: pixels.len() });
+    }
+
+    let compressed = compress_to_vec_zlib(pixels, 9);
+
+    let hdr = ImageHeader {
+        magic: MAGIC,
+        version: WIRE_VERSION,
+        encoding: Encoding::PolarRgb888Deflate { leds, radials },
+    };
+    // PolarRgb888Deflate header is larger than HEADER_LEN; use a 16-byte buffer.
+    let mut hdr_buf = [0u8; 16];
+    let hdr_bytes = postcard::to_slice(&hdr, &mut hdr_buf).map_err(|_| {
+        ImageWireError::OutputBufferTooSmall {
+            needed: 16,
+            actual: 0,
+        }
+    })?;
+
+    let mut out = Vec::with_capacity(hdr_bytes.len() + compressed.len());
+    out.extend_from_slice(hdr_bytes);
     out.extend_from_slice(&compressed);
     Ok(out)
 }

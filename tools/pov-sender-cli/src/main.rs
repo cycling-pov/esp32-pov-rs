@@ -10,7 +10,7 @@ use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
 use pov_proto::{
     bridge::{BridgeFrame, TransportSelector},
-    image::encode_rgb888_to_wire,
+    image::{encode_polar_rgb888_to_wire, encode_rgb888_to_wire},
     transfer::{ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand, encode_packet},
 };
 use rand::seq::SliceRandom;
@@ -24,6 +24,11 @@ const BLE_CHUNK_PAYLOAD_BYTES: usize = 224;
 /// Must be large enough to hold a postcard-encoded pov-proto packet whose
 /// payload is up to ESPNOW_CHUNK_PAYLOAD_BYTES bytes (~1490 bytes max).
 const SERIAL_TX_BUF_BYTES: usize = 1600;
+
+/// LED count per radial strip when encoding in polar format.
+const POLAR_LEDS: usize = 30;
+/// Number of angular positions (radials) when encoding in polar format.
+const POLAR_RADIALS: usize = 360;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum Transport {
@@ -73,11 +78,23 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Send an image update (resized to 64x64).
+    /// Send an image update.
+    /// By default the image is resized to 64×64 and encoded in Cartesian format.
+    /// With --polar the image is pre-converted to polar coordinates instead.
     SendImage {
         /// Path to the image file (PNG, JPEG, ...)
         #[arg(short, long)]
         image: PathBuf,
+
+        /// Pre-convert the image to polar (radial × angular) coordinates before
+        /// encoding.  Requires --radii-file.
+        #[arg(long, default_value_t = false)]
+        polar: bool,
+
+        /// Path to a text file with one radius value per line (0.0–1.0).
+        /// Required with --polar; must supply exactly 30 lines.
+        #[arg(long)]
+        radii_file: Option<PathBuf>,
     },
     /// Send a raw file as a typed download payload.
     SendDownload {
@@ -119,15 +136,75 @@ fn main() -> anyhow::Result<()> {
     let mut packets: Vec<Vec<u8>> = Vec::new();
 
     match args.command {
-        Command::SendImage { image } => {
-            let img =
-                image::open(&image).with_context(|| format!("Failed to open image {:?}", image))?;
-            let resized = img.resize_exact(64, 64, image::imageops::FilterType::Lanczos3);
-            let pixels: Vec<u8> = resized.to_rgb8().into_raw();
+        Command::SendImage {
+            image,
+            polar,
+            radii_file,
+        } => {
+            let wire_bytes = if polar {
+                // --- polar path ---
+                if let Some(path) = radii_file {
+                    let content = fs::read_to_string(&path)
+                        .with_context(|| format!("Failed to read radii file {:?}", path))?;
+                    content
+                        .lines()
+                        .filter(|l| !l.trim().is_empty())
+                        .map(|l| {
+                            l.trim()
+                                .parse::<f32>()
+                                .with_context(|| format!("Invalid radius value {:?}", l))
+                        })
+                        .collect::<anyhow::Result<Vec<f32>>>()?
+                } else {
+                    anyhow::bail!("--polar requires --radii-file");
+                };
 
-            let wire_bytes = encode_rgb888_to_wire(&pixels).map_err(|e| {
-                anyhow::anyhow!("Failed to encode image to pov-proto wire format: {:?}", e)
-            })?;
+                if radius_values.len() != POLAR_LEDS {
+                    anyhow::bail!(
+                        "--polar requires exactly {} radius values, got {}",
+                        POLAR_LEDS,
+                        radius_values.len()
+                    );
+                }
+
+                let img = image::open(&image)
+                    .with_context(|| format!("Failed to open image {:?}", image))?
+                    .into_rgba8();
+
+                let polar_bitmap = pov_images::polar_from_image::<POLAR_LEDS, POLAR_RADIALS>(
+                    &img,
+                    &radius_values,
+                );
+
+                // Flatten: pixels[radial][led] → [r, g, b, r, g, b, ...]
+                let mut raw: Vec<u8> =
+                    Vec::with_capacity(POLAR_LEDS * POLAR_RADIALS * 3);
+                for strip in &polar_bitmap.pixels {
+                    for px in strip {
+                        raw.push(px.red);
+                        raw.push(px.green);
+                        raw.push(px.blue);
+                    }
+                }
+
+                println!(
+                    "Polar-converted {:?}: {} LEDs × {} radials",
+                    image, POLAR_LEDS, POLAR_RADIALS
+                );
+
+                encode_polar_rgb888_to_wire(&raw, POLAR_LEDS as u8, POLAR_RADIALS as u16)
+                    .map_err(|e| anyhow::anyhow!("Failed to encode polar image: {:?}", e))?
+            } else {
+                // --- Cartesian path (original) ---
+                let img = image::open(&image)
+                    .with_context(|| format!("Failed to open image {:?}", image))?;
+                let resized = img.resize_exact(64, 64, image::imageops::FilterType::Lanczos3);
+                let pixels: Vec<u8> = resized.to_rgb8().into_raw();
+
+                encode_rgb888_to_wire(&pixels).map_err(|e| {
+                    anyhow::anyhow!("Failed to encode image to pov-proto wire format: {:?}", e)
+                })?
+            };
 
             let iter = ChunkIter::new(
                 &wire_bytes,

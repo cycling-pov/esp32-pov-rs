@@ -886,6 +886,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "pov-algs"
+version = "0.1.0"
+dependencies = [
+ "zerocopy",
+]
+
+[[package]]
+name = "pov-images"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "pov-algs",
+]
+
+[[package]]
 name = "pov-proto"
 version = "0.1.0"
 dependencies = [
@@ -903,6 +918,8 @@ dependencies = [
  "clap",
  "image",
  "postcard",
+ "pov-algs",
+ "pov-images",
  "pov-proto",
  "rand 0.8.5",
  "serialport",

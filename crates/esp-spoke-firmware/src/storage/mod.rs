@@ -469,10 +469,11 @@ async fn commit_slot_inner(
     }
 
     // 2. Read the image header to extract the encoding.
-    //    Header layout: magic[3] + version[1] + encoding[1] = 5 bytes.
-    //    Read 8 bytes (word-aligned) and inspect the first 5.
-    let mut header_buf = [0u8; 8];
-    if store.read_raw(flash, 8, &mut header_buf).await.is_err() {
+    //    The header is variable-length: magic[3] + version[1] + encoding (1–4 bytes
+    //    depending on the variant).  Read 16 bytes (word-aligned) to cover any
+    //    current or future encoding variant.
+    let mut header_buf = [0u8; 16];
+    if store.read_raw(flash, 16, &mut header_buf).await.is_err() {
         warn!("storage:commit_slot header read failed slot={}", slot);
         config_store
             .set_slot_state(flash, slot, &ImageSlotState::Empty, config_scratch)
@@ -483,7 +484,6 @@ async fn commit_slot_inner(
 
     let magic = &header_buf[..3];
     let version = header_buf[3];
-    let encoding_byte = header_buf[4];
 
     if magic != b"POV" || version != 1 {
         warn!(
@@ -497,12 +497,16 @@ async fn commit_slot_inner(
         return Err(());
     }
 
-    let encoding = postcard::from_bytes::<Encoding>(&[encoding_byte]).map_err(|_| {
-        warn!(
-            "storage:commit_slot unknown encoding byte={} slot={}",
-            encoding_byte, slot
-        );
-    })?;
+    // Use take_from_bytes so variable-length encoding variants (e.g.
+    // PolarRgb888Deflate with embedded leds/radials fields) are parsed correctly.
+    let encoding = postcard::take_from_bytes::<Encoding>(&header_buf[4..])
+        .map(|(enc, _)| enc)
+        .map_err(|_| {
+            warn!(
+                "storage:commit_slot unknown encoding slot={} header={=[u8]:?}",
+                slot, &header_buf[4..8]
+            );
+        })?;
 
     // 3. Map DownloadKind → ImageKind.
     let image_kind = match kind {

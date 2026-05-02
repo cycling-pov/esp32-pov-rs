@@ -6,6 +6,17 @@ use crate::bitmap::{Bitmap, BitmapError, BitmapMut, BitmapStorage, BitmapStorage
 
 include!(concat!(env!("OUT_DIR"), "/asset_bitmap.rs"));
 
+/// Maximum pixel count for the download buffer: enough to hold a full polar
+/// image (30 LEDs × 360 radials = 10 800 pixels) or a 64×64 Cartesian image
+/// (4 096 pixels).
+pub const MAX_POLAR_PIXEL_COUNT: usize = 30 * 360;
+
+// Sanity: the built-in image must fit in the download buffer.
+const _: () = assert!(
+    GENERATED_BITMAP_PIXEL_COUNT <= MAX_POLAR_PIXEL_COUNT,
+    "GENERATED_BITMAP_PIXEL_COUNT exceeds MAX_POLAR_PIXEL_COUNT",
+);
+
 #[cfg(feature = "builtin-image")]
 pub static BUILTIN_IMAGES: [[RGB8; GENERATED_BITMAP_PIXEL_COUNT]; 1] = [GENERATED_BITMAP];
 
@@ -104,49 +115,59 @@ enum ActiveImage {
 /// source can be switched between a static built-in image and a single
 /// in-memory download buffer.
 ///
-/// When the `builtin-image` feature is disabled, `bitmap(0)` always returns
-/// the download buffer — no built-in data is stored in ROM or RAM.
+/// `MAX_DOWNLOAD_PIXELS` is the capacity of the download buffer; it must be
+/// large enough for the largest image format (use `MAX_POLAR_PIXEL_COUNT`).
+/// Both 64×64 Cartesian images and 30×360 polar images fit within this limit.
 ///
-/// - `bitmap(0)` returns the active pixels (builtin or download buffer).
-/// - `bitmap_mut(0)` always returns the download buffer for writing.
-/// - `activate_builtin()` / `activate_downloaded()` select the source.
-pub struct SwappingImageStorage<const PIXEL_COUNT: usize> {
-    metadata: BitmapStorageMetadata,
+/// The download buffer's active pixel count is tracked separately via
+/// `downloaded_metadata`, which is updated by `set_downloaded_metadata` before
+/// each new image is decoded into the buffer.
+pub struct SwappingImageStorage<const MAX_DOWNLOAD_PIXELS: usize> {
     #[cfg(feature = "builtin-image")]
-    builtin: &'static [RGB8; PIXEL_COUNT],
-    image_from_flash: [RGB8; PIXEL_COUNT],
+    builtin_metadata: BitmapStorageMetadata,
+    downloaded_metadata: BitmapStorageMetadata,
+    #[cfg(feature = "builtin-image")]
+    builtin: &'static [RGB8],
+    image_from_flash: [RGB8; MAX_DOWNLOAD_PIXELS],
     #[cfg(feature = "builtin-image")]
     active: ActiveImage,
 }
 
 #[cfg(feature = "builtin-image")]
-impl<const PIXEL_COUNT: usize> SwappingImageStorage<PIXEL_COUNT> {
-    pub fn new(metadata: BitmapStorageMetadata, builtin: &'static [RGB8; PIXEL_COUNT]) -> Self {
-        assert!(metadata.pixel_count() == PIXEL_COUNT);
+impl<const MAX_DOWNLOAD_PIXELS: usize> SwappingImageStorage<MAX_DOWNLOAD_PIXELS> {
+    pub fn new(
+        builtin_metadata: BitmapStorageMetadata,
+        builtin: &'static [RGB8],
+    ) -> Self {
+        assert!(builtin.len() == builtin_metadata.pixel_count());
+        assert!(MAX_DOWNLOAD_PIXELS >= builtin_metadata.pixel_count());
         Self {
-            metadata,
+            builtin_metadata,
+            downloaded_metadata: builtin_metadata,
             builtin,
-            image_from_flash: [RGB8::default(); PIXEL_COUNT],
+            image_from_flash: [RGB8::default(); MAX_DOWNLOAD_PIXELS],
             active: ActiveImage::Builtin,
         }
     }
 }
 
 #[cfg(not(feature = "builtin-image"))]
-impl<const PIXEL_COUNT: usize> SwappingImageStorage<PIXEL_COUNT> {
-    pub fn new(metadata: BitmapStorageMetadata) -> Self {
-        assert!(metadata.pixel_count() == PIXEL_COUNT);
+impl<const MAX_DOWNLOAD_PIXELS: usize> SwappingImageStorage<MAX_DOWNLOAD_PIXELS> {
+    pub fn new(builtin_metadata: BitmapStorageMetadata) -> Self {
         Self {
-            metadata,
-            image_from_flash: [RGB8::default(); PIXEL_COUNT],
+            downloaded_metadata: builtin_metadata,
+            image_from_flash: [RGB8::default(); MAX_DOWNLOAD_PIXELS],
         }
     }
 }
 
 #[cfg(feature = "builtin-image")]
-impl<const PIXEL_COUNT: usize> BitmapStorage for SwappingImageStorage<PIXEL_COUNT> {
+impl<const MAX_DOWNLOAD_PIXELS: usize> BitmapStorage for SwappingImageStorage<MAX_DOWNLOAD_PIXELS> {
     fn metadata(&self) -> BitmapStorageMetadata {
-        self.metadata
+        match self.active {
+            ActiveImage::Builtin => self.builtin_metadata,
+            ActiveImage::Downloaded => self.downloaded_metadata,
+        }
     }
 
     fn bitmap_count(&self) -> usize {
@@ -161,8 +182,14 @@ impl<const PIXEL_COUNT: usize> BitmapStorage for SwappingImageStorage<PIXEL_COUN
             });
         }
         match self.active {
-            ActiveImage::Builtin => Ok(Bitmap::new(self.metadata, self.builtin)),
-            ActiveImage::Downloaded => Ok(Bitmap::new(self.metadata, &self.image_from_flash)),
+            ActiveImage::Builtin => Ok(Bitmap::new(self.builtin_metadata, self.builtin)),
+            ActiveImage::Downloaded => {
+                let pixel_count = self.downloaded_metadata.pixel_count();
+                Ok(Bitmap::new(
+                    self.downloaded_metadata,
+                    &self.image_from_flash[..pixel_count],
+                ))
+            }
         }
     }
 
@@ -173,7 +200,11 @@ impl<const PIXEL_COUNT: usize> BitmapStorage for SwappingImageStorage<PIXEL_COUN
                 bitmap_count: 1,
             });
         }
-        Ok(BitmapMut::new(self.metadata, &mut self.image_from_flash))
+        // new_with_capacity asserts image_from_flash.len() >= downloaded_metadata.pixel_count()
+        Ok(BitmapMut::new_with_capacity(
+            self.downloaded_metadata,
+            &mut self.image_from_flash,
+        ))
     }
 
     fn activate_builtin(&mut self) {
@@ -183,12 +214,22 @@ impl<const PIXEL_COUNT: usize> BitmapStorage for SwappingImageStorage<PIXEL_COUN
     fn activate_downloaded(&mut self) {
         self.active = ActiveImage::Downloaded;
     }
+
+    fn set_downloaded_metadata(&mut self, metadata: BitmapStorageMetadata) {
+        assert!(
+            MAX_DOWNLOAD_PIXELS >= metadata.pixel_count(),
+            "downloaded image pixel_count {} exceeds buffer capacity {}",
+            metadata.pixel_count(),
+            MAX_DOWNLOAD_PIXELS
+        );
+        self.downloaded_metadata = metadata;
+    }
 }
 
 #[cfg(not(feature = "builtin-image"))]
-impl<const PIXEL_COUNT: usize> BitmapStorage for SwappingImageStorage<PIXEL_COUNT> {
+impl<const MAX_DOWNLOAD_PIXELS: usize> BitmapStorage for SwappingImageStorage<MAX_DOWNLOAD_PIXELS> {
     fn metadata(&self) -> BitmapStorageMetadata {
-        self.metadata
+        self.downloaded_metadata
     }
 
     fn bitmap_count(&self) -> usize {
@@ -202,7 +243,11 @@ impl<const PIXEL_COUNT: usize> BitmapStorage for SwappingImageStorage<PIXEL_COUN
                 bitmap_count: 1,
             });
         }
-        Ok(Bitmap::new(self.metadata, &self.image_from_flash))
+        let pixel_count = self.downloaded_metadata.pixel_count();
+        Ok(Bitmap::new(
+            self.downloaded_metadata,
+            &self.image_from_flash[..pixel_count],
+        ))
     }
 
     fn bitmap_mut(&mut self, index: usize) -> Result<BitmapMut<'_>, BitmapError> {
@@ -212,14 +257,29 @@ impl<const PIXEL_COUNT: usize> BitmapStorage for SwappingImageStorage<PIXEL_COUN
                 bitmap_count: 1,
             });
         }
-        Ok(BitmapMut::new(self.metadata, &mut self.image_from_flash))
+        Ok(BitmapMut::new_with_capacity(
+            self.downloaded_metadata,
+            &mut self.image_from_flash,
+        ))
+    }
+
+    fn set_downloaded_metadata(&mut self, metadata: BitmapStorageMetadata) {
+        assert!(
+            MAX_DOWNLOAD_PIXELS >= metadata.pixel_count(),
+            "downloaded image pixel_count {} exceeds buffer capacity {}",
+            metadata.pixel_count(),
+            MAX_DOWNLOAD_PIXELS
+        );
+        self.downloaded_metadata = metadata;
     }
 }
 
 /// Create a heap-allocated `SwappingImageStorage` initialised with the
-/// compile-time generated built-in image.
+/// compile-time generated built-in image.  The download buffer is sized to
+/// `MAX_POLAR_PIXEL_COUNT` so it can hold both Cartesian (64×64 = 4 096) and
+/// polar (30×360 = 10 800) images.
 #[cfg(feature = "builtin-image")]
-pub fn generated_swapping_storage() -> Box<SwappingImageStorage<GENERATED_BITMAP_PIXEL_COUNT>> {
+pub fn generated_swapping_storage() -> Box<SwappingImageStorage<MAX_POLAR_PIXEL_COUNT>> {
     Box::new(SwappingImageStorage::new(
         GENERATED_BITMAP_METADATA,
         &BUILTIN_IMAGES[0],
@@ -229,6 +289,6 @@ pub fn generated_swapping_storage() -> Box<SwappingImageStorage<GENERATED_BITMAP
 /// Create a heap-allocated `SwappingImageStorage` with an empty download buffer.
 /// No built-in pixel data is allocated in ROM or RAM when `builtin-image` is off.
 #[cfg(not(feature = "builtin-image"))]
-pub fn generated_swapping_storage() -> Box<SwappingImageStorage<GENERATED_BITMAP_PIXEL_COUNT>> {
+pub fn generated_swapping_storage() -> Box<SwappingImageStorage<MAX_POLAR_PIXEL_COUNT>> {
     Box::new(SwappingImageStorage::new(GENERATED_BITMAP_METADATA))
 }
