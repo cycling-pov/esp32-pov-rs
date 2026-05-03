@@ -43,7 +43,7 @@ impl ImageState {
                     image: Box::new(VideoRotation::new(
                         frames_from_file(&c.path, geometry.led_unit_positions())
                             .into_iter()
-                            .map(|x| Arc::new(x))
+                            .map(Arc::new)
                             .collect(),
                     )),
                 },
@@ -52,7 +52,7 @@ impl ImageState {
                     image: Box::new(VideoTime::new(
                         frames_from_file(&c.path, geometry.led_unit_positions())
                             .into_iter()
-                            .map(|x| Arc::new(x))
+                            .map(Arc::new)
                             .collect(),
                         Duration::from_secs_f64(dt),
                     )),
@@ -63,7 +63,7 @@ impl ImageState {
         }
 
         Self {
-            selections: selections,
+            selections,
             index: 0,
         }
     }
