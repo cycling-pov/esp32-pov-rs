@@ -1,0 +1,50 @@
+repos:
+  - repo: local
+    hooks:
+      - id: esp-fmt
+        name: fmt (esp workspace)
+        language: system
+        entry: cargo fmt --all -- --check
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
+      - id: esp-clippy
+        name: clippy (esp workspace)
+        language: system
+        entry: cargo clippy --all-features --workspace -- -D warnings
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
+      - id: sender-fmt
+        name: fmt (pov-sender-cli)
+        language: system
+        entry: "bash -lc 'cd tools/pov-sender-cli && cargo fmt --all -- --check'"
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
+      - id: sender-clippy
+        name: clippy (pov-sender-cli)
+        language: system
+        entry: "bash -lc 'cd tools/pov-sender-cli && cargo clippy --all-features --workspace -- -D warnings'"
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
+      - id: sim-fmt
+        name: fmt (pov-sim)
+        language: system
+        entry: "bash -lc 'cd tools/pov-sim && cargo fmt --all -- --check'"
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
+      - id: sim-clippy
+        name: clippy (pov-sim)
+        language: system
+        entry: "bash -lc 'cd tools/pov-sim && cargo clippy --all-features --workspace -- -D warnings'"
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]

@@ -82,3 +82,27 @@ See each component README for flashing and runtime details.
 ## 4. Build and Run Host CLI
 
 The sender CLI lives outside the firmware workspace and uses its own toolchain/target configuration, see [README-pov-sender-cli.md](README-pov-sender-cli.md).
+
+## 5. Local Commit Hooks (pre-commit and prek)
+
+This repository provides a `.pre-commit-config.yaml` config.
+
+- Root ESP workspace: `cargo fmt --all -- --check` and `cargo clippy --all-features --workspace -- -D warnings`
+- `tools/pov-sender-cli`: `cargo fmt --all -- --check` and `cargo clippy --all-features --workspace -- -D warnings`
+- `tools/pov-sim`: `cargo fmt --all -- --check` and `cargo clippy --all-features --workspace -- -D warnings`
+
+### Install and run with pre-commit
+
+```sh
+pre-commit install
+pre-commit run --all-files
+```
+
+### Install and run with prek
+
+```sh
+prek install
+prek run --all-files
+```
+
+The hooks intentionally run commands from each crate area's directory so ESP crates use the ESP toolchain at repo root, while tools crates use their local stable host configuration.
