@@ -14,7 +14,7 @@ use smart_leds_trait::{RGB8, SmartLedsWrite as _};
 use static_cell::StaticCell;
 
 use crate::bitmap::{BitmapStorage, generated_swapping_storage};
-use crate::led::{LedCommand, LedError, LedStrip, LedTimings};
+use crate::led::{LedBrightness, LedCommand, LedError, LedStrip, LedTimings};
 use crate::storage;
 use crate::storage::config::ImageSlotState;
 
@@ -25,6 +25,7 @@ const WAVESHARE_MATRIX_BRIGHTNESS_LIMIT_PERCENT: u16 = 1;
 
 const WAVESHARE_MATRIX_LED_COUNT: usize = 64;
 const WAVESHARE_MATRIX_BUFFER_SIZE: usize = buffer_size(WAVESHARE_MATRIX_LED_COUNT);
+const WAVESHARE_MATRIX_BRIGHTNESS: LedBrightness = LedBrightness::new(1);
 
 const WAVESHARE_DECODE_SCRATCH_BYTES: usize = 1024 * 10;
 
@@ -111,6 +112,10 @@ impl<'d> WaveshareMatrix<'d> {
 impl LedStrip for WaveshareMatrix<'_> {
     fn led_count(&self) -> usize {
         self.framebuffer.len()
+    }
+
+    fn brightness(&self) -> Option<LedBrightness> {
+        Some(WAVESHARE_MATRIX_BRIGHTNESS)
     }
 
     fn timings(&self) -> LedTimings {

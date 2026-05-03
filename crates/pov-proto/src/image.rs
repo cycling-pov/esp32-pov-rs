@@ -11,6 +11,46 @@ pub const WIRE_VERSION: u8 = 1;
 /// than this; the full header is always parsed via `postcard::take_from_bytes`.
 pub const HEADER_LEN: usize = 5;
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct LedCount(u8);
+
+impl From<usize> for LedCount {
+    fn from(item: usize) -> Self {
+        LedCount(item as u8)
+    }
+}
+
+impl LedCount {
+    pub const fn new(v: u8) -> Self {
+        Self(v)
+    }
+
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct RadialCount(u16);
+
+impl From<usize> for RadialCount {
+    fn from(item: usize) -> Self {
+        RadialCount(item as u16)
+    }
+}
+
+impl RadialCount {
+    pub const fn new(v: u16) -> Self {
+        Self(v)
+    }
+
+    pub const fn get(self) -> u16 {
+        self.0
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Encoding identifiers
 // ---------------------------------------------------------------------------
@@ -29,9 +69,9 @@ pub enum Encoding {
     /// Compressed with zlib, same as `Rgb888Deflate`.
     PolarRgb888Deflate {
         /// Number of LEDs per radial strip (spoke length).
-        leds: u8,
+        leds: LedCount,
         /// Number of angular positions (radial strips) in the image.
-        radials: u16,
+        radials: RadialCount,
     },
 }
 
@@ -161,7 +201,7 @@ pub fn decode_into_rgb8(
             Ok(Encoding::Rgb888Deflate)
         }
         Encoding::PolarRgb888Deflate { leds, radials } => {
-            let pixel_count = leds as usize * radials as usize;
+            let pixel_count: usize = leds.get() as usize * radials.get() as usize;
             let max_raw = pixel_count * 3;
             if scratch.len() < max_raw {
                 return Err(ImageWireError::ScratchTooSmall {
@@ -298,10 +338,10 @@ pub fn encode_rgb888_to_wire(rgb888: &[u8]) -> Result<Vec<u8>, ImageWireError> {
 #[cfg(feature = "image-encode")]
 pub fn encode_polar_rgb888_to_wire(
     pixels: &[u8],
-    leds: u8,
-    radials: u16,
+    leds: LedCount,
+    radials: RadialCount,
 ) -> Result<Vec<u8>, ImageWireError> {
-    let expected_len = leds as usize * radials as usize * 3;
+    let expected_len: usize = leds.get() as usize * radials.get() as usize * 3;
     if pixels.len() != expected_len {
         return Err(ImageWireError::InvalidRgb888Length { len: pixels.len() });
     }

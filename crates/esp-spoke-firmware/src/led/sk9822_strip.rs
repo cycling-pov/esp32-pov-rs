@@ -14,7 +14,7 @@ use smart_leds_trait::RGB8;
 use static_cell::StaticCell;
 
 use crate::bitmap::{BitmapStorage, BitmapStorageMetadata, generated_swapping_storage};
-use crate::led::{LedCommand, LedError, LedStrip, LedTimings};
+use crate::led::{LedBrightness, LedCommand, LedError, LedStrip, LedTimings};
 use crate::storage;
 use crate::storage::config::ImageSlotState;
 
@@ -41,7 +41,7 @@ async fn load_flash_slot(
     let (width, height) = match encoding {
         Encoding::Rgb888Deflate => (64usize, 64usize),
         Encoding::PolarRgb888Deflate { leds, radials } => {
-            (leds as usize, radials as usize)
+            (leds.get() as usize, radials.get() as usize)
         }
     };
     bitmap_store.set_downloaded_metadata(BitmapStorageMetadata { width, height });
@@ -70,12 +70,13 @@ async fn load_flash_slot(
     false
 }
 
-const SK9822_MAX_BRIGHTNESS: u8 = 31;
+const SK9822_MAX_BRIGHTNESS: LedBrightness = LedBrightness::new(31);
 const SK9822_BRIGHTNESS_LIMIT_PERCENT: u8 = 5;
 // SK9822 global brightness has 5 bits (0..31). 1/31 ~= 3.2%, 2/31 ~= 6.5%, so
 // level 1 is the highest level that does not exceed 5%.
-const SK9822_BRIGHTNESS: u8 =
-    ((SK9822_MAX_BRIGHTNESS as u16 * SK9822_BRIGHTNESS_LIMIT_PERCENT as u16) / 100) as u8;
+const SK9822_BRIGHTNESS: LedBrightness = LedBrightness::new(
+    ((SK9822_MAX_BRIGHTNESS.value() as u16 * SK9822_BRIGHTNESS_LIMIT_PERCENT as u16) / 100) as u8,
+);
 const SK9822_START_FRAME_BYTES: usize = 4;
 
 const fn sk9822_end_frame_bytes(led_count: usize) -> usize {
@@ -123,7 +124,7 @@ impl<'d, const LED_COUNT: usize> Sk9822Strip<'d, LED_COUNT> {
 
         for (index, pixel) in self.framebuffer.iter().copied().enumerate() {
             let offset = SK9822_START_FRAME_BYTES + (index * 4);
-            buf[offset] = 0b1110_0000 | SK9822_BRIGHTNESS;
+            buf[offset] = 0b1110_0000 | SK9822_BRIGHTNESS.value();
             buf[offset + 1] = pixel.b;
             buf[offset + 2] = pixel.g;
             buf[offset + 3] = pixel.r;
@@ -140,6 +141,10 @@ impl<'d, const LED_COUNT: usize> Sk9822Strip<'d, LED_COUNT> {
 impl<const LED_COUNT: usize> LedStrip for Sk9822Strip<'_, LED_COUNT> {
     fn led_count(&self) -> usize {
         self.framebuffer.len()
+    }
+
+    fn brightness(&self) -> Option<LedBrightness> {
+        Some(SK9822_BRIGHTNESS)
     }
 
     fn timings(&self) -> LedTimings {

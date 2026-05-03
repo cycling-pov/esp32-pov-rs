@@ -10,8 +10,8 @@ use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
 use pov_proto::{
     bridge::{BridgeFrame, TransportSelector},
-    image::{encode_polar_rgb888_to_wire, encode_rgb888_to_wire},
-    transfer::{ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand, encode_packet},
+    image::{encode_polar_rgb888_to_wire, encode_rgb888_to_wire, LedCount, RadialCount},
+    transfer::{encode_packet, ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand},
 };
 use rand::seq::SliceRandom;
 use serialport::SerialPort;
@@ -143,7 +143,7 @@ fn main() -> anyhow::Result<()> {
         } => {
             let wire_bytes = if polar {
                 // --- polar path ---
-                if let Some(path) = radii_file {
+                let radius_values = if let Some(path) = radii_file {
                     let content = fs::read_to_string(&path)
                         .with_context(|| format!("Failed to read radii file {:?}", path))?;
                     content
@@ -171,14 +171,11 @@ fn main() -> anyhow::Result<()> {
                     .with_context(|| format!("Failed to open image {:?}", image))?
                     .into_rgba8();
 
-                let polar_bitmap = pov_images::polar_from_image::<POLAR_LEDS, POLAR_RADIALS>(
-                    &img,
-                    &radius_values,
-                );
+                let polar_bitmap =
+                    pov_images::polar_from_image::<POLAR_LEDS, POLAR_RADIALS>(&img, &radius_values);
 
                 // Flatten: pixels[radial][led] → [r, g, b, r, g, b, ...]
-                let mut raw: Vec<u8> =
-                    Vec::with_capacity(POLAR_LEDS * POLAR_RADIALS * 3);
+                let mut raw: Vec<u8> = Vec::with_capacity(POLAR_LEDS * POLAR_RADIALS * 3);
                 for strip in &polar_bitmap.pixels {
                     for px in strip {
                         raw.push(px.red);
@@ -192,8 +189,12 @@ fn main() -> anyhow::Result<()> {
                     image, POLAR_LEDS, POLAR_RADIALS
                 );
 
-                encode_polar_rgb888_to_wire(&raw, POLAR_LEDS as u8, POLAR_RADIALS as u16)
-                    .map_err(|e| anyhow::anyhow!("Failed to encode polar image: {:?}", e))?
+                encode_polar_rgb888_to_wire(
+                    &raw,
+                    LedCount::new(POLAR_LEDS as u8),
+                    RadialCount::new(POLAR_RADIALS as u16),
+                )
+                .map_err(|e| anyhow::anyhow!("Failed to encode polar image: {:?}", e))?
             } else {
                 // --- Cartesian path (original) ---
                 let img = image::open(&image)

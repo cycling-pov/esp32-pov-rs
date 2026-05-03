@@ -13,8 +13,8 @@ use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
 use esp_spoke_firmware::angles::adc_monitor::{
-    AdcMonitor, MonitorConfig, MonitorThreshold, SampleRate, ThresholdEvent, latest_sample0,
-    latest_sample1, wait_for_threshold0, wait_for_threshold1,
+    AdcMonitor, AdcSample, MonitorConfig, MonitorThreshold, SampleRate, ThresholdEvent,
+    latest_sample0, latest_sample1, wait_for_threshold0, wait_for_threshold1,
 };
 use {esp_backtrace as _, esp_println as _};
 
@@ -30,9 +30,11 @@ async fn hall_monitor_task() {
         let sample = latest_sample0();
 
         match event {
-            ThresholdEvent::High => info!("hall0: high threshold hit, sample={=u32}", sample),
-            ThresholdEvent::Low => info!("hall0: low threshold hit, sample={=u32}", sample),
-            ThresholdEvent::Both => info!("hall0: both thresholds hit, sample={=u32}", sample),
+            ThresholdEvent::High => info!("hall0: high threshold hit, sample={=u16}", sample.raw()),
+            ThresholdEvent::Low => info!("hall0: low threshold hit, sample={=u16}", sample.raw()),
+            ThresholdEvent::Both => {
+                info!("hall0: both thresholds hit, sample={=u16}", sample.raw())
+            }
         }
     }
 }
@@ -44,9 +46,11 @@ async fn hall_monitor_task1() {
         let sample = latest_sample1();
 
         match event {
-            ThresholdEvent::High => info!("hall1: high threshold hit, sample={=u32}", sample),
-            ThresholdEvent::Low => info!("hall1: low threshold hit, sample={=u32}", sample),
-            ThresholdEvent::Both => info!("hall1: both thresholds hit, sample={=u32}", sample),
+            ThresholdEvent::High => info!("hall1: high threshold hit, sample={=u16}", sample.raw()),
+            ThresholdEvent::Low => info!("hall1: low threshold hit, sample={=u16}", sample.raw()),
+            ThresholdEvent::Both => {
+                info!("hall1: both thresholds hit, sample={=u16}", sample.raw())
+            }
         }
     }
 }
@@ -82,8 +86,8 @@ async fn main(spawner: Spawner) -> ! {
     let config = MonitorConfig {
         attenuation: analog::adc::Attenuation::_0dB,
         threshold: MonitorThreshold {
-            low: 1800,
-            high: 3000,
+            low: AdcSample::new(1800),
+            high: AdcSample::new(3000),
         },
         sample_rate: SampleRate {
             timer_target: 200,

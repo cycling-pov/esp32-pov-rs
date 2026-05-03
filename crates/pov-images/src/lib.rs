@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use image::{AnimationDecoder, Pixel, RgbaImage, codecs::gif::GifDecoder};
+use image::{codecs::gif::GifDecoder, AnimationDecoder, Pixel, RgbaImage};
 use pov_algs::images::PolarBitmap;
 
 /// Constructs the polar bitmap from a square bitmap with provided LED radii, in percentages from [0, 1],

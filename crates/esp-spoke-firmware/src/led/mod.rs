@@ -20,7 +20,7 @@ use pov_proto::transfer::CommandFrame;
 #[cfg(feature = "sk9822-strip")]
 pub use sk9822_strip::{Sk9822Pins, Sk9822Strip};
 
-pub use strip::{LedError, LedStrip, LedTimings};
+pub use strip::{LedBrightness, LedError, LedStrip, LedTimings};
 #[cfg(feature = "waveshare-matrix")]
 pub use waveshare_matrix::WaveshareMatrix;
 #[cfg(feature = "waveshare-matrix")]

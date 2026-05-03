@@ -504,7 +504,8 @@ async fn commit_slot_inner(
         .map_err(|_| {
             warn!(
                 "storage:commit_slot unknown encoding slot={} header={=[u8]:?}",
-                slot, &header_buf[4..8]
+                slot,
+                &header_buf[4..8]
             );
         })?;
 

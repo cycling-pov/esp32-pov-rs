@@ -135,10 +135,7 @@ pub struct SwappingImageStorage<const MAX_DOWNLOAD_PIXELS: usize> {
 
 #[cfg(feature = "builtin-image")]
 impl<const MAX_DOWNLOAD_PIXELS: usize> SwappingImageStorage<MAX_DOWNLOAD_PIXELS> {
-    pub fn new(
-        builtin_metadata: BitmapStorageMetadata,
-        builtin: &'static [RGB8],
-    ) -> Self {
+    pub fn new(builtin_metadata: BitmapStorageMetadata, builtin: &'static [RGB8]) -> Self {
         assert!(builtin.len() == builtin_metadata.pixel_count());
         assert!(MAX_DOWNLOAD_PIXELS >= builtin_metadata.pixel_count());
         Self {

@@ -81,12 +81,28 @@ impl ThresholdEvent {
     }
 }
 
+/// A 12-bit ADC raw sample value (0–4095).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub struct AdcSample(u16);
+
+impl AdcSample {
+    /// Constructs an `AdcSample` from a raw 12-bit value.
+    pub const fn new(v: u16) -> Self {
+        Self(v)
+    }
+
+    /// Returns the raw 12-bit ADC value.
+    pub const fn raw(self) -> u16 {
+        self.0
+    }
+}
+
 /// Uncalibrated thresholds are 12-bit raw values (0–4095) corresponding to the full ADC range.
 /// The actual voltage thresholds depend on the attenuation setting and the input voltage.
 #[derive(Clone, Copy, Debug)]
 pub struct MonitorThreshold {
-    pub low: u16,
-    pub high: u16,
+    pub low: AdcSample,
+    pub high: AdcSample,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -463,8 +479,8 @@ where
         let AdcPin { pin, .. } = pin;
         let channel = pin.adc_channel();
         let attenuation = config.attenuation as u8;
-        let threshold_low = config.threshold.low.min(ADC_DIGITAL_RAW_MASK as u16);
-        let threshold_high = config.threshold.high.min(ADC_DIGITAL_RAW_MASK as u16);
+        let threshold_low = config.threshold.low.raw().min(ADC_DIGITAL_RAW_MASK as u16);
+        let threshold_high = config.threshold.high.raw().min(ADC_DIGITAL_RAW_MASK as u16);
 
         let saradc = APB_SARADC::regs();
 
@@ -534,9 +550,9 @@ where
         APB_SARADC::regs().thres0_ctrl().write(|w| unsafe {
             w.thres0_channel().bits(self.monitor_channel);
             w.thres0_high()
-                .bits(threshold.high.min(ADC_DIGITAL_RAW_MASK as u16));
+                .bits(threshold.high.raw().min(ADC_DIGITAL_RAW_MASK as u16));
             w.thres0_low()
-                .bits(threshold.low.min(ADC_DIGITAL_RAW_MASK as u16))
+                .bits(threshold.low.raw().min(ADC_DIGITAL_RAW_MASK as u16))
         });
     }
 
@@ -557,8 +573,8 @@ where
         Self::new_impl(adc1, pin, config)
     }
 
-    pub fn last_sample(&self) -> u32 {
-        ADC_MONITOR_LAST_SAMPLE.load(Ordering::Acquire)
+    pub fn last_sample(&self) -> AdcSample {
+        AdcSample::new(ADC_MONITOR_LAST_SAMPLE.load(Ordering::Acquire) as u16)
     }
 }
 
@@ -598,12 +614,20 @@ where
         let channel1 = pin1.adc_channel();
 
         let atten0 = config0.attenuation as u8;
-        let threshold_low0 = config0.threshold.low.min(ADC_DIGITAL_RAW_MASK as u16);
-        let threshold_high0 = config0.threshold.high.min(ADC_DIGITAL_RAW_MASK as u16);
+        let threshold_low0 = config0.threshold.low.raw().min(ADC_DIGITAL_RAW_MASK as u16);
+        let threshold_high0 = config0
+            .threshold
+            .high
+            .raw()
+            .min(ADC_DIGITAL_RAW_MASK as u16);
 
         let atten1 = config1.attenuation as u8;
-        let threshold_low1 = config1.threshold.low.min(ADC_DIGITAL_RAW_MASK as u16);
-        let threshold_high1 = config1.threshold.high.min(ADC_DIGITAL_RAW_MASK as u16);
+        let threshold_low1 = config1.threshold.low.raw().min(ADC_DIGITAL_RAW_MASK as u16);
+        let threshold_high1 = config1
+            .threshold
+            .high
+            .raw()
+            .min(ADC_DIGITAL_RAW_MASK as u16);
 
         let saradc = APB_SARADC::regs();
 
@@ -686,9 +710,9 @@ where
         APB_SARADC::regs().thres0_ctrl().write(|w| unsafe {
             w.thres0_channel().bits(self.monitor_channel);
             w.thres0_high()
-                .bits(threshold.high.min(ADC_DIGITAL_RAW_MASK as u16));
+                .bits(threshold.high.raw().min(ADC_DIGITAL_RAW_MASK as u16));
             w.thres0_low()
-                .bits(threshold.low.min(ADC_DIGITAL_RAW_MASK as u16))
+                .bits(threshold.low.raw().min(ADC_DIGITAL_RAW_MASK as u16))
         });
     }
 
@@ -698,9 +722,9 @@ where
         APB_SARADC::regs().thres1_ctrl().write(|w| unsafe {
             w.thres1_channel().bits(self.monitor1_channel);
             w.thres1_high()
-                .bits(threshold.high.min(ADC_DIGITAL_RAW_MASK as u16));
+                .bits(threshold.high.raw().min(ADC_DIGITAL_RAW_MASK as u16));
             w.thres1_low()
-                .bits(threshold.low.min(ADC_DIGITAL_RAW_MASK as u16))
+                .bits(threshold.low.raw().min(ADC_DIGITAL_RAW_MASK as u16))
         });
     }
 
@@ -732,12 +756,12 @@ where
         Self::new_dual_impl(adc1, pin0, pin1, config0, config1)
     }
 
-    pub fn last_sample0(&self) -> u32 {
-        ADC_MONITOR_LAST_SAMPLE.load(Ordering::Acquire)
+    pub fn last_sample0(&self) -> AdcSample {
+        AdcSample::new(ADC_MONITOR_LAST_SAMPLE.load(Ordering::Acquire) as u16)
     }
 
-    pub fn last_sample1(&self) -> u32 {
-        ADC_MONITOR1_LAST_SAMPLE.load(Ordering::Acquire)
+    pub fn last_sample1(&self) -> AdcSample {
+        AdcSample::new(ADC_MONITOR1_LAST_SAMPLE.load(Ordering::Acquire) as u16)
     }
 }
 
@@ -795,12 +819,12 @@ pub async fn wait_for_threshold1() -> ThresholdEvent {
     MonitorFuture { monitor: 1 }.await
 }
 
-pub fn latest_sample0() -> u32 {
-    ADC_MONITOR_LAST_SAMPLE.load(Ordering::Acquire)
+pub fn latest_sample0() -> AdcSample {
+    AdcSample::new(ADC_MONITOR_LAST_SAMPLE.load(Ordering::Acquire) as u16)
 }
 
-pub fn latest_sample1() -> u32 {
-    ADC_MONITOR1_LAST_SAMPLE.load(Ordering::Acquire)
+pub fn latest_sample1() -> AdcSample {
+    AdcSample::new(ADC_MONITOR1_LAST_SAMPLE.load(Ordering::Acquire) as u16)
 }
 
 impl Future for MonitorFuture {
