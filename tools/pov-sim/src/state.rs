@@ -15,14 +15,14 @@ pub struct RotationPlugin;
 #[derive(Resource, Event, Default, Debug, Clone, Copy)]
 pub struct RotationSettings {
     pub rate: AngularVelocity,
-    pub fade: Duration,
+    pub fade: f32,
 }
 
 impl Plugin for RotationPlugin {
     fn build(&self, app: &mut bevy::app::App) {
         app.insert_resource(RotationSettings {
             rate: AngularVelocity::from_radians_secs(12.0),
-            fade: Duration::from_millis(200),
+            fade: 0.2,
         })
         .insert_resource(RotationState::new(NUM_SPOKES))
         .add_systems(
@@ -170,9 +170,7 @@ fn rotation_change_input(
     settings.rate = AngularVelocity::from_radians_secs(
         (settings.rate.radians_secs() + 4.0 * speed_dir * time.delta_secs()).clamp(0.0, 20.0),
     );
-    let new_fade_secs =
-        (settings.fade.as_secs_f32() + 0.5 * fade_dir * time.delta_secs()).clamp(0.1, 2.0);
-    settings.fade = Duration::from_secs_f32(new_fade_secs);
+    settings.fade = (settings.fade + 0.5 * fade_dir * time.delta_secs()).clamp(0.1, 2.0);
 
     commands.trigger(*settings);
 }

@@ -15,13 +15,13 @@ use bevy::{
     text::TextColor,
     window::WindowTheme,
 };
-use pov_algs::{Angle, LedGeometry, LedUnitPosition};
+use pov_algs::{Angle, LedGeometry};
 use pov_images::DEFAULT_LEDS;
 
 use crate::{
     estimator::PositionEstimator,
     images::{ImageChanged, ImageConfig, ImageState},
-    state::{RotationPlugin, RotationSettings, RotationState, NUM_SPOKES},
+    state::{NUM_SPOKES, RotationPlugin, RotationSettings, RotationState},
     theme::{ThemePlugin, ThemeState},
 };
 use clap::Parser;
@@ -129,7 +129,7 @@ struct TextEstimatorUpdate;
 #[derive(Resource)]
 struct SimGeometry {
     num_spokes: usize,
-    radii: Vec<LedUnitPosition>,
+    radii: Vec<f32>,
     hub_perc: f32,
     wheel_radius: f32,
     wheel_thickness: f32,
@@ -140,13 +140,13 @@ impl SimGeometry {
         let hub_perc = 0.2;
 
         let radii = {
-            let mut radii = vec![LedUnitPosition::default(); num_leds];
+            let mut radii = vec![0.0f32; num_leds];
 
             for (i, r) in radii.iter_mut().enumerate() {
                 let linear_percentage = i as f32 / num_leds as f32;
                 let modified_percentage = linear_percentage.powf(0.8);
 
-                *r = LedUnitPosition::from_ratio(hub_perc + (1.0 - hub_perc) * modified_percentage);
+                *r = hub_perc + (1.0 - hub_perc) * modified_percentage;
             }
 
             radii
@@ -163,7 +163,7 @@ impl SimGeometry {
 }
 
 impl LedGeometry for SimGeometry {
-    fn led_unit_positions(&self) -> &[LedUnitPosition] {
+    fn led_unit_positions(&self) -> &[f32] {
         &self.radii
     }
 
@@ -250,7 +250,7 @@ fn setup(
         let (s, c) = angle.radians().sin_cos();
 
         for (i, r) in geometry.radii.iter().enumerate() {
-            let radius_val = (led_len + radius_hub) * r.ratio();
+            let radius_val = (led_len + radius_hub) * r;
             commands.spawn((
                 Sprite {
                     image: circle_img.clone(),
@@ -352,7 +352,7 @@ fn update_text(event: On<RotationSettings>, mut query: Query<&mut Text, With<Tex
         t.0 = format!(
             "Rotation Rate: {:0.2}\nFade Time: {:0.2}",
             e.rate.radians_secs(),
-            e.fade.as_secs_f32()
+            e.fade
         );
     }
 }
@@ -447,7 +447,7 @@ fn update_pattern(
             sprite.color = Color::srgb_u8(px.red, px.green, px.blue);
         } else {
             // Default to fading the current color with the given fade time
-            led.fade = (led.fade - time.delta_secs() / settings.fade.as_secs_f32()).max(0.0);
+            led.fade = (led.fade - time.delta_secs() / settings.fade).max(0.0);
             sprite.color = sprite.color.with_alpha(led.fade);
         }
     }
