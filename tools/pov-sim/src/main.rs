@@ -331,12 +331,12 @@ fn log_estimator_data(
         .open(Path::new("log.csv"))
         .unwrap();
 
-    write!(
+    writeln!(
         f,
-        "{},{},{}\n",
+        "{},{},{}",
         time.elapsed_secs_f64(),
-        state.position(0).pos.get_radians(),
-        estimator.get_spoke(0).pos.get_radians()
+        state.position(0).pos.radians(),
+        estimator.get_spoke(0).pos.radians()
     )
     .unwrap();
 }
