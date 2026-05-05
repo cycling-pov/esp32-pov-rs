@@ -196,15 +196,16 @@ async fn main(spawner: Spawner) -> ! {
                     {
                         let slot = a.slot;
                         let byte_offset = chunk.byte_offset;
+                        let chunk_num = (byte_offset / storage::CHUNK_SIZE as u32) as u16;
                         let is_final = chunk.is_final;
 
-                        if storage::write_slot_chunk(slot, byte_offset, &chunk.data)
+                        if storage::write_slot_chunk(slot, chunk_num, &chunk.data)
                             .await
                             .is_err()
                         {
                             warn!(
-                                "main:write_slot_chunk failed slot={} offset={} transfer_id={}",
-                                slot, byte_offset, transfer_id
+                                "main:write_slot_chunk failed slot={} chunk={} transfer_id={}",
+                                slot, chunk_num, transfer_id
                             );
                         }
 

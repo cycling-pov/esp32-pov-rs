@@ -14,7 +14,6 @@ path = "./src/bin/main.rs"
 name = "adc-test-software"
 path = "./src/angles/adc_testbench.rs"
 
-
 [features]
 default = ["espnow", "flash-4mb"]
 waveshare-matrix = []
@@ -47,6 +46,8 @@ bt-hci = { version = "0.6.0", optional = true }
 embassy-executor = { version = "0.9.1", features = ["defmt"] }
 embassy-futures = "0.1.2"
 embassy-sync = "0.7.2"
+# embassy-sync 0.6 is needed because ekv 1.0.0 depends on it; used only in ekv_flash.rs
+embassy-sync-06 = { package = "embassy-sync", version = "0.6" }
 embassy-time = { version = "0.5.0", features = ["defmt"] }
 embedded-io = { version = "0.7.1", features = ["defmt"] }
 embedded-io-async = { version = "0.7.0", features = ["defmt"] }
@@ -75,15 +76,17 @@ smart-leds-trait = "0.3.2"
 static_cell = "2.1.1"
 postcard = { version = "1", default-features = false }
 crc32fast = { version = "1", default-features = false }
-embedded-storage-async = "0.4"
 pov-proto = { path = "../pov-proto", features = [
     "bridge",
     "defmt",
     "image-decode",
 ] }
-sequential-storage = { version = "7.2.0", features = ["defmt", "postcard"] }
+
+# Do not bump EKV without checking its change notes. A version update can make
+# nonvolatile storage incompatible changes.
+ekv = { version = "1.0.0", features = ["defmt", "crc"] }
 esp-storage = { version = "0.8.1", features = ["esp32s3"] }
-embassy-embedded-hal = "0.6.0"
+embedded-storage = "0.3"
 serde = { version = "1", default-features = false, features = ["derive"] }
 
 [profile.dev.package.esp-storage]

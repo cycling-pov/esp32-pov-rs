@@ -3,12 +3,14 @@
 # active flash-size feature (flash-4mb or flash-16mb) and written to
 # target/esp-spoke-firmware-partitions.csv before espflash is invoked.
 runner = "espflash flash --monitor --chip esp32s3 --log-format defmt --partition-table target/esp-spoke-firmware-partitions.csv"
-rustflags = [
-  "-C", "link-arg=-nostartfiles",
-]
+rustflags = ["-C", "link-arg=-nostartfiles"]
 
 [env]
-DEFMT_LOG="info"
+DEFMT_LOG = "info"
+# ekv compile-time configuration (must match the flash sector size and chunk sizes)
+EKV_PAGE_SIZE = "4096"
+EKV_MAX_VALUE_SIZE = "4096"
+EKV_MAX_KEY_SIZE = "8"
 
 [build]
 target = "xtensa-esp32s3-none-elf"
