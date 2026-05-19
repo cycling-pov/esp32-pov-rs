@@ -1,6 +1,9 @@
 #[cfg(feature = "sk9822-strip")]
+mod pov_dual_strip;
+#[cfg(feature = "sk9822-strip")]
 mod sk9822_strip;
 mod strip;
+pub(crate) mod task_common;
 #[cfg(feature = "waveshare-matrix")]
 mod waveshare_matrix;
 
@@ -17,6 +20,8 @@ use esp_hal::rmt::Rmt;
 use esp_hal::time::Rate;
 use pov_proto::transfer::CommandFrame;
 
+#[cfg(feature = "sk9822-strip")]
+pub use pov_dual_strip::PovDualStrip;
 #[cfg(feature = "sk9822-strip")]
 pub use sk9822_strip::{Sk9822Pins, Sk9822Strip};
 
@@ -69,6 +74,72 @@ pub fn init_waveshare(
     spawner
         .spawn(waveshare_matrix::waveshare_matrix_task(led_strip))
         .expect("failed to spawn waveshare matrix task");
+}
+
+#[cfg(feature = "sk9822-strip")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each SPI/DMA peripheral is a distinct type"
+)]
+pub fn init_sk9822_dual(
+    spi0: esp_hal::peripherals::SPI2<'static>,
+    dma_ch0: esp_hal::peripherals::DMA_CH0<'static>,
+    pins0: Sk9822Pins<'static>,
+    spi1: esp_hal::peripherals::SPI3<'static>,
+    dma_ch1: esp_hal::peripherals::DMA_CH1<'static>,
+    pins1: Sk9822Pins<'static>,
+    spin_state: &'static crate::angles::spin_estimator::SharedSpinState,
+    spawner: Spawner,
+) {
+    use esp_hal::dma::{DmaDescriptor, DmaLoopBuf};
+    use esp_hal::spi::master::{Config as SpiConfig, Spi};
+    use esp_hal::time::Rate;
+    use static_cell::StaticCell;
+
+    const FRAME_SIZE: usize = sk9822_strip::sk9822_frame_size(sk9822_strip::SK9822_LED_COUNT);
+
+    static DMA_DESCRIPTOR0: StaticCell<DmaDescriptor> = StaticCell::new();
+    static DMA_BUF0: StaticCell<[u8; FRAME_SIZE]> = StaticCell::new();
+    static DMA_DESCRIPTOR1: StaticCell<DmaDescriptor> = StaticCell::new();
+    static DMA_BUF1: StaticCell<[u8; FRAME_SIZE]> = StaticCell::new();
+
+    let dma_loop_buf0 = DmaLoopBuf::new(
+        DMA_DESCRIPTOR0.init(DmaDescriptor::EMPTY),
+        DMA_BUF0.init([0u8; FRAME_SIZE]),
+    )
+    .expect("failed to create DMA loop buffer for POV strip0");
+    let dma_loop_buf1 = DmaLoopBuf::new(
+        DMA_DESCRIPTOR1.init(DmaDescriptor::EMPTY),
+        DMA_BUF1.init([0u8; FRAME_SIZE]),
+    )
+    .expect("failed to create DMA loop buffer for POV strip1");
+
+    let spi_dma0 = Spi::new(
+        spi0,
+        SpiConfig::default().with_frequency(Rate::from_mhz(30)),
+    )
+    .expect("failed to initialize SPI0 for POV strip")
+    .with_sck(pins0.clock)
+    .with_mosi(pins0.data)
+    .with_dma(dma_ch0)
+    .into_async();
+    let spi_dma1 = Spi::new(
+        spi1,
+        SpiConfig::default().with_frequency(Rate::from_mhz(30)),
+    )
+    .expect("failed to initialize SPI1 for POV strip")
+    .with_sck(pins1.clock)
+    .with_mosi(pins1.data)
+    .with_dma(dma_ch1)
+    .into_async();
+
+    let strip0 = Sk9822Strip::<{ sk9822_strip::SK9822_LED_COUNT }>::new(spi_dma0, dma_loop_buf0);
+    let strip1 = Sk9822Strip::<{ sk9822_strip::SK9822_LED_COUNT }>::new(spi_dma1, dma_loop_buf1);
+    let dual = PovDualStrip::new(strip0, strip1, spin_state);
+
+    spawner
+        .spawn(pov_dual_strip::pov_dual_strip_task(dual))
+        .expect("failed to spawn POV dual-strip task");
 }
 
 #[cfg(feature = "sk9822-strip")]
