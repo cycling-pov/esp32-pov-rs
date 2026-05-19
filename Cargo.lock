@@ -977,6 +977,7 @@ dependencies = [
  "esp-storage",
  "image",
  "postcard",
+ "pov-algs",
  "pov-proto",
  "rgb",
  "serde",
