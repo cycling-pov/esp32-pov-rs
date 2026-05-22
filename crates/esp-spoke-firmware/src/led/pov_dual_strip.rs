@@ -14,28 +14,31 @@ use crate::led::{LedCommand, LedError, LedStrip, LedTimings};
 /// Scratch buffer size: large enough for a full polar image (30×360×3 bytes).
 pub const POV_DECODE_SCRATCH_BYTES: usize = 1024 * 34;
 
-/// Two opposing SK9822 LED strips driven as a POV display.
+/// Two SK9822 LED strips driven as a POV display.
 ///
-/// `strip0` sits at the current arm angle θ; `strip1` sits at θ + π (the
-/// opposite arm).  On each render call the spin estimator is consulted for the
-/// current angular position and both strips are updated with the matching
-/// radial slice of the active polar bitmap.
+/// Each strip tracks its own angular position via an independent hall-effect
+/// sensor.  On each render call both spin estimators are consulted separately
+/// so that strip0 and strip1 each render the radial slice that corresponds to
+/// their own measured angle — no fixed geometric offset is assumed.
 pub struct PovDualStrip<'d, const LEDS: usize> {
     strip0: Sk9822Strip<'d, LEDS>,
     strip1: Sk9822Strip<'d, LEDS>,
-    spin: &'static SharedSpinState,
+    spin0: &'static SharedSpinState,
+    spin1: &'static SharedSpinState,
 }
 
 impl<'d, const LEDS: usize> PovDualStrip<'d, LEDS> {
     pub fn new(
         strip0: Sk9822Strip<'d, LEDS>,
         strip1: Sk9822Strip<'d, LEDS>,
-        spin: &'static SharedSpinState,
+        spin0: &'static SharedSpinState,
+        spin1: &'static SharedSpinState,
     ) -> Self {
         Self {
             strip0,
             strip1,
-            spin,
+            spin0,
+            spin1,
         }
     }
 }
@@ -83,11 +86,12 @@ impl<const LEDS: usize> RenderBitmap for PovDualStrip<'_, LEDS> {
         let bm_width = bitmap.width();
         let pixels = bitmap.pixels();
 
-        // Read the current angular position from the shared spin state.
-        let angle_rad = self.spin.lock(|s| s.borrow().position.radians());
+        // Each strip reads its own independently-calibrated angular position.
+        let angle0_rad = self.spin0.lock(|s| s.borrow().position.radians());
+        let angle1_rad = self.spin1.lock(|s| s.borrow().position.radians());
 
-        let radial0 = radial_index(angle_rad, num_radials);
-        let radial1 = radial_index(angle_rad + PI, num_radials);
+        let radial0 = radial_index(angle0_rad, num_radials);
+        let radial1 = radial_index(angle1_rad, num_radials);
 
         copy_radial(pixels, bm_width, radial0, self.strip0.pixels_mut());
         copy_radial(pixels, bm_width, radial1, self.strip1.pixels_mut());

@@ -15,6 +15,8 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
 #[cfg(feature = "sk9822-strip")]
+use esp_spoke_firmware::angles::{dual_spin_estimator_task, new_shared_spin_state};
+#[cfg(feature = "sk9822-strip")]
 use esp_spoke_firmware::led::Sk9822Pins;
 use {esp_backtrace as _, esp_println as _};
 
@@ -109,12 +111,33 @@ async fn main(spawner: Spawner) -> ! {
     led::init_waveshare(peripherals.RMT, peripherals.GPIO14, spawner);
 
     #[cfg(feature = "sk9822-strip")]
-    led::init_sk9822(
-        peripherals.SPI2,
-        peripherals.DMA_CH0,
-        Sk9822Pins::new(peripherals.GPIO12, peripherals.GPIO11),
-        spawner,
-    );
+    {
+        use static_cell::StaticCell;
+
+        static SPIN_STATE_0: StaticCell<esp_spoke_firmware::angles::SharedSpinState> =
+            StaticCell::new();
+        static SPIN_STATE_1: StaticCell<esp_spoke_firmware::angles::SharedSpinState> =
+            StaticCell::new();
+
+        let spin0 = SPIN_STATE_0.init(new_shared_spin_state());
+        let spin1 = SPIN_STATE_1.init(new_shared_spin_state());
+
+        spawner
+            .spawn(dual_spin_estimator_task(spin0, spin1))
+            .expect("failed to spawn dual spin estimator task");
+
+        led::init_sk9822_dual(
+            peripherals.SPI2,
+            peripherals.DMA_CH0,
+            Sk9822Pins::new(peripherals.GPIO12, peripherals.GPIO11),
+            peripherals.SPI3,
+            peripherals.DMA_CH1,
+            Sk9822Pins::new(peripherals.GPIO10, peripherals.GPIO9),
+            spin0,
+            spin1,
+            spawner,
+        );
+    }
 
     info!("LED initialization completed");
 

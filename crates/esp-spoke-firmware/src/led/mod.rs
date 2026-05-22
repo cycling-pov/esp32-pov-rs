@@ -88,7 +88,8 @@ pub fn init_sk9822_dual(
     spi1: esp_hal::peripherals::SPI3<'static>,
     dma_ch1: esp_hal::peripherals::DMA_CH1<'static>,
     pins1: Sk9822Pins<'static>,
-    spin_state: &'static crate::angles::spin_estimator::SharedSpinState,
+    spin_state0: &'static crate::angles::spin_estimator::SharedSpinState,
+    spin_state1: &'static crate::angles::spin_estimator::SharedSpinState,
     spawner: Spawner,
 ) {
     use esp_hal::dma::{DmaDescriptor, DmaLoopBuf};
@@ -135,7 +136,7 @@ pub fn init_sk9822_dual(
 
     let strip0 = Sk9822Strip::<{ sk9822_strip::SK9822_LED_COUNT }>::new(spi_dma0, dma_loop_buf0);
     let strip1 = Sk9822Strip::<{ sk9822_strip::SK9822_LED_COUNT }>::new(spi_dma1, dma_loop_buf1);
-    let dual = PovDualStrip::new(strip0, strip1, spin_state);
+    let dual = PovDualStrip::new(strip0, strip1, spin_state0, spin_state1);
 
     spawner
         .spawn(pov_dual_strip::pov_dual_strip_task(dual))
