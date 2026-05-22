@@ -1,18 +1,60 @@
+use alloc::boxed::Box;
 use core::f32::consts::PI;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use defmt::{info, warn};
+use embassy_futures::join::join;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::mutex::Mutex;
+use embassy_time::{Duration, Timer};
 use esp_hal::rng::Rng;
+use pov_proto::transfer::SpokeCommand;
 use smart_leds_trait::RGB8;
 use static_cell::StaticCell;
 
 use crate::angles::spin_estimator::SharedSpinState;
-use crate::bitmap::{Bitmap, BitmapStorage, generated_swapping_storage};
+use crate::bitmap::{
+    Bitmap, BitmapStorage, MAX_POLAR_PIXEL_COUNT, SwappingImageStorage, generated_swapping_storage,
+};
 use crate::led::sk9822_strip::{SK9822_LED_COUNT, Sk9822Strip};
 use crate::led::task_common::{self, RenderBitmap};
 use crate::led::{LedCommand, LedError, LedStrip, LedTimings};
 
 /// Scratch buffer size: large enough for a full polar image (30×360×3 bytes).
 pub const POV_DECODE_SCRATCH_BYTES: usize = 1024 * 34;
+
+// ---------------------------------------------------------------------------
+// Shared bitmap state
+// ---------------------------------------------------------------------------
+
+/// Heap-allocated swapping image storage shared between the render and command tasks.
+type BitmapStore = Box<SwappingImageStorage<MAX_POLAR_PIXEL_COUNT>>;
+
+/// Async mutex protecting the shared [`BitmapStore`].
+///
+/// The render task briefly locks it on each frame (just long enough to copy
+/// one radial slice per strip), then releases the lock before calling `show()`.
+/// The command task locks it for the duration of a flash-slot decode.  The
+/// mutex is therefore never held across an SPI transfer.
+type SharedBitmapMutex = Mutex<CriticalSectionRawMutex, BitmapStore>;
+
+static SHARED_BITMAP: StaticCell<SharedBitmapMutex> = StaticCell::new();
+
+/// `true` while the render task should output polar bitmap frames.
+/// Cleared on [`SpokeCommand::DisplayOff`] or when no image is available.
+static RENDERING_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// `true` while the render task should output random-noise frames.
+/// Cleared when any other display command is received.
+static RANDOMIZING: AtomicBool = AtomicBool::new(false);
+
+/// Initialise the shared bitmap store and return a `'static` reference to it.
+///
+/// Must be called exactly once (from [`crate::led::init_sk9822_dual`]) before
+/// spawning [`pov_render_task`] or [`pov_command_task`].
+pub fn init_bitmap_store() -> &'static SharedBitmapMutex {
+    SHARED_BITMAP.init(Mutex::new(generated_swapping_storage()))
+}
 
 /// Two SK9822 LED strips driven as a POV display.
 ///
@@ -43,6 +85,22 @@ impl<'d, const LEDS: usize> PovDualStrip<'d, LEDS> {
     }
 }
 
+impl<const LEDS: usize> PovDualStrip<'_, LEDS> {
+    /// Samples both spin estimators and copies the matching polar radial from
+    /// `bitmap` into each strip's framebuffer.  Does **not** call `show()`.
+    fn sample_and_copy_radials(&mut self, bitmap: &Bitmap<'_>) {
+        let angle0_rad = self.spin0.lock(|s| s.borrow().position.radians());
+        let angle1_rad = self.spin1.lock(|s| s.borrow().position.radians());
+        let num_radials = bitmap.height();
+        let bm_width = bitmap.width();
+        let pixels = bitmap.pixels();
+        let radial0 = radial_index(angle0_rad, num_radials);
+        let radial1 = radial_index(angle1_rad, num_radials);
+        copy_radial(pixels, bm_width, radial0, self.strip0.pixels_mut());
+        copy_radial(pixels, bm_width, radial1, self.strip1.pixels_mut());
+    }
+}
+
 impl<const LEDS: usize> LedStrip for PovDualStrip<'_, LEDS> {
     fn led_count(&self) -> usize {
         LEDS
@@ -63,8 +121,10 @@ impl<const LEDS: usize> LedStrip for PovDualStrip<'_, LEDS> {
     }
 
     async fn show(&mut self) -> Result<(), LedError> {
-        self.strip0.show().await?;
-        self.strip1.show().await
+        let (s0, s1) = (&mut self.strip0, &mut self.strip1);
+        let (r0, r1) = join(s0.show(), s1.show()).await;
+        r0?;
+        r1
     }
 
     /// Fill both strips with the same colour.
@@ -96,8 +156,10 @@ impl<const LEDS: usize> RenderBitmap for PovDualStrip<'_, LEDS> {
         copy_radial(pixels, bm_width, radial0, self.strip0.pixels_mut());
         copy_radial(pixels, bm_width, radial1, self.strip1.pixels_mut());
 
-        self.strip0.show().await.expect("pov: strip0 show failed");
-        self.strip1.show().await.expect("pov: strip1 show failed");
+        let (s0, s1) = (&mut self.strip0, &mut self.strip1);
+        let (r0, r1) = join(s0.show(), s1.show()).await;
+        r0.expect("pov: strip0 show failed");
+        r1.expect("pov: strip1 show failed");
     }
 }
 
@@ -139,73 +201,146 @@ fn copy_radial(pixels: &[RGB8], bm_width: usize, radial: usize, dest: &mut [RGB8
     }
 }
 
+/// Background render task: continuously samples both spin estimators and drives
+/// both SPI outputs in parallel.
+///
+/// When [`RENDERING_ACTIVE`] is `true` the task locks the shared bitmap store
+/// for a few hundred nanoseconds (long enough to copy one radial slice per
+/// strip), releases the lock, then fires both SPI/DMA channels concurrently
+/// via [`join`].  The mutex is **never** held across a `show()` call, so image
+/// loading in [`pov_command_task`] is never blocked by an in-progress SPI
+/// transfer.
 #[embassy_executor::task]
-pub async fn pov_dual_strip_task(mut strips: PovDualStrip<'static, SK9822_LED_COUNT>) -> ! {
+pub async fn pov_render_task(
+    mut strips: PovDualStrip<'static, SK9822_LED_COUNT>,
+    bitmap: &'static SharedBitmapMutex,
+) -> ! {
     info!(
-        "POV dual-strip ready: leds={}, timings={:?}",
+        "POV render task started: leds={}, timings={:?}",
         strips.led_count(),
         strips.timings()
     );
 
+    let rng = Rng::new();
+
+    loop {
+        if RANDOMIZING.load(Ordering::Relaxed) {
+            strips.randomize(&rng);
+            let (s0, s1) = (&mut strips.strip0, &mut strips.strip1);
+            let (r0, r1) = join(s0.show(), s1.show()).await;
+            r0.expect("pov: strip0 show failed (randomize)");
+            r1.expect("pov: strip1 show failed (randomize)");
+        } else if RENDERING_ACTIVE.load(Ordering::Relaxed) {
+            {
+                let guard = bitmap.lock().await;
+                if let Ok(b) = guard.bitmap(0) {
+                    strips.sample_and_copy_radials(&b);
+                }
+                // guard dropped here — mutex released before SPI transfers begin
+            }
+            let (s0, s1) = (&mut strips.strip0, &mut strips.strip1);
+            let (r0, r1) = join(s0.show(), s1.show()).await;
+            r0.expect("pov: strip0 show failed");
+            r1.expect("pov: strip1 show failed");
+        } else {
+            // Nothing to display — yield briefly to avoid a busy-loop.
+            Timer::after(Duration::from_millis(1)).await;
+        }
+    }
+}
+
+/// Command task: blocks on [`super::LED_COMMAND_CHANNEL`] and processes LED
+/// control commands.  Runs concurrently with [`pov_render_task`] so the
+/// render loop is never paused by command dispatch.
+#[embassy_executor::task]
+pub async fn pov_command_task(bitmap: &'static SharedBitmapMutex) -> ! {
+    info!("POV command task started");
+
     static DECODE_SCRATCH: StaticCell<[u8; POV_DECODE_SCRATCH_BYTES]> = StaticCell::new();
     let decode_scratch = DECODE_SCRATCH.init([0; POV_DECODE_SCRATCH_BYTES]);
 
-    let mut bitmap_store = generated_swapping_storage();
-    let rng = Rng::new();
-    let mut randomizing = false;
-
-    let mut current_display_slot =
-        task_common::boot_restore(&mut *bitmap_store, decode_scratch).await;
-    if current_display_slot.is_some() {
+    // Attempt to restore the last-used flash image.  The bitmap mutex is held
+    // for the duration; the render task is idle (RENDERING_ACTIVE = false) so
+    // there is no contention.
+    let initial_slot = {
+        let mut guard = bitmap.lock().await;
+        task_common::boot_restore(&mut **guard, decode_scratch).await
+    };
+    if initial_slot.is_some() {
+        RENDERING_ACTIVE.store(true, Ordering::Relaxed);
         info!("pov:boot active image is downloaded from flash");
     } else {
         info!("pov:boot no valid flash image; starting with built-in");
     }
 
-    loop {
-        // When an image is loaded or we are randomizing, render a frame then
-        // check for commands without blocking.  Otherwise block on the next
-        // command so we don't busy-loop.
-        let led_cmd: Option<LedCommand> = if current_display_slot.is_some() || randomizing {
-            if randomizing {
-                strips.randomize(&rng);
-                strips.show().await.expect("pov: randomize show failed");
-            } else if let Ok(bitmap) = bitmap_store.bitmap(0) {
-                strips.render_from_bitmap(&bitmap).await;
-            }
-            super::LED_COMMAND_CHANNEL.try_receive().ok()
-        } else {
-            Some(super::LED_COMMAND_CHANNEL.receive().await)
-        };
+    // Tracks which flash slot is active so NextImage can cycle in order:
+    // None → slot 0 → slot 1 → None → …
+    let mut current_display_slot = initial_slot;
 
-        let Some(cmd) = led_cmd else {
-            continue;
-        };
-        randomizing = false;
+    loop {
+        let cmd = super::LED_COMMAND_CHANNEL.receive().await;
 
         match cmd {
             LedCommand::Frame(frame) => {
                 info!(
-                    "pov:loop handling frame transfer_id={} command={:?}",
+                    "pov:cmd transfer_id={} command={:?}",
                     frame.transfer_id, frame.command
                 );
-                task_common::apply_led_command(
-                    &mut strips,
-                    &mut *bitmap_store,
-                    &mut current_display_slot,
-                    decode_scratch,
-                    &mut randomizing,
-                    frame,
-                )
-                .await;
+
+                match frame.command {
+                    SpokeCommand::DisplayOff => {
+                        RANDOMIZING.store(false, Ordering::Relaxed);
+                        RENDERING_ACTIVE.store(false, Ordering::Relaxed);
+                        info!("pov:cmd DisplayOff");
+                    }
+
+                    SpokeCommand::RandomizeDisplay => {
+                        RANDOMIZING.store(true, Ordering::Relaxed);
+                        info!("pov:cmd RandomizeDisplay");
+                    }
+
+                    SpokeCommand::NextImage => {
+                        RANDOMIZING.store(false, Ordering::Relaxed);
+                        let next_slot = match current_display_slot {
+                            None => Some(0usize),
+                            Some(0) => Some(1),
+                            Some(_) => None,
+                        };
+                        current_display_slot = next_slot;
+
+                        let mut guard = bitmap.lock().await;
+                        match next_slot {
+                            None => {
+                                guard.activate_builtin();
+                                // Render the built-in image continuously.
+                                RENDERING_ACTIVE.store(true, Ordering::Relaxed);
+                            }
+                            Some(slot) => {
+                                if task_common::load_flash_slot(slot, &mut **guard, decode_scratch)
+                                    .await
+                                {
+                                    RENDERING_ACTIVE.store(true, Ordering::Relaxed);
+                                } else {
+                                    RENDERING_ACTIVE.store(false, Ordering::Relaxed);
+                                    warn!("pov:cmd NextImage failed to load slot {}", slot);
+                                }
+                            }
+                        }
+                        info!("pov:cmd NextImage display_slot={:?}", current_display_slot);
+                    }
+                }
             }
+
             LedCommand::LoadSlot(slot) => {
-                info!("pov:loop load_slot slot={}", slot);
-                if task_common::load_flash_slot(slot, &mut *bitmap_store, decode_scratch).await {
+                info!("pov:cmd load_slot slot={}", slot);
+                let mut guard = bitmap.lock().await;
+                if task_common::load_flash_slot(slot, &mut **guard, decode_scratch).await {
                     current_display_slot = Some(slot);
-                    info!("pov:loop loaded flash slot {}", slot);
+                    RENDERING_ACTIVE.store(true, Ordering::Relaxed);
+                    info!("pov:cmd loaded flash slot {}", slot);
                 } else {
-                    warn!("pov:loop failed to load flash slot {}", slot);
+                    warn!("pov:cmd failed to load flash slot {}", slot);
+                    // Keep the current rendering state — old image stays on screen.
                 }
             }
         }

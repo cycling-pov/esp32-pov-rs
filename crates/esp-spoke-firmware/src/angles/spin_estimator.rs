@@ -148,11 +148,15 @@ impl SpinEstimator for AdcSpinEstimator {
 ///
 /// Angular position is extrapolated from the moment of construction using
 /// `embassy_time::Instant`. Useful for bench testing without hardware sensor.
+///
+/// Enabled by the `mock-spin` crate feature.
+#[cfg(feature = "mock-spin")]
 pub struct MockSpinEstimator {
     rate: AngularVelocity,
     start: Instant,
 }
 
+#[cfg(feature = "mock-spin")]
 impl MockSpinEstimator {
     pub fn new(rate: AngularVelocity) -> Self {
         Self {
@@ -162,6 +166,7 @@ impl MockSpinEstimator {
     }
 }
 
+#[cfg(feature = "mock-spin")]
 impl SpinEstimator for MockSpinEstimator {
     fn spin_state(&self) -> SpinState {
         let elapsed_us = self.start.elapsed().as_micros();
@@ -170,5 +175,31 @@ impl SpinEstimator for MockSpinEstimator {
             position: (self.rate * elapsed).constrain_circle(),
             rate: self.rate,
         }
+    }
+}
+
+/// Default mock spin rate used by [`mock_dual_spin_estimator_task`]: 3 revolutions per second.
+#[cfg(feature = "mock-spin")]
+pub const MOCK_SPIN_RATE: AngularVelocity =
+    AngularVelocity::from_radians_secs(3.0 * core::f32::consts::TAU);
+
+/// Background task that drives both [`SharedSpinState`]s from a [`MockSpinEstimator`].
+///
+/// Drop-in replacement for [`dual_spin_estimator_task`] when the `mock-spin`
+/// feature is active.  Both strips spin at [`MOCK_SPIN_RATE`].
+#[cfg(feature = "mock-spin")]
+#[embassy_executor::task]
+pub async fn mock_dual_spin_estimator_task(
+    state0: &'static SharedSpinState,
+    state1: &'static SharedSpinState,
+) -> ! {
+    let mock0 = MockSpinEstimator::new(MOCK_SPIN_RATE);
+    let mock1 = MockSpinEstimator::new(MOCK_SPIN_RATE);
+    loop {
+        Timer::after(EmbassyDuration::from_millis(1)).await;
+        let s0 = mock0.spin_state();
+        state0.lock(|s| *s.borrow_mut() = s0);
+        let s1 = mock1.spin_state();
+        state1.lock(|s| *s.borrow_mut() = s1);
     }
 }

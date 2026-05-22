@@ -26,6 +26,7 @@ usb-serial = []
 flash-4mb = []
 flash-16mb = []
 builtin-image = ["dep:image"]
+mock-spin = []
 
 [dependencies]
 esp-hal = { version = "~1.0", features = ["defmt", "esp32s3", "unstable"] }

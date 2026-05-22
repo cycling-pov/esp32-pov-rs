@@ -14,8 +14,12 @@ use embassy_executor::Spawner;
 #[cfg(feature = "heap-stats")]
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
+#[cfg(all(feature = "sk9822-strip", not(feature = "mock-spin")))]
+use esp_spoke_firmware::angles::dual_spin_estimator_task;
+#[cfg(all(feature = "sk9822-strip", feature = "mock-spin"))]
+use esp_spoke_firmware::angles::mock_dual_spin_estimator_task;
 #[cfg(feature = "sk9822-strip")]
-use esp_spoke_firmware::angles::{dual_spin_estimator_task, new_shared_spin_state};
+use esp_spoke_firmware::angles::new_shared_spin_state;
 #[cfg(feature = "sk9822-strip")]
 use esp_spoke_firmware::led::Sk9822Pins;
 use {esp_backtrace as _, esp_println as _};
@@ -122,9 +126,14 @@ async fn main(spawner: Spawner) -> ! {
         let spin0 = SPIN_STATE_0.init(new_shared_spin_state());
         let spin1 = SPIN_STATE_1.init(new_shared_spin_state());
 
+        #[cfg(not(feature = "mock-spin"))]
         spawner
             .spawn(dual_spin_estimator_task(spin0, spin1))
             .expect("failed to spawn dual spin estimator task");
+        #[cfg(feature = "mock-spin")]
+        spawner
+            .spawn(mock_dual_spin_estimator_task(spin0, spin1))
+            .expect("failed to spawn mock dual spin estimator task");
 
         led::init_sk9822_dual(
             peripherals.SPI2,

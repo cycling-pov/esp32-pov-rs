@@ -138,9 +138,13 @@ pub fn init_sk9822_dual(
     let strip1 = Sk9822Strip::<{ sk9822_strip::SK9822_LED_COUNT }>::new(spi_dma1, dma_loop_buf1);
     let dual = PovDualStrip::new(strip0, strip1, spin_state0, spin_state1);
 
+    let shared_bitmap = pov_dual_strip::init_bitmap_store();
     spawner
-        .spawn(pov_dual_strip::pov_dual_strip_task(dual))
-        .expect("failed to spawn POV dual-strip task");
+        .spawn(pov_dual_strip::pov_render_task(dual, shared_bitmap))
+        .expect("failed to spawn POV render task");
+    spawner
+        .spawn(pov_dual_strip::pov_command_task(shared_bitmap))
+        .expect("failed to spawn POV command task");
 }
 
 #[cfg(feature = "sk9822-strip")]
