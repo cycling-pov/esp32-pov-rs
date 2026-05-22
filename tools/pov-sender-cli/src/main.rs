@@ -309,10 +309,12 @@ fn main() -> anyhow::Result<()> {
         total_sends
     );
 
+    let mut rng = rand::rng();
+
     for rep in 0..args.repeat {
         // Shuffle packets for this repetition
         let mut packet_indices: Vec<usize> = (0..packets.len()).collect();
-        packet_indices.shuffle(&mut rand::thread_rng());
+        packet_indices.shuffle(&mut rng);
 
         for (i, &idx) in packet_indices.iter().enumerate() {
             let packet_num = rep * packets.len() + i + 1;
