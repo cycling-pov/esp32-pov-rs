@@ -232,9 +232,7 @@ impl EventHandler for BleScanEventHandler {
 }
 
 pub fn start_ble_backend(spawner: Spawner, controller: BleController) {
-    if spawner.spawn(ble_backend_task(controller)).is_err() {
-        info!("BLE backend task already running or unavailable");
-    }
+    spawner.spawn(ble_backend_task(controller).unwrap());
 }
 
 #[embassy_executor::task]

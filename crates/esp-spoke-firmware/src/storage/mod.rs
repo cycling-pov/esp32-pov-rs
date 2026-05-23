@@ -570,7 +570,5 @@ async fn mark_slot_empty(db: &ekv_flash::EkvDatabase, slot: usize) {
 }
 
 pub fn init(flash: esp_hal::peripherals::FLASH<'static>, spawner: Spawner) {
-    spawner
-        .spawn(storage_task(flash))
-        .expect("failed to spawn storage_task");
+    spawner.spawn(storage_task(flash).unwrap());
 }

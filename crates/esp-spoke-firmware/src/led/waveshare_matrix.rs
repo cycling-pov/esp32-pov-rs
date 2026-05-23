@@ -1,13 +1,8 @@
 use defmt::{info, warn};
 use embassy_futures::select::{Either, select};
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use esp_hal::{
-    Blocking,
-    peripherals::GPIO14,
-    rmt::{PulseCode, TxChannelCreator},
-    rng::Rng,
-};
-use esp_hal_smartled::{SmartLedsAdapter, buffer_size};
+use esp_hal::{Blocking, peripherals::GPIO14, rmt::TxChannelCreator, rng::Rng};
+use esp_hal_smartled::{RmtSmartLeds, Ws2811Timing, buffer_size, color_order};
 use smart_leds_trait::{RGB8, SmartLedsWrite as _};
 use static_cell::StaticCell;
 
@@ -21,7 +16,7 @@ use crate::led::{LedBrightness, LedCommand, LedError, LedStrip, LedTimings};
 const WAVESHARE_MATRIX_BRIGHTNESS_LIMIT_PERCENT: u16 = 1;
 
 const WAVESHARE_MATRIX_LED_COUNT: usize = 64;
-const WAVESHARE_MATRIX_BUFFER_SIZE: usize = buffer_size(WAVESHARE_MATRIX_LED_COUNT);
+const WAVESHARE_MATRIX_BUFFER_SIZE: usize = buffer_size::<RGB8>(WAVESHARE_MATRIX_LED_COUNT);
 const WAVESHARE_MATRIX_BRIGHTNESS: LedBrightness = LedBrightness::new(1);
 
 const WAVESHARE_DECODE_SCRATCH_BYTES: usize = 1024 * 10;
@@ -49,7 +44,14 @@ impl<'d> WaveshareMatrixPins<'d> {
 }
 
 pub struct WaveshareMatrix<'d> {
-    driver: SmartLedsAdapter<'d, WAVESHARE_MATRIX_BUFFER_SIZE, RGB8>,
+    driver: RmtSmartLeds<
+        'd,
+        WAVESHARE_MATRIX_BUFFER_SIZE,
+        Blocking,
+        RGB8,
+        color_order::Rgb,
+        Ws2811Timing,
+    >,
     framebuffer: [RGB8; WAVESHARE_MATRIX_LED_COUNT],
 }
 
@@ -61,14 +63,9 @@ impl<'d> WaveshareMatrix<'d> {
     where
         C: TxChannelCreator<'d, Blocking>,
     {
-        static RMT_BUFFER: StaticCell<[PulseCode; WAVESHARE_MATRIX_BUFFER_SIZE]> =
-            StaticCell::new();
-
-        let rmt_buffer = RMT_BUFFER.init([PulseCode::end_marker(); WAVESHARE_MATRIX_BUFFER_SIZE]);
-
         Self {
             // Waveshare matrix LEDs use RGB byte order, not the more common GRB.
-            driver: SmartLedsAdapter::new_with_color(channel, pins.data, rmt_buffer),
+            driver: RmtSmartLeds::new(channel, pins.data).expect("failed to configure LED RMT"),
             framebuffer: [RGB8::default(); WAVESHARE_MATRIX_LED_COUNT],
         }
     }

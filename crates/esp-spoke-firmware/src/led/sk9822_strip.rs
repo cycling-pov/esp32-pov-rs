@@ -58,6 +58,13 @@ pub struct Sk9822Strip<'d, const LED_COUNT: usize> {
     framebuffer: [RGB8; LED_COUNT],
 }
 
+// SAFETY: `Sk9822Strip` is exclusively owned by a single task. After an
+// ownership transfer across core boundaries, the originating core never
+// accesses it again. The `!Send` derives from `SpiDma<Async>`'s
+// `PhantomData<*const ()>`, which is a conservative lint rather than a
+// true memory-safety hazard for a complete ownership handoff.
+unsafe impl<'d, const N: usize> Send for Sk9822Strip<'d, N> {}
+
 impl<'d, const LED_COUNT: usize> Sk9822Strip<'d, LED_COUNT> {
     pub const LED_COUNT: usize = LED_COUNT;
     pub const TIMINGS: LedTimings = LedTimings::SK9822;

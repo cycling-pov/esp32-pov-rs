@@ -3,9 +3,7 @@ use embassy_executor::Spawner;
 use esp_radio::esp_now::EspNow;
 
 pub fn start_esp_now_backend(spawner: Spawner, esp_now: EspNow<'static>) {
-    if spawner.spawn(esp_now_backend_task(esp_now)).is_err() {
-        info!("ESP-NOW backend task already running or unavailable");
-    }
+    spawner.spawn(esp_now_backend_task(esp_now).unwrap());
 }
 
 #[embassy_executor::task]

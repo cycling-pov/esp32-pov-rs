@@ -455,15 +455,8 @@ fn configure_digital_controller(sample_rate: SampleRate, patt_len: u8) {
 }
 
 /// Bind and enable the APB_ADC interrupt at Priority2 with the given handler.
-fn bind_and_enable_interrupt(handler: esp_hal::interrupt::IsrCallback) {
-    // SAFETY: `handler` is a valid ISR obtained from the `#[handler]` macro,
-    // which guarantees the correct calling convention and interrupt-safe
-    // alignment. The caller holds exclusive ownership of `ADC1<'d>`, so no
-    // other code can concurrently reconfigure or rebind the APB_ADC vector.
-    unsafe {
-        esp_hal::interrupt::bind_interrupt(Interrupt::APB_ADC, handler);
-    }
-    esp_hal::interrupt::enable(Interrupt::APB_ADC, Priority::Priority2).unwrap();
+fn bind_and_enable_interrupt(handler: esp_hal::interrupt::InterruptHandler) {
+    esp_hal::interrupt::bind_handler(Interrupt::APB_ADC, handler);
 }
 
 // ---- Single-monitor mode (default) ----
@@ -528,9 +521,9 @@ where
         ADC_MONITOR_EVENT.store(0, Ordering::Release);
 
         bind_and_enable_interrupt(if S::ENABLED {
-            adc_monitor_interrupt_handler_tracking.handler()
+            adc_monitor_interrupt_handler_tracking
         } else {
-            adc_monitor_interrupt_handler_no_sample.handler()
+            adc_monitor_interrupt_handler_no_sample
         });
 
         Self {
@@ -688,9 +681,9 @@ where
         ADC_MONITOR1_EVENT.store(0, Ordering::Release);
 
         bind_and_enable_interrupt(if S::ENABLED {
-            adc_monitor_interrupt_handler_tracking.handler()
+            adc_monitor_interrupt_handler_tracking
         } else {
-            adc_monitor_interrupt_handler_no_sample.handler()
+            adc_monitor_interrupt_handler_no_sample
         });
 
         Self {

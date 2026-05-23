@@ -23,6 +23,8 @@ use pov_proto::transfer::CommandFrame;
 #[cfg(feature = "sk9822-strip")]
 pub use pov_dual_strip::PovDualStrip;
 #[cfg(feature = "sk9822-strip")]
+pub use pov_dual_strip::{SharedBitmapMutex, pov_command_task, pov_render_task};
+#[cfg(feature = "sk9822-strip")]
 pub use sk9822_strip::{Sk9822Pins, Sk9822Strip};
 
 pub use strip::{LedBrightness, LedError, LedStrip, LedTimings};
@@ -71,9 +73,7 @@ pub fn init_waveshare(
 ) {
     let rmt = Rmt::new(rmt, Rate::from_mhz(80)).expect("failed to initialize RMT");
     let led_strip = WaveshareMatrix::new(rmt.channel0, WaveshareMatrixPins::new(waveshare_pin));
-    spawner
-        .spawn(waveshare_matrix::waveshare_matrix_task(led_strip))
-        .expect("failed to spawn waveshare matrix task");
+    spawner.spawn(waveshare_matrix::waveshare_matrix_task(led_strip).unwrap());
 }
 
 #[cfg(feature = "sk9822-strip")]
@@ -90,7 +90,9 @@ pub fn init_sk9822_dual(
     pins1: Sk9822Pins<'static>,
     spin_state0: &'static crate::angles::spin_estimator::SharedSpinState,
     spin_state1: &'static crate::angles::spin_estimator::SharedSpinState,
-    spawner: Spawner,
+) -> (
+    PovDualStrip<'static, { sk9822_strip::SK9822_LED_COUNT }>,
+    &'static SharedBitmapMutex,
 ) {
     use esp_hal::dma::{DmaDescriptor, DmaLoopBuf};
     use esp_hal::spi::master::{Config as SpiConfig, Spi};
@@ -139,12 +141,7 @@ pub fn init_sk9822_dual(
     let dual = PovDualStrip::new(strip0, strip1, spin_state0, spin_state1);
 
     let shared_bitmap = pov_dual_strip::init_bitmap_store();
-    spawner
-        .spawn(pov_dual_strip::pov_render_task(dual, shared_bitmap))
-        .expect("failed to spawn POV render task");
-    spawner
-        .spawn(pov_dual_strip::pov_command_task(shared_bitmap))
-        .expect("failed to spawn POV command task");
+    (dual, shared_bitmap)
 }
 
 #[cfg(feature = "sk9822-strip")]
@@ -178,7 +175,5 @@ pub fn init_sk9822(
 
     let strip = Sk9822Strip::<{ sk9822_strip::SK9822_LED_COUNT }>::new(spi_dma, dma_loop_buf);
 
-    spawner
-        .spawn(sk9822_strip::sk9822_strip_task(strip))
-        .expect("failed to spawn SK9822 strip task");
+    spawner.spawn(sk9822_strip::sk9822_strip_task(strip).unwrap());
 }

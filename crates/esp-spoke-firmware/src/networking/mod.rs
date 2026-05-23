@@ -15,7 +15,7 @@ pub mod usb_serial;
 pub use download::{
     BLE_MAX_CHUNK_PAYLOAD, ESPNOW_MAX_CHUNK_PAYLOAD, IngestError, MAX_TRANSFER_BYTES, NetworkChunk,
 };
-#[cfg(any(feature = "ble", feature = "espnow"))]
+#[cfg(feature = "espnow")]
 use static_cell::StaticCell;
 
 /// Channel that carries individual image chunks to the main orchestration loop.
@@ -32,8 +32,6 @@ pub async fn receive_command() -> Option<CommandFrame> {
     COMMAND_CHANNEL.receiver().receive().await.into()
 }
 
-#[cfg(any(feature = "ble", feature = "espnow"))]
-static RADIO_CONTROLLER: StaticCell<esp_radio::Controller<'static>> = StaticCell::new();
 #[cfg(feature = "espnow")]
 static WIFI_CONTROLLER: StaticCell<esp_radio::wifi::WifiController<'static>> = StaticCell::new();
 
@@ -42,19 +40,14 @@ pub async fn init(
     _bluetooth: esp_hal::peripherals::BT<'static>,
     spawner: Spawner,
 ) {
-    #[cfg(any(feature = "ble", feature = "espnow"))]
-    let radio =
-        RADIO_CONTROLLER.init(esp_radio::init().expect("failed to initialize radio controller"));
-
     #[cfg(feature = "espnow")]
     {
-        let (mut wifi_ctrl, interfaces) = esp_radio::wifi::new(radio, _wifi, Default::default())
-            .expect("failed to initialize WiFi");
+        let (mut wifi_ctrl, interfaces) =
+            esp_radio::wifi::new(_wifi, Default::default()).expect("failed to initialize WiFi");
         wifi_ctrl
-            .set_mode(esp_radio::wifi::WifiMode::Sta)
-            .expect("failed to set WiFi mode");
+            .set_config(&esp_radio::wifi::Config::Station(Default::default()))
+            .expect("failed to set WiFi config to STA");
         info!("WiFi mode set to STA, starting WiFi...");
-        wifi_ctrl.start_async().await.expect("failed to start WiFi");
         info!("WiFi started, configuring ESP-NOW...");
         let esp_now = interfaces.esp_now;
 
@@ -72,7 +65,7 @@ pub async fn init(
     #[cfg(feature = "ble")]
     {
         let ble_connector =
-            esp_radio::ble::controller::BleConnector::new(radio, _bluetooth, Default::default())
+            esp_radio::ble::controller::BleConnector::new(_bluetooth, Default::default())
                 .expect("failed to initialize BLE connector");
         let ble_controller: bt_hci::controller::ExternalController<_, 1> =
             bt_hci::controller::ExternalController::new(ble_connector);
@@ -134,7 +127,5 @@ pub fn start_usb_serial_backend(
     spawner: Spawner,
     usb: esp_hal::usb_serial_jtag::UsbSerialJtag<'static, esp_hal::Async>,
 ) {
-    spawner
-        .spawn(usb_serial::usb_serial_task(usb))
-        .expect("failed to spawn usb_serial_task");
+    spawner.spawn(usb_serial::usb_serial_task(usb).unwrap());
 }

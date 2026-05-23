@@ -12,6 +12,10 @@ display system. The document describes the configuration in the 1.0 version hard
 4. **Render POV frames** by driving two SK9822 LED strips over SPI, reading the correct radial
    slice of the polar bitmap at the angular position reported by each strip's spin estimator.
 
+The firmware uses both ESP32-S3 cores. Core 0 hosts networking, storage, orchestration, and the
+LED command task; core 1 hosts the render loop and spin estimation so time-sensitive display work
+is isolated from the network and flash path.
+
 The firmware is built around a message-passing architecture using Embassy channels, signals, and
 mutexes. No task ever busy-polls another; all synchronisation is event-driven.
 
@@ -37,8 +41,8 @@ This document assumes the following Cargo feature set:
 
 ## Component Diagram
 
-The diagram below shows all six active Embassy tasks, the hardware peripherals each task owns, and
-every inter-task communication channel or shared-state object.
+The diagram below shows all six active Embassy tasks, the hardware peripherals each task owns, the
+core they run on, and every inter-task communication channel or shared-state object.
 
 ```mermaid
 flowchart LR
@@ -52,26 +56,26 @@ flowchart LR
         TIMG0["TIMG0<br>Embassy async timer"]
     end
 
-    subgraph net["Networking"]
-        ESPNOW["esp_now_backend_task"]
+    subgraph core0["Core 0"]
+        direction TB
+        MAIN
+        STASK
+        CMD
+        ESPNOW
     end
 
-    subgraph orch["Orchestration"]
-        MAIN["main loop"]
+    subgraph core1["Core 1"]
+        direction TB
+        SPIN
+        RENDER
     end
 
-    subgraph store["Storage"]
-        STASK["storage_task"]
-    end
-
-    subgraph spin["Spin Estimation"]
-        SPIN["dual_spin_estimator_task"]
-    end
-
-    subgraph led["LED Display"]
-        CMD["pov_command_task"]
-        RENDER["pov_render_task"]
-    end
+    MAIN["main loop"]
+    STASK["storage_task"]
+    ESPNOW["esp_now_backend_task"]
+    CMD["pov_command_task"]
+    SPIN["dual_spin_estimator_task"]
+    RENDER["pov_render_task"]
 
     WIFI --> ESPNOW
 
@@ -129,6 +133,11 @@ knowledge of the transport in use.
 
 ---
 
+### Task Placement
+
+- **Core 0**: `main` loop, networking backends, `storage_task`, and `pov_command_task`
+- **Core 1**: `pov_render_task` and `dual_spin_estimator_task` (or `mock_dual_spin_estimator_task`)
+
 ### Orchestration — `main` loop (`src/bin/main.rs`)
 
 The `main` async function is both the Embassy entry point and the transfer orchestrator. After
@@ -169,7 +178,7 @@ for the next download.
 
 ### LED Display (`src/led/`)
 
-Two tasks share the display pipeline:
+Two tasks share the display pipeline. Both are spawned on core 1:
 
 #### `pov_render_task`
 

@@ -88,13 +88,14 @@ async fn main(spawner: Spawner) -> ! {
     esp_alloc::heap_allocator!(size: COEX_HEAP_BYTES);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
-    esp_rtos::start(timg0.timer0);
+    let sw_int =
+        esp_hal::interrupt::software::SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
+    let sw_int1 = sw_int.software_interrupt1;
+    esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
     info!("Embassy initialized!");
 
     #[cfg(feature = "heap-stats")]
-    spawner
-        .spawn(heap_stats_task())
-        .expect("failed to spawn heap stats task");
+    spawner.spawn(heap_stats_task().unwrap());
 
     networking::init(peripherals.WIFI, peripherals.BT, spawner).await;
 
@@ -111,11 +112,33 @@ async fn main(spawner: Spawner) -> ! {
         info!("Flash storage initialized");
     }
 
-    #[cfg(feature = "waveshare-matrix")]
-    led::init_waveshare(peripherals.RMT, peripherals.GPIO14, spawner);
+    #[cfg(all(feature = "waveshare-matrix", not(feature = "sk9822-strip")))]
+    {
+        use esp_hal::system::Stack;
+        use static_cell::StaticCell;
+
+        static APP_CORE_STACK: StaticCell<Stack<65536>> = StaticCell::new();
+        let rmt = peripherals.RMT;
+        let gpio14 = peripherals.GPIO14;
+
+        esp_rtos::start_second_core(
+            peripherals.CPU_CTRL,
+            sw_int1,
+            APP_CORE_STACK.init(Stack::new()),
+            move || {
+                static CORE1_EXECUTOR: StaticCell<esp_rtos::embassy::Executor> = StaticCell::new();
+                CORE1_EXECUTOR
+                    .init(esp_rtos::embassy::Executor::new())
+                    .run(|spawner| {
+                        led::init_waveshare(rmt, gpio14, spawner);
+                    });
+            },
+        );
+    }
 
     #[cfg(feature = "sk9822-strip")]
     {
+        use esp_hal::system::Stack;
         use static_cell::StaticCell;
 
         static SPIN_STATE_0: StaticCell<esp_spoke_firmware::angles::SharedSpinState> =
@@ -123,19 +146,14 @@ async fn main(spawner: Spawner) -> ! {
         static SPIN_STATE_1: StaticCell<esp_spoke_firmware::angles::SharedSpinState> =
             StaticCell::new();
 
-        let spin0 = SPIN_STATE_0.init(new_shared_spin_state());
-        let spin1 = SPIN_STATE_1.init(new_shared_spin_state());
+        // Coerce &'static mut to &'static (shared, Copy) so the same reference
+        // can be passed to both init_sk9822_dual and the core-1 tasks.
+        let spin0: &'static esp_spoke_firmware::angles::SharedSpinState =
+            SPIN_STATE_0.init(new_shared_spin_state());
+        let spin1: &'static esp_spoke_firmware::angles::SharedSpinState =
+            SPIN_STATE_1.init(new_shared_spin_state());
 
-        #[cfg(not(feature = "mock-spin"))]
-        spawner
-            .spawn(dual_spin_estimator_task(spin0, spin1))
-            .expect("failed to spawn dual spin estimator task");
-        #[cfg(feature = "mock-spin")]
-        spawner
-            .spawn(mock_dual_spin_estimator_task(spin0, spin1))
-            .expect("failed to spawn mock dual spin estimator task");
-
-        led::init_sk9822_dual(
+        let (dual, shared_bitmap) = led::init_sk9822_dual(
             peripherals.SPI2,
             peripherals.DMA_CH0,
             Sk9822Pins::new(peripherals.GPIO12, peripherals.GPIO11),
@@ -144,7 +162,30 @@ async fn main(spawner: Spawner) -> ! {
             Sk9822Pins::new(peripherals.GPIO10, peripherals.GPIO9),
             spin0,
             spin1,
-            spawner,
+        );
+
+        spawner.spawn(led::pov_command_task(shared_bitmap).unwrap());
+
+        static APP_CORE_STACK: StaticCell<Stack<65536>> = StaticCell::new();
+
+        // SAFETY: `dual` is exclusively owned; core 0 never accesses it again
+        // after start_second_core. See `PovDualStrip`'s Send impl.
+        esp_rtos::start_second_core(
+            peripherals.CPU_CTRL,
+            sw_int1,
+            APP_CORE_STACK.init(Stack::new()),
+            move || {
+                static CORE1_EXECUTOR: StaticCell<esp_rtos::embassy::Executor> = StaticCell::new();
+                CORE1_EXECUTOR
+                    .init(esp_rtos::embassy::Executor::new())
+                    .run(|spawner| {
+                        spawner.spawn(led::pov_render_task(dual, shared_bitmap).unwrap());
+                        #[cfg(not(feature = "mock-spin"))]
+                        spawner.spawn(dual_spin_estimator_task(spin0, spin1).unwrap());
+                        #[cfg(feature = "mock-spin")]
+                        spawner.spawn(mock_dual_spin_estimator_task(spin0, spin1).unwrap());
+                    });
+            },
         );
     }
 

@@ -1,7 +1,7 @@
 use core::time::Duration;
 
 use esp_hal::rng::Rng;
-use esp_hal_smartled::LedAdapterError;
+use esp_hal_smartled::AdapterError as LedAdapterError;
 use smart_leds_trait::RGB8;
 
 // WS2811: 24 bits per LED × 2,500 ns per bit = 60,000 ns per LED

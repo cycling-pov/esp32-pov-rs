@@ -7,7 +7,7 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
-use defmt::{info, unwrap};
+use defmt::info;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
@@ -73,7 +73,9 @@ async fn main(spawner: Spawner) -> ! {
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 73744);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
-    esp_rtos::start(timg0.timer0);
+    let sw_int =
+        esp_hal::interrupt::software::SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
+    esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
 
     info!("Embassy initialized!");
 
@@ -102,8 +104,8 @@ async fn main(spawner: Spawner) -> ! {
         AdcMonitor::new_dual(peripherals.ADC1, hall_pin1, hall_pin2, config, config);
     hall_monitor.start();
 
-    unwrap!(spawner.spawn(hall_monitor_task()));
-    unwrap!(spawner.spawn(hall_monitor_task1()));
+    spawner.spawn(hall_monitor_task().unwrap());
+    spawner.spawn(hall_monitor_task1().unwrap());
 
     loop {
         info!("Hello world!");

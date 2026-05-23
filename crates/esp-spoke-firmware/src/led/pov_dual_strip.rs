@@ -36,7 +36,7 @@ type BitmapStore = Box<SwappingImageStorage<MAX_POLAR_PIXEL_COUNT>>;
 /// one radial slice per strip), then releases the lock before calling `show()`.
 /// The command task locks it for the duration of a flash-slot decode.  The
 /// mutex is therefore never held across an SPI transfer.
-type SharedBitmapMutex = Mutex<CriticalSectionRawMutex, BitmapStore>;
+pub type SharedBitmapMutex = Mutex<CriticalSectionRawMutex, BitmapStore>;
 
 static SHARED_BITMAP: StaticCell<SharedBitmapMutex> = StaticCell::new();
 
@@ -68,6 +68,10 @@ pub struct PovDualStrip<'d, const LEDS: usize> {
     spin0: &'static SharedSpinState,
     spin1: &'static SharedSpinState,
 }
+
+// SAFETY: `PovDualStrip` is exclusively owned by a single task/executor.
+// See `Sk9822Strip`'s Send impl for the rationale.
+unsafe impl<'d, const N: usize> Send for PovDualStrip<'d, N> {}
 
 impl<'d, const LEDS: usize> PovDualStrip<'d, LEDS> {
     pub fn new(
