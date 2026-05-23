@@ -2,7 +2,7 @@
 # The partition table CSV is selected at build time by build.rs based on the
 # active flash-size feature (flash-4mb or flash-16mb) and written to
 # target/esp-spoke-firmware-partitions.csv before espflash is invoked.
-runner = "espflash flash --monitor --chip esp32s3 --log-format defmt --partition-table target/esp-spoke-firmware-partitions.csv"
+runner = "espflash flash --monitor --chip esp32s3 --log-format defmt --partition-table target/partitions.csv"
 rustflags = ["-C", "link-arg=-nostartfiles"]
 
 [env]

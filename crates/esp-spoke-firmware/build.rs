@@ -21,7 +21,7 @@ fn main() {
 
 /// Copy the correct partition-table CSV into `target/` based on the active
 /// flash-size feature.  The runner in `.cargo/config.toml` always points at
-/// `target/esp-spoke-firmware-partitions.csv`, so this keeps it up-to-date
+/// `target/partitions.csv`, so this keeps it up-to-date
 /// automatically whenever the active feature changes.
 fn copy_partition_table() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR");
@@ -35,12 +35,12 @@ fn copy_partition_table() {
     };
     let src = manifest_path.join(csv_name);
 
-    // Write to `<workspace_root>/target/esp-spoke-firmware-partitions.csv`.
+    // Write to `<workspace_root>/target/partitions.csv`.
     // CARGO_MANIFEST_DIR is `crates/esp-spoke-firmware`, so `../..` reaches the workspace root.
     let dest = manifest_path
         .join("../..")
         .join("target")
-        .join("esp-spoke-firmware-partitions.csv");
+        .join("partitions.csv");
 
     std::fs::copy(&src, &dest)
         .unwrap_or_else(|e| panic!("failed to copy {csv_name} to target/: {e}"));

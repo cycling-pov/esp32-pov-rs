@@ -1,8 +1,35 @@
+use std::path::PathBuf;
+
 fn main() {
+    copy_partition_table();
     linker_be_nice();
     println!("cargo:rustc-link-arg=-Tdefmt.x");
     // make sure linkall.x is the last linker script (otherwise might cause problems with flip-link)
     println!("cargo:rustc-link-arg=-Tlinkall.x");
+}
+
+/// Copy the correct partition-table CSV into `target/` based on the active
+/// flash-size feature.  The runner in `.cargo/config.toml` always points at
+/// `target/partitions.csv`, so this keeps it up-to-date
+/// automatically whenever the active feature changes.
+fn copy_partition_table() {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR");
+    let manifest_path = PathBuf::from(&manifest_dir);
+
+    let csv_name = "partitions.csv";
+    let src = manifest_path.join(csv_name);
+
+    // Write to `<workspace_root>/target/partitions.csv`.
+    // CARGO_MANIFEST_DIR is `crates/esp-bridge-firmware`, so `../..` reaches the workspace root.
+    let dest = manifest_path
+        .join("../..")
+        .join("target")
+        .join("partitions.csv");
+
+    std::fs::copy(&src, &dest)
+        .unwrap_or_else(|e| panic!("failed to copy {csv_name} to target/: {e}"));
+
+    println!("cargo:rerun-if-changed={}", src.display());
 }
 
 fn linker_be_nice() {

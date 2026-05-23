@@ -1,0 +1,12 @@
+# ESP32-S3 partition table for esp-spoke-firmware (4 MB flash)
+#
+# Partition layout:
+#   0x000000 - 0x008FFF  (36 KB)   Bootloader (reserved by hardware)
+#   0x009000 - 0x00EFFF  (24 KB)   NVS
+#   0x00F000 - 0x00FFFF   (4 KB)   PHY calibration data
+#   0x010000 - 0x110000   (1 MB)   Factory app (initial firmware)
+
+# Name,      Type, SubType, Offset,   Size
+nvs,      data, nvs,     0x9000,  0x6000,
+phy_init, data, phy,     0xf000,  0x1000,
+factory,  app,  factory, 0x10000, 1M,
