@@ -50,7 +50,7 @@ const RECLAIMABLE_BOOTLOADER_BYTES: usize = 73744;
 const ADDITIONAL_HEAP_BYTES: usize = 64 * 1024;
 // COEX (simultaneous BLE + WiFi/ESP-NOW) requires extra heap on top.
 #[cfg(feature = "coexistence")]
-const COEX_HEAP_BYTES: usize = 64 * 1024;
+const COEX_HEAP_BYTES: usize = 56 * 1024;
 #[cfg(feature = "heap-stats")]
 #[embassy_executor::task]
 async fn heap_stats_task() -> ! {
