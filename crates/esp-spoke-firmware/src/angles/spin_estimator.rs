@@ -183,6 +183,13 @@ impl SpinEstimator for MockSpinEstimator {
 pub const MOCK_SPIN_RATE: AngularVelocity =
     AngularVelocity::from_radians_secs(3.0 * core::f32::consts::TAU);
 
+/// Mock phase offset applied to strip 1 in dual-strip mode.
+///
+/// In hardware, opposite spokes are approximately 180 degrees apart. Apply the
+/// same relationship in mock mode so bench tests render opposite hemispheres.
+#[cfg(feature = "mock-spin")]
+pub const MOCK_STRIP1_PHASE_OFFSET: Angle = Angle::from_radians(core::f32::consts::PI);
+
 /// Background task that drives both [`SharedSpinState`]s from a [`MockSpinEstimator`].
 ///
 /// Drop-in replacement for [`dual_spin_estimator_task`] when the `mock-spin`
@@ -199,7 +206,8 @@ pub async fn mock_dual_spin_estimator_task(
         Timer::after(EmbassyDuration::from_millis(1)).await;
         let s0 = mock0.spin_state();
         state0.lock(|s| *s.borrow_mut() = s0);
-        let s1 = mock1.spin_state();
+        let mut s1 = mock1.spin_state();
+        s1.position = (s1.position + MOCK_STRIP1_PHASE_OFFSET).constrain_circle();
         state1.lock(|s| *s.borrow_mut() = s1);
     }
 }
