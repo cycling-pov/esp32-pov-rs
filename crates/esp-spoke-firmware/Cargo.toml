@@ -15,7 +15,7 @@ name = "adc-test-software"
 path = "./src/angles/adc_testbench.rs"
 
 [features]
-default = ["espnow", "flash-4mb"]
+default = ["espnow", "flash-4mb", "sk9822-strip", "mock-spin"]
 waveshare-matrix = []
 sk9822-strip = []
 heap-stats = []
