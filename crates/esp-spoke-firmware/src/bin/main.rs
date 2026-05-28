@@ -156,10 +156,10 @@ async fn main(spawner: Spawner) -> ! {
         let (dual, shared_bitmap) = led::init_sk9822_dual(
             peripherals.SPI2,
             peripherals.DMA_CH0,
-            Sk9822Pins::new(peripherals.GPIO12, peripherals.GPIO11),
+            Sk9822Pins::new(peripherals.GPIO38, peripherals.GPIO39),
             peripherals.SPI3,
             peripherals.DMA_CH1,
-            Sk9822Pins::new(peripherals.GPIO10, peripherals.GPIO9),
+            Sk9822Pins::new(peripherals.GPIO40, peripherals.GPIO41),
             spin0,
             spin1,
         );
