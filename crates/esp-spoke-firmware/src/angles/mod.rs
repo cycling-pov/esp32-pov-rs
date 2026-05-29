@@ -1,6 +1,8 @@
 pub mod adc_monitor;
 pub mod spin_estimator;
 
+#[cfg(feature = "imu-spin")]
+pub use spin_estimator::imu_dual_spin_estimator_task;
 pub use spin_estimator::{
     AdcSpinEstimator, SENSOR_TRIGGER, SENSOR_TRIGGER_0, SENSOR_TRIGGER_1, SharedSpinState,
     SpinEstimator, SpinState, dual_spin_estimator_task, new_shared_spin_state, spin_estimator_task,

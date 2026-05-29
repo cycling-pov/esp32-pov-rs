@@ -14,8 +14,14 @@ use embassy_executor::Spawner;
 #[cfg(feature = "heap-stats")]
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
-#[cfg(all(feature = "sk9822-strip", not(feature = "mock-spin")))]
+#[cfg(all(
+    feature = "sk9822-strip",
+    not(feature = "mock-spin"),
+    not(feature = "imu-spin")
+))]
 use esp_spoke_firmware::angles::dual_spin_estimator_task;
+#[cfg(all(feature = "sk9822-strip", feature = "imu-spin"))]
+use esp_spoke_firmware::angles::imu_dual_spin_estimator_task;
 #[cfg(all(feature = "sk9822-strip", feature = "mock-spin"))]
 use esp_spoke_firmware::angles::mock_dual_spin_estimator_task;
 #[cfg(feature = "sk9822-strip")]
@@ -165,6 +171,13 @@ async fn main(spawner: Spawner) -> ! {
             spin1,
         );
 
+        #[cfg(feature = "imu-spin")]
+        let i2c0 = peripherals.I2C0;
+        #[cfg(feature = "imu-spin")]
+        let i2c_sda = peripherals.GPIO6;
+        #[cfg(feature = "imu-spin")]
+        let i2c_scl = peripherals.GPIO5;
+
         spawner.spawn(led::pov_command_task(shared_bitmap).unwrap());
 
         static APP_CORE_STACK: StaticCell<Stack<65536>> = StaticCell::new();
@@ -181,7 +194,19 @@ async fn main(spawner: Spawner) -> ! {
                     .init(esp_rtos::embassy::Executor::new())
                     .run(|spawner| {
                         spawner.spawn(led::pov_render_task(dual, shared_bitmap).unwrap());
-                        #[cfg(not(feature = "mock-spin"))]
+                        #[cfg(feature = "imu-spin")]
+                        let i2c = esp_hal::i2c::master::I2c::new(
+                            i2c0,
+                            esp_hal::i2c::master::Config::default()
+                                .with_frequency(esp_hal::time::Rate::from_khz(400)),
+                        )
+                        .expect("failed to initialize I2C0")
+                        .with_sda(i2c_sda)
+                        .with_scl(i2c_scl)
+                        .into_async();
+                        #[cfg(feature = "imu-spin")]
+                        spawner.spawn(imu_dual_spin_estimator_task(spin0, spin1, i2c).unwrap());
+                        #[cfg(all(not(feature = "mock-spin"), not(feature = "imu-spin")))]
                         spawner.spawn(dual_spin_estimator_task(spin0, spin1).unwrap());
                         #[cfg(feature = "mock-spin")]
                         spawner.spawn(mock_dual_spin_estimator_task(spin0, spin1).unwrap());

@@ -15,7 +15,7 @@ name = "adc-test-software"
 path = "./src/angles/adc_testbench.rs"
 
 [features]
-default = ["espnow", "flash-4mb", "sk9822-strip", "mock-spin"]
+default = ["espnow", "flash-4mb", "sk9822-strip", "imu-spin"]
 waveshare-matrix = []
 sk9822-strip = []
 heap-stats = []
@@ -27,6 +27,7 @@ flash-4mb = []
 flash-16mb = []
 builtin-image = ["dep:image"]
 mock-spin = []
+imu-spin = ["dep:fusion-ahrs", "dep:nalgebra"]
 
 [dependencies]
 esp-hal = { version = "1.1.1", features = ["defmt", "esp32s3", "unstable"] }
@@ -90,6 +91,10 @@ ekv = { version = "1.0.0", features = ["defmt", "crc"] }
 esp-storage = { version = "0.8.1", features = ["esp32s3"] }
 embedded-storage = "0.3"
 serde = { version = "1", default-features = false, features = ["derive"] }
+fusion-ahrs = { version = "0.6.0", optional = true }
+nalgebra = { version = "0.34", default-features = false, features = [
+    "libm",
+], optional = true }
 
 [profile.dev.package.esp-storage]
 opt-level = 3
