@@ -178,10 +178,10 @@ impl SpinEstimator for MockSpinEstimator {
     }
 }
 
-/// Default mock spin rate used by [`mock_dual_spin_estimator_task`]: 3 revolutions per second.
+/// Default mock spin rate used by [`mock_dual_spin_estimator_task`]: 2 revolutions per second.
 #[cfg(feature = "mock-spin")]
 pub const MOCK_SPIN_RATE: AngularVelocity =
-    AngularVelocity::from_radians_secs(3.0 * core::f32::consts::TAU);
+    AngularVelocity::from_radians_secs(2.0 * core::f32::consts::TAU);
 
 /// Mock phase offset applied to strip 1 in dual-strip mode.
 ///
