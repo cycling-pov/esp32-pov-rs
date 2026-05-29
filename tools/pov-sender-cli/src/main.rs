@@ -10,8 +10,8 @@ use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
 use pov_proto::{
     bridge::{BridgeFrame, TransportSelector},
-    image::{encode_polar_rgb888_to_wire, encode_rgb888_to_wire, LedCount, RadialCount},
-    transfer::{encode_packet, ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand},
+    image::{LedCount, RadialCount, encode_polar_rgb888_to_wire, encode_rgb888_to_wire},
+    transfer::{ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand, encode_packet},
 };
 use rand::seq::SliceRandom;
 use serialport::SerialPort;
