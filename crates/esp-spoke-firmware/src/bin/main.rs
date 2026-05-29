@@ -22,6 +22,8 @@ use esp_spoke_firmware::angles::mock_dual_spin_estimator_task;
 use esp_spoke_firmware::angles::new_shared_spin_state;
 #[cfg(feature = "sk9822-strip")]
 use esp_spoke_firmware::led::Sk9822Pins;
+#[cfg(feature = "sk9822-strip")]
+use static_cell::StaticCell;
 use {esp_backtrace as _, esp_println as _};
 
 extern crate alloc;
@@ -139,7 +141,6 @@ async fn main(spawner: Spawner) -> ! {
     #[cfg(feature = "sk9822-strip")]
     {
         use esp_hal::system::Stack;
-        use static_cell::StaticCell;
 
         static SPIN_STATE_0: StaticCell<esp_spoke_firmware::angles::SharedSpinState> =
             StaticCell::new();
@@ -194,6 +195,8 @@ async fn main(spawner: Spawner) -> ! {
     // Track the transfer currently being streamed to flash.
     #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
     let mut active: Option<ActiveTransfer> = None;
+    #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+    let mut render_pause_held = false;
 
     loop {
         // Forward networking events to the active LED task or storage layer.
@@ -232,6 +235,20 @@ async fn main(spawner: Spawner) -> ! {
                     // If a new transfer has started, abort the previous one and
                     // allocate a fresh flash slot.
                     if active.as_ref().is_none_or(|a| a.transfer_id != transfer_id) {
+                        if !render_pause_held {
+                            // Mark as held unconditionally: pause_render_for_flash always
+                            // sets RENDER_PAUSE_REQUESTED, so resume_render_after_flash must
+                            // always be called afterward — even if the ack times out — to
+                            // avoid leaving the render task stuck in its IRAM spin loop.
+                            render_pause_held = true;
+                            if !led::pause_render_for_flash(500).await {
+                                warn!(
+                                    "main:render pause ack timeout before transfer {}",
+                                    transfer_id
+                                );
+                            }
+                        }
+
                         if let Some(old) = active.take() {
                             info!(
                                 "main:new transfer {} aborts previous transfer {} in slot {}",
@@ -258,6 +275,10 @@ async fn main(spawner: Spawner) -> ! {
                                     "main:begin_slot_write failed for transfer_id={}",
                                     transfer_id
                                 );
+                                if render_pause_held {
+                                    led::resume_render_after_flash();
+                                    render_pause_held = false;
+                                }
                                 // Drop this chunk; the next one will retry begin_slot_write.
                                 continue;
                             }
@@ -314,6 +335,11 @@ async fn main(spawner: Spawner) -> ! {
                                         a.transfer_id, a.slot
                                     );
                                 }
+                            }
+
+                            if render_pause_held {
+                                led::resume_render_after_flash();
+                                render_pause_held = false;
                             }
                         }
                     }

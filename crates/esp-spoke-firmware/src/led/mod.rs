@@ -7,6 +7,7 @@ pub(crate) mod task_common;
 #[cfg(feature = "waveshare-matrix")]
 mod waveshare_matrix;
 
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use defmt::{info, warn};
 
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
@@ -14,6 +15,7 @@ use embassy_executor::Spawner;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
+use embassy_time::{Duration, Instant, Timer};
 #[cfg(feature = "waveshare-matrix")]
 use esp_hal::rmt::Rmt;
 #[cfg(feature = "waveshare-matrix")]
@@ -42,6 +44,11 @@ pub enum LedCommand {
 
 static LED_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, LedCommand, 4> = Channel::new();
 
+pub(crate) const CORE1_FLASH_PAUSE_PARTICIPANTS: usize = 2;
+
+pub(crate) static CORE1_FLASH_PAUSE_REQUESTED: AtomicBool = AtomicBool::new(false);
+pub(crate) static CORE1_FLASH_PAUSED_COUNT: AtomicUsize = AtomicUsize::new(0);
+
 /// Try to send a command to the active LED output task.
 /// Returns `true` if the command was enqueued, `false` if the channel is full.
 pub fn try_send_led_command(cmd: LedCommand) -> bool {
@@ -62,6 +69,55 @@ pub fn try_send_led_command(cmd: LedCommand) -> bool {
     } else {
         warn!("led:enqueue failed channel full");
         false
+    }
+}
+
+/// Request that all core1 tasks (render + spin estimator) pause before flash
+/// mutations begin. Both tasks enter an IRAM-resident spin loop so core1 no
+/// longer fetches from flash-backed ICache pages for the duration of the write.
+/// Cache_Disable_ICache (called by ROM flash routines) is therefore harmless.
+///
+/// Returns `true` when all core1 tasks have acknowledged, or `false` on timeout.
+/// For non-SK9822 builds this is a no-op that returns `true`.
+pub async fn pause_render_for_flash(timeout_ms: u64) -> bool {
+    #[cfg(feature = "sk9822-strip")]
+    {
+        CORE1_FLASH_PAUSED_COUNT.store(0, Ordering::Release);
+        CORE1_FLASH_PAUSE_REQUESTED.store(true, Ordering::Release);
+
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        loop {
+            let paused_count = CORE1_FLASH_PAUSED_COUNT.load(Ordering::Acquire);
+            if paused_count == CORE1_FLASH_PAUSE_PARTICIPANTS {
+                // Both core1 tasks are now spinning in IRAM — flash writes are safe.
+                info!("led:pause_render_for_flash: core1 in IRAM spin, flash safe");
+                return true;
+            }
+            if Instant::now() >= deadline {
+                warn!(
+                    "led:pause_render_for_flash timeout paused_count={} expected={}",
+                    paused_count, CORE1_FLASH_PAUSE_PARTICIPANTS
+                );
+                return false;
+            }
+            Timer::after(Duration::from_millis(1)).await;
+        }
+    }
+
+    #[cfg(not(feature = "sk9822-strip"))]
+    {
+        let _ = timeout_ms;
+        true
+    }
+}
+
+/// Clear the pause request so all core1 tasks resume normal execution.
+/// Clearing the flags causes the core1 IRAM spin loops to exit autonomously.
+pub fn resume_render_after_flash() {
+    #[cfg(feature = "sk9822-strip")]
+    {
+        CORE1_FLASH_PAUSE_REQUESTED.store(false, Ordering::Release);
+        info!("led:resume_render_after_flash: all core1 tasks resumed");
     }
 }
 

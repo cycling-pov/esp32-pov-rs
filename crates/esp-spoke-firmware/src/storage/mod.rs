@@ -211,7 +211,15 @@ fn find_partition_range(table: &partitions::PartitionTable<'_>, label: &str) -> 
 pub async fn storage_task(flash: esp_hal::peripherals::FLASH<'static>) -> ! {
     info!("storage:task started");
 
-    let mut flash_storage = FlashStorage::new(flash);
+    // On dual-core builds, use auto-park while render tasks cooperate via
+    // Core1 tasks cooperate via `pause_render_for_flash` which drives them into
+    // IRAM-resident spin loops before any flash mutation begins.  Once in the IRAM
+    // spin they fetch no instructions from flash-backed ICache pages, so
+    // Cache_Disable_ICache (called by ROM flash routines) is safe.  We use
+    // `multicore_ignore` here because the coordination is handled externally by
+    // the caller via `led::pause_render_for_flash` / `resume_render_after_flash`.
+    let mut flash_storage = unsafe { FlashStorage::new(flash).multicore_ignore() };
+    info!("storage:task flash multicore strategy=ignore (core1 in IRAM spin)");
 
     let mut partition_table_raw = [0u8; partitions::PARTITION_TABLE_MAX_LEN];
     let partition_table =
@@ -318,6 +326,7 @@ pub async fn storage_task(flash: esp_hal::peripherals::FLASH<'static>) -> ! {
             }
             // ── Streaming write ───────────────────────────────────────────────
             StorageRequest::BeginSlotWrite => {
+                info!("storage:begin_slot_write request received");
                 // Clean up any previous in-progress write.
                 if let Some(prev_slot) = write_slot.take() {
                     info!(
@@ -333,7 +342,9 @@ pub async fn storage_task(flash: esp_hal::peripherals::FLASH<'static>) -> ! {
                 write_header = None;
 
                 // Pick the slot that is NOT currently active.
+                info!("storage:begin_slot_write reading active slot");
                 let active = config::get_active_slot(&db).await;
+                info!("storage:begin_slot_write active slot={:?}", active);
                 let slot = match active {
                     Some(a) => (a as usize + 1) % DOWNLOADABLE_IMAGE_SLOTS,
                     None => 0,
@@ -341,13 +352,19 @@ pub async fn storage_task(flash: esp_hal::peripherals::FLASH<'static>) -> ! {
                 info!("storage:begin_slot_write slot={}", slot);
 
                 // Erase the chosen slot's existing data.
+                info!("storage:begin_slot_write reading slot state slot={}", slot);
                 let old_chunk_count = match config::get_slot_state(&db, slot).await {
                     ImageSlotState::Valid { chunk_count, .. } => chunk_count,
                     _ => 0,
                 };
+                info!(
+                    "storage:begin_slot_write erase start slot={} old_chunk_count={}",
+                    slot, old_chunk_count
+                );
                 let result = image_file::erase_slot(&db, slot, old_chunk_count)
                     .await
                     .map(|_| {
+                        info!("storage:begin_slot_write erase ok slot={}", slot);
                         write_slot = Some(slot);
                         write_crc = Some(Crc32Hasher::new());
                         slot
@@ -365,6 +382,12 @@ pub async fn storage_task(flash: esp_hal::peripherals::FLASH<'static>) -> ! {
                 chunk_num,
                 data,
             } => {
+                info!(
+                    "storage:write_slot_chunk request slot={} chunk={} bytes={}",
+                    slot,
+                    chunk_num,
+                    data.len()
+                );
                 let result = if write_slot != Some(slot) {
                     warn!(
                         "storage:write_slot_chunk slot mismatch: expected {:?} got {}",
@@ -376,8 +399,16 @@ pub async fn storage_task(flash: esp_hal::peripherals::FLASH<'static>) -> ! {
                     Err(())
                 } else {
                     // Write this chunk via its own committed transaction.
+                    info!(
+                        "storage:write_slot_chunk dispatch write slot={} chunk={}",
+                        slot, chunk_num
+                    );
                     match image_file::write_chunk(&db, slot, chunk_num, &data).await {
                         Ok(()) => {
+                            info!(
+                                "storage:write_slot_chunk write ok slot={} chunk={}",
+                                slot, chunk_num
+                            );
                             // Accumulate CRC in RAM.
                             if let Some(ref mut h) = write_crc {
                                 h.update(&data);
@@ -404,6 +435,10 @@ pub async fn storage_task(flash: esp_hal::peripherals::FLASH<'static>) -> ! {
                 total_bytes,
                 kind,
             } => {
+                info!(
+                    "storage:commit_slot request slot={} expected_crc32={=u32:#010x} total_bytes={} kind={:?}",
+                    slot, expected_crc32, total_bytes, kind
+                );
                 let result = if write_slot != Some(slot) {
                     warn!(
                         "storage:commit_slot slot mismatch: expected {:?} got {}",
@@ -422,6 +457,12 @@ pub async fn storage_task(flash: esp_hal::peripherals::FLASH<'static>) -> ! {
                     )
                     .await
                 };
+
+                if result.is_ok() {
+                    info!("storage:commit_slot result ok slot={}", slot);
+                } else {
+                    warn!("storage:commit_slot result err slot={}", slot);
+                }
 
                 // Always clear write state after commit attempt.
                 write_slot = None;

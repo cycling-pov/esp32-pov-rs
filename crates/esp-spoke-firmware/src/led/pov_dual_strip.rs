@@ -18,6 +18,7 @@ use crate::bitmap::{
 };
 use crate::led::sk9822_strip::{SK9822_LED_COUNT, Sk9822Strip};
 use crate::led::task_common::{self, RenderBitmap};
+use crate::led::{CORE1_FLASH_PAUSE_REQUESTED, CORE1_FLASH_PAUSED_COUNT};
 use crate::led::{LedCommand, LedError, LedStrip, LedTimings};
 
 /// Scratch buffer size: large enough for a full polar image (30×360×3 bytes).
@@ -47,6 +48,20 @@ static RENDERING_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// `true` while the render task should output random-noise frames.
 /// Cleared when any other display command is received.
 static RANDOMIZING: AtomicBool = AtomicBool::new(false);
+
+/// Busy-spins in IRAM while flash is being written.
+///
+/// Placed in IRAM via `#[esp_hal::ram]` so the CPU never fetches from
+/// flash-backed ICache pages during the spin.  `Cache_Disable_ICache()` (called
+/// inside ROM flash-write routines) is therefore harmless to this core.
+#[esp_hal::ram]
+fn render_pause_spin() {
+    CORE1_FLASH_PAUSED_COUNT.fetch_add(1, Ordering::Release);
+    while CORE1_FLASH_PAUSE_REQUESTED.load(Ordering::Acquire) {
+        core::hint::spin_loop();
+    }
+    CORE1_FLASH_PAUSED_COUNT.fetch_sub(1, Ordering::Release);
+}
 
 /// Initialise the shared bitmap store and return a `'static` reference to it.
 ///
@@ -228,6 +243,13 @@ pub async fn pov_render_task(
     let rng = Rng::new();
 
     loop {
+        if CORE1_FLASH_PAUSE_REQUESTED.load(Ordering::Acquire) {
+            info!("pov:render paused for flash write");
+            render_pause_spin();
+            info!("pov:render resumed after flash write");
+            continue;
+        }
+
         if RANDOMIZING.load(Ordering::Relaxed) {
             strips.randomize(&rng);
             let (s0, s1) = (&mut strips.strip0, &mut strips.strip1);

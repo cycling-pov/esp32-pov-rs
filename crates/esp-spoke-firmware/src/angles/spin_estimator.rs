@@ -1,12 +1,16 @@
 use core::cell::RefCell;
+use core::sync::atomic::Ordering;
 use core::time::Duration;
 
+use defmt::info;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use pov_algs::filters::PositionEstimator;
 use pov_algs::{Angle, AngularVelocity};
+
+use crate::led::{CORE1_FLASH_PAUSED_COUNT, CORE1_FLASH_PAUSE_REQUESTED};
 
 /// Current rotational state of the spoke wheel.
 #[derive(Clone, Copy)]
@@ -41,8 +45,22 @@ pub const fn new_shared_spin_state() -> SharedSpinState {
 /// Any write triggers a position update in [`spin_estimator_task`].
 pub static SENSOR_TRIGGER: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
-/// Per-strip sensor signals for dual-strip POV mode.
+/// Busy-spins in IRAM while flash is being written.
 ///
+/// Placed in IRAM via `#[esp_hal::ram]` so no flash-backed ICache pages are
+/// referenced during the spin. Symmetric with `render_pause_spin` in
+/// `pov_dual_strip`.
+#[esp_hal::ram]
+fn spin_estimator_pause_spin() {
+    CORE1_FLASH_PAUSED_COUNT.fetch_add(1, Ordering::Release);
+    while CORE1_FLASH_PAUSE_REQUESTED.load(Ordering::Acquire) {
+        core::hint::spin_loop();
+    }
+    CORE1_FLASH_PAUSED_COUNT.fetch_sub(1, Ordering::Release);
+}
+
+/// Per-strip sensor signals for dual-strip POV mode.
+
 /// Strip 0's hall-effect sensor task calls `SENSOR_TRIGGER_0.signal(())`;
 /// strip 1's sensor task calls `SENSOR_TRIGGER_1.signal(())`.  Both are
 /// consumed by [`dual_spin_estimator_task`].
@@ -97,6 +115,13 @@ pub async fn dual_spin_estimator_task(
 
     loop {
         Timer::after(EmbassyDuration::from_millis(1)).await;
+
+        if CORE1_FLASH_PAUSE_REQUESTED.load(Ordering::Acquire) {
+            info!("spin:dual paused for flash write");
+            spin_estimator_pause_spin();
+            info!("spin:dual resumed after flash write");
+            continue;
+        }
 
         let now = Instant::now();
         let dt = Duration::from_micros(now.duration_since(last).as_micros());
@@ -204,6 +229,14 @@ pub async fn mock_dual_spin_estimator_task(
     let mock1 = MockSpinEstimator::new(MOCK_SPIN_RATE);
     loop {
         Timer::after(EmbassyDuration::from_millis(1)).await;
+
+        if CORE1_FLASH_PAUSE_REQUESTED.load(Ordering::Acquire) {
+            info!("spin:mock paused for flash write");
+            spin_estimator_pause_spin();
+            info!("spin:mock resumed after flash write");
+            continue;
+        }
+
         let s0 = mock0.spin_state();
         state0.lock(|s| *s.borrow_mut() = s0);
         let mut s1 = mock1.spin_state();
