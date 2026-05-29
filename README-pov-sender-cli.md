@@ -21,7 +21,10 @@ cargo run -- --port <serial-port> display-off
 cargo run -- --port <serial-port> next-image
 cargo run -- --port <serial-port> send-image --image kirby.png
 cargo run -- --port <serial-port> -t espnow send-image --image kirby.png
+cargo run -- --port <serial-port> send-image --image kirby.png --polar --first-led-distance 18 --last-led-distance 72
 ```
+
+In polar mode, LED radii are generated as evenly spaced points from the first LED distance to the last LED distance (inclusive). This naturally removes center-region samples between hub center and the first LED.
 
 Send a typed raw payload:
 

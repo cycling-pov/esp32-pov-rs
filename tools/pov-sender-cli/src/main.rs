@@ -10,8 +10,8 @@ use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
 use pov_proto::{
     bridge::{BridgeFrame, TransportSelector},
-    image::{LedCount, RadialCount, encode_polar_rgb888_to_wire, encode_rgb888_to_wire},
-    transfer::{ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand, encode_packet},
+    image::{encode_polar_rgb888_to_wire, encode_rgb888_to_wire, LedCount, RadialCount},
+    transfer::{encode_packet, ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand},
 };
 use rand::seq::SliceRandom;
 use serialport::SerialPort;
@@ -87,14 +87,19 @@ enum Command {
         image: PathBuf,
 
         /// Pre-convert the image to polar (radial × angular) coordinates before
-        /// encoding.  Requires --radii-file.
+        /// encoding. Requires --first-led-distance and --last-led-distance.
         #[arg(long, default_value_t = false)]
         polar: bool,
 
-        /// Path to a text file with one radius value per line (0.0–1.0).
-        /// Required with --polar; must supply exactly 30 lines.
+        /// Physical distance from hub center to LED 0 (innermost LED).
+        /// Unit is arbitrary, but both distance arguments must use the same unit.
         #[arg(long)]
-        radii_file: Option<PathBuf>,
+        first_led_distance: Option<f32>,
+
+        /// Physical distance from hub center to LED 29 (outermost LED).
+        /// Unit is arbitrary, but both distance arguments must use the same unit.
+        #[arg(long)]
+        last_led_distance: Option<f32>,
     },
     /// Send a raw file as a typed download payload.
     SendDownload {
@@ -139,33 +144,38 @@ fn main() -> anyhow::Result<()> {
         Command::SendImage {
             image,
             polar,
-            radii_file,
+            first_led_distance,
+            last_led_distance,
         } => {
             let wire_bytes = if polar {
                 // --- polar path ---
-                let radius_values = if let Some(path) = radii_file {
-                    let content = fs::read_to_string(&path)
-                        .with_context(|| format!("Failed to read radii file {:?}", path))?;
-                    content
-                        .lines()
-                        .filter(|l| !l.trim().is_empty())
-                        .map(|l| {
-                            l.trim()
-                                .parse::<f32>()
-                                .with_context(|| format!("Invalid radius value {:?}", l))
-                        })
-                        .collect::<anyhow::Result<Vec<f32>>>()?
-                } else {
-                    anyhow::bail!("--polar requires --radii-file");
-                };
+                let first_distance =
+                    first_led_distance.context("--polar requires --first-led-distance")?;
+                let last_distance =
+                    last_led_distance.context("--polar requires --last-led-distance")?;
 
-                if radius_values.len() != POLAR_LEDS {
+                if !first_distance.is_finite() || !last_distance.is_finite() {
+                    anyhow::bail!("LED distances must be finite numbers");
+                }
+
+                if first_distance < 0.0 || last_distance <= 0.0 {
                     anyhow::bail!(
-                        "--polar requires exactly {} radius values, got {}",
-                        POLAR_LEDS,
-                        radius_values.len()
+                        "LED distances must satisfy --first-led-distance >= 0 and --last-led-distance > 0"
                     );
                 }
+
+                if first_distance > last_distance {
+                    anyhow::bail!("--first-led-distance must be <= --last-led-distance");
+                }
+
+                // Normalize distances so the outermost LED maps to radius 1.0.
+                let first_radius = first_distance / last_distance;
+                let radius_values = evenly_spaced_radii(POLAR_LEDS, first_radius, 1.0);
+
+                println!(
+                    "Polar distance mapping: first={} last={} => normalized first radius={:.6}",
+                    first_distance, last_distance, first_radius
+                );
 
                 let img = image::open(&image)
                     .with_context(|| format!("Failed to open image {:?}", image))?
@@ -354,4 +364,21 @@ fn send_bridge_frame(
     thread::sleep(Duration::from_millis(1000));
 
     Ok(())
+}
+
+fn evenly_spaced_radii(led_count: usize, start: f32, end: f32) -> Vec<f32> {
+    if led_count == 0 {
+        return Vec::new();
+    }
+    if led_count == 1 {
+        return vec![start];
+    }
+
+    let denom = (led_count - 1) as f32;
+    (0..led_count)
+        .map(|i| {
+            let t = (i as f32) / denom;
+            start + (end - start) * t
+        })
+        .collect()
 }

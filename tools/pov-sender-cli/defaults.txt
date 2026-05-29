@@ -1,0 +1,4 @@
+Hub size: 130
+65
+Distance to first from arm: 10
+Distance to last from arm: 210
