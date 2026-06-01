@@ -29,6 +29,8 @@ fn copy_partition_table() {
 
     let csv_name = if cfg!(feature = "flash-16mb") {
         "partitions-16mb.csv"
+    } else if cfg!(feature = "flash-8mb") {
+        "partitions-8mb.csv"
     } else {
         // default: flash-4mb
         "partitions-4mb.csv"
