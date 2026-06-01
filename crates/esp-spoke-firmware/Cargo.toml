@@ -12,7 +12,7 @@ path = "./src/bin/main.rs"
 
 [[bin]]
 name = "adc-test-software"
-path = "./src/angle_estimator/adc_testbench.rs"
+path = "./src/angle_estimator/hall_effect/adc_testbench.rs"
 
 [features]
 default = ["espnow", "flash-4mb", "sk9822-strip", "imu-spin"]

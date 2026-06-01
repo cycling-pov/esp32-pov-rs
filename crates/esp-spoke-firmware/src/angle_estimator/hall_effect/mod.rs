@@ -1,3 +1,5 @@
+pub mod adc_monitor;
+
 use core::time::Duration;
 
 use defmt::info;

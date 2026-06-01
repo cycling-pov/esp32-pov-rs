@@ -1,4 +1,3 @@
-pub mod adc_monitor;
 pub mod hall_effect;
 pub mod imu;
 pub mod mock;
