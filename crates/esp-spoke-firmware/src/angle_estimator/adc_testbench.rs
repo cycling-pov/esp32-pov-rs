@@ -12,7 +12,7 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
-use esp_spoke_firmware::angles::adc_monitor::{
+use esp_spoke_firmware::angle_estimator::adc_monitor::{
     AdcMonitor, AdcSample, MonitorConfig, MonitorThreshold, SampleRate, ThresholdEvent,
     latest_sample0, latest_sample1, wait_for_threshold0, wait_for_threshold1,
 };

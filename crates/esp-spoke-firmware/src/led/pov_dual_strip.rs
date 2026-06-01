@@ -12,7 +12,7 @@ use pov_proto::transfer::SpokeCommand;
 use smart_leds_trait::RGB8;
 use static_cell::StaticCell;
 
-use crate::angles::spin_estimator::SharedSpinState;
+use crate::angle_estimator::SharedSpinState;
 use crate::bitmap::{
     Bitmap, BitmapStorage, MAX_POLAR_PIXEL_COUNT, SwappingImageStorage, generated_swapping_storage,
 };

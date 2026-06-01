@@ -144,8 +144,8 @@ pub fn init_sk9822_dual(
     spi1: esp_hal::peripherals::SPI3<'static>,
     dma_ch1: esp_hal::peripherals::DMA_CH1<'static>,
     pins1: Sk9822Pins<'static>,
-    spin_state0: &'static crate::angles::spin_estimator::SharedSpinState,
-    spin_state1: &'static crate::angles::spin_estimator::SharedSpinState,
+    spin_state0: &'static crate::angle_estimator::SharedSpinState,
+    spin_state1: &'static crate::angle_estimator::SharedSpinState,
 ) -> (
     PovDualStrip<'static, { sk9822_strip::SK9822_LED_COUNT }>,
     &'static SharedBitmapMutex,

@@ -1,250 +1,7 @@
-use core::cell::RefCell;
-use core::sync::atomic::Ordering;
-use core::time::Duration;
-
 use defmt::info;
-use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::signal::Signal;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
-#[cfg(feature = "imu-spin")]
 use nalgebra::RealField;
-use pov_algs::filters::PositionEstimator;
 use pov_algs::{Angle, AngularVelocity};
-
-use crate::led::{CORE1_FLASH_PAUSE_REQUESTED, CORE1_FLASH_PAUSED_COUNT};
-
-/// Current rotational state of the spoke wheel.
-#[derive(Clone, Copy)]
-pub struct SpinState {
-    /// Current angular position in the range [0, 2π).
-    pub position: Angle,
-    /// Current angular velocity in radians per second.
-    pub rate: AngularVelocity,
-}
-
-impl Default for SpinState {
-    fn default() -> Self {
-        Self {
-            position: Angle::from_radians(0.0),
-            rate: AngularVelocity::from_radians_secs(0.0),
-        }
-    }
-}
-
-/// Shared spin state written by [`spin_estimator_task`] and read by consumers.
-pub type SharedSpinState = BlockingMutex<CriticalSectionRawMutex, RefCell<SpinState>>;
-
-/// Creates a const-initializable shared spin state, suitable for use in a `static`.
-pub const fn new_shared_spin_state() -> SharedSpinState {
-    BlockingMutex::new(RefCell::new(SpinState {
-        position: Angle::from_radians(0.0),
-        rate: AngularVelocity::from_radians_secs(0.0),
-    }))
-}
-
-/// Signal written by hardware sensor tasks when a spoke passes the reference point.
-/// Any write triggers a position update in [`spin_estimator_task`].
-pub static SENSOR_TRIGGER: Signal<CriticalSectionRawMutex, ()> = Signal::new();
-
-/// Busy-spins in IRAM while flash is being written.
-///
-/// Placed in IRAM via `#[esp_hal::ram]` so no flash-backed ICache pages are
-/// referenced during the spin. Symmetric with `render_pause_spin` in
-/// `pov_dual_strip`.
-#[esp_hal::ram]
-fn spin_estimator_pause_spin() {
-    CORE1_FLASH_PAUSED_COUNT.fetch_add(1, Ordering::Release);
-    while CORE1_FLASH_PAUSE_REQUESTED.load(Ordering::Acquire) {
-        core::hint::spin_loop();
-    }
-    CORE1_FLASH_PAUSED_COUNT.fetch_sub(1, Ordering::Release);
-}
-
-/// Per-strip sensor signals for dual-strip POV mode.
-/// Strip 0's hall-effect sensor task calls `SENSOR_TRIGGER_0.signal(())`;
-/// strip 1's sensor task calls `SENSOR_TRIGGER_1.signal(())`.  Both are
-/// consumed by [`dual_spin_estimator_task`].
-pub static SENSOR_TRIGGER_0: Signal<CriticalSectionRawMutex, ()> = Signal::new();
-pub static SENSOR_TRIGGER_1: Signal<CriticalSectionRawMutex, ()> = Signal::new();
-
-/// Background task that maintains the spoke wheel position estimate.
-///
-/// Steps a [`PositionEstimator`] on a 1 ms tick. Callers with hardware ADC
-/// access should call `SENSOR_TRIGGER.signal(())` from their own task whenever
-/// the spoke passes the hall-effect sensor.
-#[embassy_executor::task]
-pub async fn spin_estimator_task(state: &'static SharedSpinState) -> ! {
-    let mut estimator = PositionEstimator::<1>::default();
-    let mut last = Instant::now();
-
-    loop {
-        Timer::after(EmbassyDuration::from_millis(1)).await;
-
-        let now = Instant::now();
-        let dt = Duration::from_micros(now.duration_since(last).as_micros());
-        last = now;
-
-        let triggered = SENSOR_TRIGGER.try_take().map(|_| 0usize);
-        estimator.step(dt, triggered);
-
-        state.lock(|s| {
-            *s.borrow_mut() = SpinState {
-                position: estimator.get_current_pos(),
-                rate: estimator.get_current_rate(),
-            };
-        });
-    }
-}
-
-/// Background task that independently tracks the angular position of two
-/// strips, each with its own hall-effect sensor.
-///
-/// Both strips are assumed to be on the same spinning wheel (same RPM) but
-/// each sensor provides its own zero/phase reference.  Two separate
-/// [`PositionEstimator`] instances are stepped on a 1 ms tick; each is
-/// triggered by its own sensor signal ([`SENSOR_TRIGGER_0`] /
-/// [`SENSOR_TRIGGER_1`]) and writes to its own [`SharedSpinState`].
-#[embassy_executor::task]
-pub async fn dual_spin_estimator_task(
-    state0: &'static SharedSpinState,
-    state1: &'static SharedSpinState,
-) -> ! {
-    let mut estimator0 = PositionEstimator::<1>::default();
-    let mut estimator1 = PositionEstimator::<1>::default();
-    let mut last = Instant::now();
-
-    loop {
-        Timer::after(EmbassyDuration::from_millis(1)).await;
-
-        if CORE1_FLASH_PAUSE_REQUESTED.load(Ordering::Acquire) {
-            info!("spin:dual paused for flash write");
-            spin_estimator_pause_spin();
-            info!("spin:dual resumed after flash write");
-            continue;
-        }
-
-        let now = Instant::now();
-        let dt = Duration::from_micros(now.duration_since(last).as_micros());
-        last = now;
-
-        let triggered0 = SENSOR_TRIGGER_0.try_take().map(|_| 0usize);
-        estimator0.step(dt, triggered0);
-        state0.lock(|s| {
-            *s.borrow_mut() = SpinState {
-                position: estimator0.get_current_pos(),
-                rate: estimator0.get_current_rate(),
-            };
-        });
-
-        let triggered1 = SENSOR_TRIGGER_1.try_take().map(|_| 0usize);
-        estimator1.step(dt, triggered1);
-        state1.lock(|s| {
-            *s.borrow_mut() = SpinState {
-                position: estimator1.get_current_pos(),
-                rate: estimator1.get_current_rate(),
-            };
-        });
-    }
-}
-
-/// Read-only access to the current rotational state.
-pub trait SpinEstimator {
-    fn spin_state(&self) -> SpinState;
-}
-
-/// [`SpinEstimator`] backed by the static state populated by [`spin_estimator_task`].
-pub struct AdcSpinEstimator {
-    state: &'static SharedSpinState,
-}
-
-impl AdcSpinEstimator {
-    pub fn new(state: &'static SharedSpinState) -> Self {
-        Self { state }
-    }
-}
-
-impl SpinEstimator for AdcSpinEstimator {
-    fn spin_state(&self) -> SpinState {
-        self.state.lock(|s| *s.borrow())
-    }
-}
-
-/// Mock [`SpinEstimator`] that spins at a constant configurable rate.
-///
-/// Angular position is extrapolated from the moment of construction using
-/// `embassy_time::Instant`. Useful for bench testing without hardware sensor.
-///
-/// Enabled by the `mock-spin` crate feature.
-#[cfg(feature = "mock-spin")]
-pub struct MockSpinEstimator {
-    rate: AngularVelocity,
-    start: Instant,
-}
-
-#[cfg(feature = "mock-spin")]
-impl MockSpinEstimator {
-    pub fn new(rate: AngularVelocity) -> Self {
-        Self {
-            rate,
-            start: Instant::now(),
-        }
-    }
-}
-
-#[cfg(feature = "mock-spin")]
-impl SpinEstimator for MockSpinEstimator {
-    fn spin_state(&self) -> SpinState {
-        let elapsed_us = self.start.elapsed().as_micros();
-        let elapsed = Duration::from_micros(elapsed_us);
-        SpinState {
-            position: (self.rate * elapsed).constrain_circle(),
-            rate: self.rate,
-        }
-    }
-}
-
-/// Default mock spin rate used by [`mock_dual_spin_estimator_task`]: 2 revolutions per second.
-#[cfg(feature = "mock-spin")]
-pub const MOCK_SPIN_RATE: AngularVelocity =
-    AngularVelocity::from_radians_secs(2.0 * core::f32::consts::TAU);
-
-/// Mock phase offset applied to strip 1 in dual-strip mode.
-///
-/// In hardware, opposite spokes are approximately 180 degrees apart. Apply the
-/// same relationship in mock mode so bench tests render opposite hemispheres.
-#[cfg(feature = "mock-spin")]
-pub const MOCK_STRIP1_PHASE_OFFSET: Angle = Angle::from_radians(core::f32::consts::PI);
-
-/// Background task that drives both [`SharedSpinState`]s from a [`MockSpinEstimator`].
-///
-/// Drop-in replacement for [`dual_spin_estimator_task`] when the `mock-spin`
-/// feature is active.  Both strips spin at [`MOCK_SPIN_RATE`].
-#[cfg(feature = "mock-spin")]
-#[embassy_executor::task]
-pub async fn mock_dual_spin_estimator_task(
-    state0: &'static SharedSpinState,
-    state1: &'static SharedSpinState,
-) -> ! {
-    let mock0 = MockSpinEstimator::new(MOCK_SPIN_RATE);
-    let mock1 = MockSpinEstimator::new(MOCK_SPIN_RATE);
-    loop {
-        Timer::after(EmbassyDuration::from_millis(1)).await;
-
-        if CORE1_FLASH_PAUSE_REQUESTED.load(Ordering::Acquire) {
-            info!("spin:mock paused for flash write");
-            spin_estimator_pause_spin();
-            info!("spin:mock resumed after flash write");
-            continue;
-        }
-
-        let s0 = mock0.spin_state();
-        state0.lock(|s| *s.borrow_mut() = s0);
-        let mut s1 = mock1.spin_state();
-        s1.position = (s1.position + MOCK_STRIP1_PHASE_OFFSET).constrain_circle();
-        state1.lock(|s| *s.borrow_mut() = s1);
-    }
-}
 
 #[cfg(feature = "imu-spin")]
 const L3GD20H_ADDR: u8 = 0x6B;
@@ -399,8 +156,8 @@ fn check_and_initialize_gyro_bias(
     sample: &ImuSample,
     dt: f32,
     last_angle: Angle,
-    state0: &SharedSpinState,
-    state1: &SharedSpinState,
+    state0: &super::SharedSpinState,
+    state1: &super::SharedSpinState,
 ) -> bool {
     #[cfg(feature = "imu-spin")]
     const IMU_CALIBRATION_DURATION_S: f32 = 5.0;
@@ -447,13 +204,13 @@ fn check_and_initialize_gyro_bias(
 
     let zero_rate = AngularVelocity::from_radians_secs(0.0);
     state0.lock(|s| {
-        *s.borrow_mut() = SpinState {
+        *s.borrow_mut() = super::SpinState {
             position: last_angle,
             rate: zero_rate,
         };
     });
     state1.lock(|s| {
-        *s.borrow_mut() = SpinState {
+        *s.borrow_mut() = super::SpinState {
             position: last_angle,
             rate: zero_rate,
         };
@@ -474,8 +231,8 @@ fn check_and_initialize_gyro_bias(
 #[cfg(feature = "imu-spin")]
 #[embassy_executor::task]
 pub async fn imu_dual_spin_estimator_task(
-    state0: &'static SharedSpinState,
-    state1: &'static SharedSpinState,
+    state0: &'static super::SharedSpinState,
+    state1: &'static super::SharedSpinState,
     mut i2c: esp_hal::i2c::master::I2c<'static, esp_hal::Async>,
 ) -> ! {
     use fusion_ahrs::{Ahrs, AhrsSettings, Convention};
@@ -523,9 +280,9 @@ pub async fn imu_dual_spin_estimator_task(
     loop {
         Timer::after(EmbassyDuration::from_millis(1)).await;
 
-        if CORE1_FLASH_PAUSE_REQUESTED.load(Ordering::Acquire) {
+        if super::pause_needed_for_flash() {
             info!("spin:imu paused for flash write");
-            spin_estimator_pause_spin();
+            super::spin_estimator_pause_spin();
             info!("spin:imu resumed after flash write");
             continue;
         }
@@ -624,13 +381,13 @@ pub async fn imu_dual_spin_estimator_task(
                         .constrain_circle();
 
                 state0.lock(|s| {
-                    *s.borrow_mut() = SpinState {
+                    *s.borrow_mut() = super::SpinState {
                         position: strip0_angle,
                         rate,
                     };
                 });
                 state1.lock(|s| {
-                    *s.borrow_mut() = SpinState {
+                    *s.borrow_mut() = super::SpinState {
                         position: strip1_angle,
                         rate,
                     };

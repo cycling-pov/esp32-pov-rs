@@ -19,13 +19,12 @@ use esp_hal::clock::CpuClock;
     not(feature = "mock-spin"),
     not(feature = "imu-spin")
 ))]
-use esp_spoke_firmware::angles::dual_spin_estimator_task;
 #[cfg(all(feature = "sk9822-strip", feature = "imu-spin"))]
-use esp_spoke_firmware::angles::imu_dual_spin_estimator_task;
+use esp_spoke_firmware::angle_estimator::imu_dual_spin_estimator_task;
 #[cfg(all(feature = "sk9822-strip", feature = "mock-spin"))]
-use esp_spoke_firmware::angles::mock_dual_spin_estimator_task;
+use esp_spoke_firmware::angle_estimator::mock_dual_spin_estimator_task;
 #[cfg(feature = "sk9822-strip")]
-use esp_spoke_firmware::angles::new_shared_spin_state;
+use esp_spoke_firmware::angle_estimator::new_shared_spin_state;
 #[cfg(feature = "sk9822-strip")]
 use esp_spoke_firmware::led::Sk9822Pins;
 #[cfg(feature = "sk9822-strip")]
@@ -148,16 +147,16 @@ async fn main(spawner: Spawner) -> ! {
     {
         use esp_hal::system::Stack;
 
-        static SPIN_STATE_0: StaticCell<esp_spoke_firmware::angles::SharedSpinState> =
+        static SPIN_STATE_0: StaticCell<esp_spoke_firmware::angle_estimator::SharedSpinState> =
             StaticCell::new();
-        static SPIN_STATE_1: StaticCell<esp_spoke_firmware::angles::SharedSpinState> =
+        static SPIN_STATE_1: StaticCell<esp_spoke_firmware::angle_estimator::SharedSpinState> =
             StaticCell::new();
 
         // Coerce &'static mut to &'static (shared, Copy) so the same reference
         // can be passed to both init_sk9822_dual and the core-1 tasks.
-        let spin0: &'static esp_spoke_firmware::angles::SharedSpinState =
+        let spin0: &'static esp_spoke_firmware::angle_estimator::SharedSpinState =
             SPIN_STATE_0.init(new_shared_spin_state());
-        let spin1: &'static esp_spoke_firmware::angles::SharedSpinState =
+        let spin1: &'static esp_spoke_firmware::angle_estimator::SharedSpinState =
             SPIN_STATE_1.init(new_shared_spin_state());
 
         let (dual, shared_bitmap) = led::init_sk9822_dual(
@@ -205,11 +204,26 @@ async fn main(spawner: Spawner) -> ! {
                         .with_scl(i2c_scl)
                         .into_async();
                         #[cfg(feature = "imu-spin")]
-                        spawner.spawn(imu_dual_spin_estimator_task(spin0, spin1, i2c).unwrap());
+                        spawner.spawn(
+                            esp_spoke_firmware::angle_estimator::imu_dual_spin_estimator_task(
+                                spin0, spin1, i2c,
+                            )
+                            .unwrap(),
+                        );
                         #[cfg(all(not(feature = "mock-spin"), not(feature = "imu-spin")))]
-                        spawner.spawn(dual_spin_estimator_task(spin0, spin1).unwrap());
+                        spawner.spawn(
+                            esp_spoke_firmware::angle_estimator::dual_spin_estimator_task(
+                                spin0, spin1,
+                            )
+                            .unwrap(),
+                        );
                         #[cfg(feature = "mock-spin")]
-                        spawner.spawn(mock_dual_spin_estimator_task(spin0, spin1).unwrap());
+                        spawner.spawn(
+                            esp_spoke_firmware::angle_estimator::mock_dual_spin_estimator_task(
+                                spin0, spin1,
+                            )
+                            .unwrap(),
+                        );
                     });
             },
         );

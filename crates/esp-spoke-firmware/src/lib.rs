@@ -10,7 +10,7 @@ compile_error!("features `imu-spin` and `mock-spin` are mutually exclusive");
 
 extern crate alloc;
 
-pub mod angles;
+pub mod angle_estimator;
 pub mod bitmap;
 pub mod led;
 pub mod networking;
