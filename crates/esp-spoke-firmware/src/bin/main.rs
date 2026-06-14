@@ -45,9 +45,13 @@ use esp_spoke_firmware::led::LedCommand;
 use esp_spoke_firmware::networking;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use esp_spoke_firmware::storage;
+#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+use esp_spoke_firmware::storage::config::SensorConfig;
 
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use pov_proto::transfer::DownloadKind;
+#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+use pov_proto::transfer::SpokeCommand;
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -146,11 +150,17 @@ async fn main(spawner: Spawner) -> ! {
     #[cfg(feature = "sk9822-strip")]
     {
         use esp_hal::system::Stack;
+        use pov_algs::Angle;
 
         static SPIN_STATE_0: StaticCell<esp_spoke_firmware::angle_estimator::SharedSpinState> =
             StaticCell::new();
         static SPIN_STATE_1: StaticCell<esp_spoke_firmware::angle_estimator::SharedSpinState> =
             StaticCell::new();
+
+        let sensor_config = storage::get_sensor_config().await;
+        let _hall_offset_0 = Angle::from_degrees(sensor_config.hall_offset_0_degrees);
+        let _hall_offset_1 = Angle::from_degrees(sensor_config.hall_offset_1_degrees);
+        let imu_offset_degrees = sensor_config.imu_offset_degrees;
 
         // Coerce &'static mut to &'static (shared, Copy) so the same reference
         // can be passed to both init_sk9822_dual and the core-1 tasks.
@@ -206,14 +216,20 @@ async fn main(spawner: Spawner) -> ! {
                         #[cfg(feature = "imu-spin")]
                         spawner.spawn(
                             esp_spoke_firmware::angle_estimator::imu_dual_spin_estimator_task(
-                                spin0, spin1, i2c,
+                                spin0,
+                                spin1,
+                                i2c,
+                                imu_offset_degrees,
                             )
                             .unwrap(),
                         );
                         #[cfg(all(not(feature = "mock-spin"), not(feature = "imu-spin")))]
                         spawner.spawn(
                             esp_spoke_firmware::angle_estimator::dual_spin_estimator_task(
-                                spin0, spin1,
+                                spin0,
+                                spin1,
+                                _hall_offset_0,
+                                _hall_offset_1,
                             )
                             .unwrap(),
                         );
@@ -247,16 +263,44 @@ async fn main(spawner: Spawner) -> ! {
                 Either::First(Some(command)) => {
                     let transfer_id = command.transfer_id;
                     let command_kind = command.command;
-                    if !led::try_send_led_command(LedCommand::Frame(command)) {
-                        warn!(
-                            "main:dropped frame transfer_id={} command={:?}",
-                            transfer_id, command_kind
-                        );
-                    } else {
-                        info!(
-                            "main:forwarded frame transfer_id={} command={:?}",
-                            transfer_id, command_kind
-                        );
+                    match command.command {
+                        SpokeCommand::SetSensorOffsets {
+                            hall_offset_0_degrees,
+                            hall_offset_1_degrees,
+                            imu_offset_degrees,
+                        } => {
+                            let result = storage::set_sensor_config(SensorConfig {
+                                hall_offset_0_degrees,
+                                hall_offset_1_degrees,
+                                imu_offset_degrees,
+                            })
+                            .await;
+
+                            if result.is_err() {
+                                warn!(
+                                    "main:failed to persist sensor offsets transfer_id={}",
+                                    transfer_id
+                                );
+                            } else {
+                                info!(
+                                    "main:persisted sensor offsets transfer_id={} reboot_required=true",
+                                    transfer_id
+                                );
+                            }
+                        }
+                        _ => {
+                            if !led::try_send_led_command(LedCommand::Frame(command)) {
+                                warn!(
+                                    "main:dropped frame transfer_id={} command={:?}",
+                                    transfer_id, command_kind
+                                );
+                            } else {
+                                info!(
+                                    "main:forwarded frame transfer_id={} command={:?}",
+                                    transfer_id, command_kind
+                                );
+                            }
+                        }
                     }
                 }
                 Either::Second(Some(chunk)) => {

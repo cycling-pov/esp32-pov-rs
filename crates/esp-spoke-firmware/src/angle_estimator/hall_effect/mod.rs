@@ -6,7 +6,7 @@ use defmt::info;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
-use pov_algs::filters::PositionEstimator;
+use pov_algs::{Angle, filters::PositionEstimator};
 
 /// Signal written by hardware sensor tasks when a spoke passes the reference point.
 /// Any write triggers a position update in [`spin_estimator_task`].
@@ -60,6 +60,8 @@ pub async fn spin_estimator_task(state: &'static super::SharedSpinState) -> ! {
 pub async fn dual_spin_estimator_task(
     state0: &'static super::SharedSpinState,
     state1: &'static super::SharedSpinState,
+    hall_offset_0: Angle,
+    hall_offset_1: Angle,
 ) -> ! {
     let mut estimator0 = PositionEstimator::<1>::default();
     let mut estimator1 = PositionEstimator::<1>::default();
@@ -83,7 +85,7 @@ pub async fn dual_spin_estimator_task(
         estimator0.step(dt, triggered0);
         state0.lock(|s| {
             *s.borrow_mut() = super::SpinState {
-                position: estimator0.get_current_pos(),
+                position: (estimator0.get_current_pos() + hall_offset_0).constrain_circle(),
                 rate: estimator0.get_current_rate(),
             };
         });
@@ -92,7 +94,7 @@ pub async fn dual_spin_estimator_task(
         estimator1.step(dt, triggered1);
         state1.lock(|s| {
             *s.borrow_mut() = super::SpinState {
-                position: estimator1.get_current_pos(),
+                position: (estimator1.get_current_pos() + hall_offset_1).constrain_circle(),
                 rate: estimator1.get_current_rate(),
             };
         });

@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
 use pov_sender_core::{
-    DownloadKind, DownloadRequest, PolarEncodeOptions, SerialLinkConfig, SpokeCommand,
-    Transport as CoreTransport, send_command, send_download, send_image,
+    DownloadKind, DownloadRequest, PolarEncodeOptions, SensorOffsets, SerialLinkConfig,
+    SpokeCommand, Transport as CoreTransport, send_command, send_download, send_image,
+    send_sensor_offsets,
 };
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -101,6 +102,15 @@ enum Command {
     /// Advance the spoke to the next stored image.
     NextImage,
     RandomizeDisplay,
+    /// Persist hall and IMU offsets to nonvolatile storage.
+    SetSensorOffsets {
+        #[arg(long)]
+        hall_offset_0_degrees: f32,
+        #[arg(long)]
+        hall_offset_1_degrees: f32,
+        #[arg(long)]
+        imu_offset_degrees: f32,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -166,6 +176,24 @@ fn main() -> anyhow::Result<()> {
         Command::RandomizeDisplay => {
             let stats = send_command(&config, SpokeCommand::RandomizeDisplay)?;
             println!("Collected command: RandomizeDisplay");
+            stats
+        }
+        Command::SetSensorOffsets {
+            hall_offset_0_degrees,
+            hall_offset_1_degrees,
+            imu_offset_degrees,
+        } => {
+            let stats = send_sensor_offsets(
+                &config,
+                SensorOffsets {
+                    hall_offset_0_degrees,
+                    hall_offset_1_degrees,
+                    imu_offset_degrees,
+                },
+            )?;
+            println!(
+                "Collected command: SetSensorOffsets hall0={hall_offset_0_degrees} hall1={hall_offset_1_degrees} imu={imu_offset_degrees}"
+            );
             stats
         }
     };

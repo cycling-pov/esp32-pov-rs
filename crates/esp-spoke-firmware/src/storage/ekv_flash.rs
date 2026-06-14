@@ -205,9 +205,13 @@ pub type EkvDatabase = Database<EkvFlash<'static>, CriticalSectionRawMutex>;
 //   0x01          → active slot index (value: 1 byte: slot as u8)
 //   0x02 <slot>   → slot metadata     (value: postcard-encoded SlotMetadata)
 //   0x03 <slot> <chunk_hi> <chunk_lo> → image chunk data (value: raw bytes)
+//   0x04          → sensor config     (value: postcard-encoded SensorConfig)
 
 /// Key for the active-slot index record.
 pub const KEY_ACTIVE_SLOT: &[u8] = &[0x01];
+
+/// Key for the persisted sensor-config record.
+pub const KEY_SENSOR_CONFIG: &[u8] = &[0x04];
 
 /// Key for the metadata record of `slot`.
 #[inline]

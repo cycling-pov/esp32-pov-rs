@@ -78,6 +78,13 @@ pub struct SendStats {
     pub total_transmissions: usize,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct SensorOffsets {
+    pub hall_offset_0_degrees: f32,
+    pub hall_offset_1_degrees: f32,
+    pub imu_offset_degrees: f32,
+}
+
 pub fn send_image(
     config: &SerialLinkConfig,
     image_path: &Path,
@@ -123,6 +130,20 @@ pub fn send_command(config: &SerialLinkConfig, command: SpokeCommand) -> anyhow:
 
     let packets = vec![chunk_buf[..n].to_vec()];
     send_packets(config, &packets)
+}
+
+pub fn send_sensor_offsets(
+    config: &SerialLinkConfig,
+    offsets: SensorOffsets,
+) -> anyhow::Result<SendStats> {
+    send_command(
+        config,
+        SpokeCommand::SetSensorOffsets {
+            hall_offset_0_degrees: offsets.hall_offset_0_degrees,
+            hall_offset_1_degrees: offsets.hall_offset_1_degrees,
+            imu_offset_degrees: offsets.imu_offset_degrees,
+        },
+    )
 }
 
 fn send_packets(config: &SerialLinkConfig, packets: &[Vec<u8>]) -> anyhow::Result<SendStats> {

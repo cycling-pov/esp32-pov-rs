@@ -3,7 +3,7 @@ use ekv::ReadError;
 use pov_proto::image::Encoding;
 use serde::{Deserialize, Serialize};
 
-use super::ekv_flash::{EkvDatabase, KEY_ACTIVE_SLOT, meta_key};
+use super::ekv_flash::{EkvDatabase, KEY_ACTIVE_SLOT, KEY_SENSOR_CONFIG, meta_key};
 
 // ── Value types ───────────────────────────────────────────────────────────────
 
@@ -30,6 +30,39 @@ pub enum ImageSlotState {
         kind: ImageKind,
         encoding: Encoding,
     },
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, defmt::Format)]
+pub struct SensorConfig {
+    pub hall_offset_0_degrees: f32,
+    pub hall_offset_1_degrees: f32,
+    pub imu_offset_degrees: f32,
+}
+
+impl SensorConfig {
+    pub const MAX_SERIALIZED_LEN: usize = 32;
+
+    #[allow(clippy::result_unit_err)]
+    pub fn serialize_to<'a>(
+        &self,
+        buf: &'a mut [u8; Self::MAX_SERIALIZED_LEN],
+    ) -> Result<&'a [u8], ()> {
+        postcard::to_slice(self, buf).map(|s| &*s).map_err(|_| ())
+    }
+
+    pub fn deserialize(bytes: &[u8]) -> Option<Self> {
+        postcard::from_bytes(bytes).ok()
+    }
+}
+
+impl Default for SensorConfig {
+    fn default() -> Self {
+        Self {
+            hall_offset_0_degrees: 0.0,
+            hall_offset_1_degrees: 0.0,
+            imu_offset_degrees: 0.0,
+        }
+    }
 }
 
 // ── Slot metadata record ──────────────────────────────────────────────────────
@@ -103,6 +136,44 @@ pub async fn set_active_slot(db: &EkvDatabase, slot: u8) -> Result<(), ()> {
     })?;
     wtx.commit().await.map_err(|_| {
         warn!("config:set_active_slot commit error slot={}", slot);
+    })
+}
+
+pub async fn get_sensor_config(db: &EkvDatabase) -> SensorConfig {
+    info!("config:get_sensor_config");
+    let rtx = db.read_transaction().await;
+    let mut buf = [0u8; SensorConfig::MAX_SERIALIZED_LEN];
+    let config = match rtx.read(KEY_SENSOR_CONFIG, &mut buf).await {
+        Ok(len) => SensorConfig::deserialize(&buf[..len]).unwrap_or_else(|| {
+            warn!("config:get_sensor_config decode error, using defaults");
+            SensorConfig::default()
+        }),
+        Err(ReadError::KeyNotFound) => SensorConfig::default(),
+        Err(e) => {
+            warn!(
+                "config:get_sensor_config read error: {:?}",
+                defmt::Debug2Format(&e)
+            );
+            SensorConfig::default()
+        }
+    };
+    info!("config:get_sensor_config result={:?}", config);
+    config
+}
+
+pub async fn set_sensor_config(db: &EkvDatabase, config: SensorConfig) -> Result<(), ()> {
+    info!("config:set_sensor_config config={:?}", config);
+    let mut write_buf = [0u8; SensorConfig::MAX_SERIALIZED_LEN];
+    let serialized = config.serialize_to(&mut write_buf)?;
+
+    let mut wtx = db.write_transaction().await;
+    wtx.write(KEY_SENSOR_CONFIG, serialized)
+        .await
+        .map_err(|_| {
+            warn!("config:set_sensor_config write error");
+        })?;
+    wtx.commit().await.map_err(|_| {
+        warn!("config:set_sensor_config commit error");
     })
 }
 

@@ -354,6 +354,10 @@ pub async fn pov_command_task(bitmap: &'static SharedBitmapMutex) -> ! {
                         }
                         info!("pov:cmd NextImage display_slot={:?}", current_display_slot);
                     }
+
+                    SpokeCommand::SetSensorOffsets { .. } => {
+                        info!("pov:cmd ignoring SetSensorOffsets in render task");
+                    }
                 }
             }
 

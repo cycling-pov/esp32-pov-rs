@@ -5,8 +5,9 @@ use iced::{
     widget::{button, checkbox, column, container, pick_list, row, text, text_input},
 };
 use pov_sender_core::{
-    DownloadKind, DownloadRequest, PolarEncodeOptions, SerialLinkConfig, SpokeCommand, Transport,
-    list_serial_ports, send_command, send_download, send_image,
+    DownloadKind, DownloadRequest, PolarEncodeOptions, SensorOffsets, SerialLinkConfig,
+    SpokeCommand, Transport, list_serial_ports, send_command, send_download, send_image,
+    send_sensor_offsets,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -87,6 +88,10 @@ enum Message {
     DisplayOff,
     NextImage,
     RandomizeDisplay,
+    HallOffset0Changed(String),
+    HallOffset1Changed(String),
+    ImuOffsetChanged(String),
+    SetSensorOffsets,
     ActionDone(Result<String, String>),
 }
 
@@ -102,6 +107,9 @@ struct SenderGui {
     image_path: Option<PathBuf>,
     download_path: Option<PathBuf>,
     download_kind: DownloadKindUi,
+    hall_offset_0_degrees: String,
+    hall_offset_1_degrees: String,
+    imu_offset_degrees: String,
     status: String,
     busy: bool,
 }
@@ -120,6 +128,9 @@ impl Default for SenderGui {
             image_path: None,
             download_path: None,
             download_kind: DownloadKindUi::DisplayImage,
+            hall_offset_0_degrees: String::new(),
+            hall_offset_1_degrees: String::new(),
+            imu_offset_degrees: String::new(),
             status: "Ready".to_string(),
             busy: false,
         }
@@ -217,6 +228,19 @@ impl Application for SenderGui {
             Message::DisplayOff => self.run_command(SpokeCommand::DisplayOff),
             Message::NextImage => self.run_command(SpokeCommand::NextImage),
             Message::RandomizeDisplay => self.run_command(SpokeCommand::RandomizeDisplay),
+            Message::HallOffset0Changed(value) => {
+                self.hall_offset_0_degrees = value;
+                Command::none()
+            }
+            Message::HallOffset1Changed(value) => {
+                self.hall_offset_1_degrees = value;
+                Command::none()
+            }
+            Message::ImuOffsetChanged(value) => {
+                self.imu_offset_degrees = value;
+                Command::none()
+            }
+            Message::SetSensorOffsets => self.run_set_sensor_offsets(),
             Message::ActionDone(result) => {
                 self.busy = false;
                 self.status = match result {
@@ -308,6 +332,16 @@ impl Application for SenderGui {
                 button("Next Image").on_press_maybe((!self.busy).then_some(Message::NextImage)),
                 button("Randomize Display")
                     .on_press_maybe((!self.busy).then_some(Message::RandomizeDisplay)),
+            ]
+            .spacing(10),
+            row![
+                text_input("hall 0 deg", &self.hall_offset_0_degrees)
+                    .on_input(Message::HallOffset0Changed),
+                text_input("hall 1 deg", &self.hall_offset_1_degrees)
+                    .on_input(Message::HallOffset1Changed),
+                text_input("imu deg", &self.imu_offset_degrees).on_input(Message::ImuOffsetChanged),
+                button("Set Offsets")
+                    .on_press_maybe((!self.busy).then_some(Message::SetSensorOffsets)),
             ]
             .spacing(10),
         ]
@@ -466,6 +500,62 @@ impl SenderGui {
                 let stats = send_command(&config, command).map_err(|e| e.to_string())?;
                 Ok(format!(
                     "Command sent: {} packet(s), {} transmission(s)",
+                    stats.packet_count, stats.total_transmissions
+                ))
+            },
+            Message::ActionDone,
+        )
+    }
+
+    fn run_set_sensor_offsets(&mut self) -> Command<Message> {
+        let config = match self.parse_link_config() {
+            Ok(config) => config,
+            Err(err) => {
+                self.status = err;
+                return Command::none();
+            }
+        };
+
+        let hall_offset_0_degrees = match self.hall_offset_0_degrees.parse::<f32>() {
+            Ok(value) => value,
+            Err(_) => {
+                self.status = "Invalid hall offset 0".to_string();
+                return Command::none();
+            }
+        };
+
+        let hall_offset_1_degrees = match self.hall_offset_1_degrees.parse::<f32>() {
+            Ok(value) => value,
+            Err(_) => {
+                self.status = "Invalid hall offset 1".to_string();
+                return Command::none();
+            }
+        };
+
+        let imu_offset_degrees = match self.imu_offset_degrees.parse::<f32>() {
+            Ok(value) => value,
+            Err(_) => {
+                self.status = "Invalid IMU offset".to_string();
+                return Command::none();
+            }
+        };
+
+        self.busy = true;
+        self.status = "Persisting sensor offsets...".to_string();
+
+        Command::perform(
+            async move {
+                let stats = send_sensor_offsets(
+                    &config,
+                    SensorOffsets {
+                        hall_offset_0_degrees,
+                        hall_offset_1_degrees,
+                        imu_offset_degrees,
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(format!(
+                    "Sensor offsets sent: {} packet(s), {} transmission(s). Reboot firmware to apply.",
                     stats.packet_count, stats.total_transmissions
                 ))
             },

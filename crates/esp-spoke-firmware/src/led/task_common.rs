@@ -160,5 +160,11 @@ pub async fn apply_led_command<L>(
                 frame.transfer_id
             );
         }
+        SpokeCommand::SetSensorOffsets { .. } => {
+            info!(
+                "ignoring SetSensorOffsets in LED task for transfer {}",
+                frame.transfer_id
+            );
+        }
     }
 }

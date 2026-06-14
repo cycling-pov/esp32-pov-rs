@@ -31,12 +31,17 @@ pub enum EncodeError {
 // Packet model
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum SpokeCommand {
     DisplayOff,
     NextImage,
     RandomizeDisplay,
+    SetSensorOffsets {
+        hall_offset_0_degrees: f32,
+        hall_offset_1_degrees: f32,
+        imu_offset_degrees: f32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -59,14 +64,14 @@ pub struct DownloadChunk<'a> {
     pub payload: &'a [u8],
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct CommandFrame {
     pub transfer_id: usize,
     pub command: SpokeCommand,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Packet<'a> {
     Download(DownloadChunk<'a>),

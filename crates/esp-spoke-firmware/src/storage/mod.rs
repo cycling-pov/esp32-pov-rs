@@ -12,7 +12,7 @@ use esp_storage::FlashStorage;
 use pov_proto::image::Encoding;
 use pov_proto::transfer::DownloadKind;
 
-use self::config::{ImageKind, ImageSlotState, SlotMetadata};
+use self::config::{ImageKind, ImageSlotState, SensorConfig, SlotMetadata};
 use self::ekv_flash::EkvFlash;
 
 pub mod config;
@@ -27,6 +27,8 @@ const DOWNLOADABLE_IMAGE_SLOTS: usize = 2;
 enum StorageRequest {
     GetActiveSlot,
     SetActiveSlot(u8),
+    GetSensorConfig,
+    SetSensorConfig(SensorConfig),
     GetSlotState(usize),
     SetSlotState(usize, ImageSlotState),
     ReadSlotData(usize),
@@ -55,6 +57,8 @@ enum StorageRequest {
 enum StorageResponse {
     ActiveSlot(Option<u8>),
     SetActiveSlot(Result<(), ()>),
+    SensorConfig(SensorConfig),
+    SetSensorConfig(Result<(), ()>),
     SlotState(ImageSlotState),
     SetSlotState(Result<(), ()>),
     ReadSlotData(Result<Vec<u8>, ()>),
@@ -95,6 +99,26 @@ pub async fn set_active_slot(slot: u8) -> Result<(), ()> {
         StorageResponse::SetActiveSlot(result) => result,
         _ => {
             warn!("storage:rpc set_active_slot received unexpected response");
+            Err(())
+        }
+    }
+}
+
+pub async fn get_sensor_config() -> SensorConfig {
+    match rpc(StorageRequest::GetSensorConfig).await {
+        StorageResponse::SensorConfig(config) => config,
+        _ => {
+            warn!("storage:rpc get_sensor_config received unexpected response");
+            SensorConfig::default()
+        }
+    }
+}
+
+pub async fn set_sensor_config(config: SensorConfig) -> Result<(), ()> {
+    match rpc(StorageRequest::SetSensorConfig(config)).await {
+        StorageResponse::SetSensorConfig(result) => result,
+        _ => {
+            warn!("storage:rpc set_sensor_config received unexpected response");
             Err(())
         }
     }
@@ -285,6 +309,23 @@ pub async fn storage_task(flash: esp_hal::peripherals::FLASH<'static>) -> ! {
                 };
                 STORAGE_RESPONSE_CHANNEL
                     .send(StorageResponse::SetActiveSlot(result))
+                    .await;
+            }
+            StorageRequest::GetSensorConfig => {
+                let config = config::get_sensor_config(&db).await;
+                STORAGE_RESPONSE_CHANNEL
+                    .send(StorageResponse::SensorConfig(config))
+                    .await;
+            }
+            StorageRequest::SetSensorConfig(config) => {
+                let result = if write_slot.is_some() {
+                    warn!("storage:set_sensor_config rejected: write in progress");
+                    Err(())
+                } else {
+                    config::set_sensor_config(&db, config).await
+                };
+                STORAGE_RESPONSE_CHANNEL
+                    .send(StorageResponse::SetSensorConfig(result))
                     .await;
             }
             StorageRequest::GetSlotState(slot) => {

@@ -234,6 +234,7 @@ pub async fn imu_dual_spin_estimator_task(
     state0: &'static super::SharedSpinState,
     state1: &'static super::SharedSpinState,
     mut i2c: esp_hal::i2c::master::I2c<'static, esp_hal::Async>,
+    imu_offset_degrees: f32,
 ) -> ! {
     use fusion_ahrs::{Ahrs, AhrsSettings, Convention};
 
@@ -242,7 +243,7 @@ pub async fn imu_dual_spin_estimator_task(
     const IMU_ANGLE_DIRECTION: f32 = -1.0;
     const STRIP0_PHASE_OFFSET_FROM_SENSOR: Angle = Angle::from_degrees(90.0);
     const STRIP1_PHASE_OFFSET_FROM_SENSOR: Angle = Angle::from_degrees(-90.0);
-    const OFFSET_CALIBRATION: Angle = Angle::from_degrees(-75.0);
+    let imu_offset = Angle::from_degrees(imu_offset_degrees);
 
     let settings = AhrsSettings {
         convention: Convention::Nwu,
@@ -373,12 +374,10 @@ pub async fn imu_dual_spin_estimator_task(
                 }
 
                 let strip0_angle =
-                    (last_angle + STRIP0_PHASE_OFFSET_FROM_SENSOR + OFFSET_CALIBRATION)
-                        .constrain_circle();
+                    (last_angle + STRIP0_PHASE_OFFSET_FROM_SENSOR + imu_offset).constrain_circle();
 
                 let strip1_angle =
-                    (last_angle + STRIP1_PHASE_OFFSET_FROM_SENSOR + OFFSET_CALIBRATION)
-                        .constrain_circle();
+                    (last_angle + STRIP1_PHASE_OFFSET_FROM_SENSOR + imu_offset).constrain_circle();
 
                 state0.lock(|s| {
                     *s.borrow_mut() = super::SpinState {
