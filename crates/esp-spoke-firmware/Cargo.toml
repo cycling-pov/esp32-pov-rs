@@ -15,7 +15,7 @@ name = "adc-test-software"
 path = "./src/angle_estimator/hall_effect/adc_testbench.rs"
 
 [features]
-default = ["espnow", "flash-4mb", "sk9822-strip", "imu-spin"]
+default = ["board-test-rig"]
 waveshare-matrix = []
 sk9822-strip = []
 heap-stats = []
@@ -29,6 +29,11 @@ flash-16mb = []
 builtin-image = ["dep:image"]
 mock-spin = []
 imu-spin = ["dep:fusion-ahrs", "dep:nalgebra"]
+
+# Grouping for test boards
+board-waveshare = ["espnow", "waveshare-matrix", "flash-4mb"]
+board-test-rig = ["espnow", "sk9822-strip", "imu-spin", "flash-16mb"]
+board-v1 = ["espnow", "sk9822-strip", "imu-spin", "flash-8mb"]
 
 [dependencies]
 esp-hal = { version = "1.1.1", features = ["defmt", "esp32s3", "unstable"] }
