@@ -28,6 +28,8 @@ flash-8mb = []
 flash-16mb = []
 builtin-image = ["dep:image"]
 mock-spin = []
+adc = []
+hall-effect-spin = ["adc"]
 imu-spin = ["dep:fusion-ahrs", "dep:nalgebra"]
 
 # Grouping for test boards
