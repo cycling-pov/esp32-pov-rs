@@ -1,0 +1,4 @@
+[build]
+# Override workspace default target (xtensa) with the current host target.
+# This keeps the GUI portable across Windows/macOS/Linux.
+target = "host-tuple"

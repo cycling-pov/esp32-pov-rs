@@ -1,0 +1,17 @@
+[package]
+name = "pov-sender-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+pov-proto = { path = "../../crates/pov-proto", features = [
+    "image-encode",
+    "bridge",
+] }
+pov-images = { path = "../../crates/pov-images" }
+pov-algs = { path = "../../crates/pov-algs" }
+postcard = { version = "1", features = ["use-std"] }
+image = "0.25"
+serialport = "4"
+anyhow = "1"
+rand = "0.10.1"

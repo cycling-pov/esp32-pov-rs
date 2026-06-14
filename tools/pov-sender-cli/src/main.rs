@@ -1,34 +1,11 @@
-use std::{
-    fs,
-    io::{self, Write},
-    path::PathBuf,
-    thread,
-    time::Duration,
-};
+use std::path::PathBuf;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
-use pov_proto::{
-    bridge::{BridgeFrame, TransportSelector},
-    image::{LedCount, RadialCount, encode_polar_rgb888_to_wire, encode_rgb888_to_wire},
-    transfer::{ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand, encode_packet},
+use pov_sender_core::{
+    DownloadKind, DownloadRequest, PolarEncodeOptions, SerialLinkConfig, SpokeCommand,
+    Transport as CoreTransport, send_command, send_download, send_image,
 };
-use rand::seq::SliceRandom;
-use serialport::SerialPort;
-
-/// ESP-NOW 2.0 supports up to 1470-byte packets including protocol metadata.
-/// Keep chunk payload lower so postcard-encoded transfer packets fit the MTU.
-const ESPNOW_CHUNK_PAYLOAD_BYTES: usize = 1450;
-/// BLE extended advertising caps the manufacturer-specific AD payload at ~250 bytes.
-const BLE_CHUNK_PAYLOAD_BYTES: usize = 224;
-/// Must be large enough to hold a postcard-encoded pov-proto packet whose
-/// payload is up to ESPNOW_CHUNK_PAYLOAD_BYTES bytes (~1490 bytes max).
-const SERIAL_TX_BUF_BYTES: usize = 1600;
-
-/// LED count per radial strip when encoding in polar format.
-const POLAR_LEDS: usize = 30;
-/// Number of angular positions (radials) when encoding in polar format.
-const POLAR_RADIALS: usize = 360;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum Transport {
@@ -49,6 +26,15 @@ impl From<DownloadKindArg> for DownloadKind {
             DownloadKindArg::DisplayImage => DownloadKind::DisplayImage,
             DownloadKindArg::OtaImage => DownloadKind::OtaImage,
             DownloadKindArg::Video => DownloadKind::Video,
+        }
+    }
+}
+
+impl From<Transport> for CoreTransport {
+    fn from(value: Transport) -> Self {
+        match value {
+            Transport::Ble => CoreTransport::Ble,
+            Transport::Espnow => CoreTransport::Espnow,
         }
     }
 }
@@ -119,266 +105,74 @@ enum Command {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let max_chunk_payload = match args.transport {
-        Transport::Espnow => ESPNOW_CHUNK_PAYLOAD_BYTES,
-        Transport::Ble => BLE_CHUNK_PAYLOAD_BYTES,
+    let config = SerialLinkConfig {
+        port: args.port,
+        baud: args.baud,
+        transport: args.transport.into(),
+        repeat: args.repeat,
+        inter_packet_delay_ms: 1_000,
     };
 
-    let transport_selector = match args.transport {
-        Transport::Ble => TransportSelector::BleExtAdv,
-        Transport::Espnow => TransportSelector::EspNow,
-    };
-
-    // ---- Open serial port ----------------------------------------------------
-    let mut port: Box<dyn SerialPort> = serialport::new(&args.port, args.baud)
-        .timeout(Duration::from_secs(5))
-        .open()
-        .with_context(|| format!("Failed to open serial port {}", args.port))?;
-
-    let mut chunk_buf = [0u8; SERIAL_TX_BUF_BYTES];
-
-    // Collect all packets first
-    let mut packets: Vec<Vec<u8>> = Vec::new();
-
-    match args.command {
+    let stats = match args.command {
         Command::SendImage {
             image,
             polar,
             first_led_distance,
             last_led_distance,
         } => {
-            let wire_bytes = if polar {
-                // --- polar path ---
-                let first_distance =
+            let polar_options = if polar {
+                let first_led_distance =
                     first_led_distance.context("--polar requires --first-led-distance")?;
-                let last_distance =
+                let last_led_distance =
                     last_led_distance.context("--polar requires --last-led-distance")?;
 
-                if !first_distance.is_finite() || !last_distance.is_finite() {
-                    anyhow::bail!("LED distances must be finite numbers");
-                }
-
-                if first_distance < 0.0 || last_distance <= 0.0 {
-                    anyhow::bail!(
-                        "LED distances must satisfy --first-led-distance >= 0 and --last-led-distance > 0"
-                    );
-                }
-
-                if first_distance > last_distance {
-                    anyhow::bail!("--first-led-distance must be <= --last-led-distance");
-                }
-
-                // Normalize distances so the outermost LED maps to radius 1.0.
-                let first_radius = first_distance / last_distance;
-                let radius_values = evenly_spaced_radii(POLAR_LEDS, first_radius, 1.0);
-
-                println!(
-                    "Polar distance mapping: first={} last={} => normalized first radius={:.6}",
-                    first_distance, last_distance, first_radius
-                );
-
-                let img = image::open(&image)
-                    .with_context(|| format!("Failed to open image {:?}", image))?
-                    .into_rgba8();
-
-                let polar_bitmap =
-                    pov_images::polar_from_image::<POLAR_LEDS, POLAR_RADIALS>(&img, &radius_values);
-
-                // Flatten: pixels[radial][led] → [r, g, b, r, g, b, ...]
-                let mut raw: Vec<u8> = Vec::with_capacity(POLAR_LEDS * POLAR_RADIALS * 3);
-                for strip in &polar_bitmap.pixels {
-                    for px in strip {
-                        raw.push(px.red);
-                        raw.push(px.green);
-                        raw.push(px.blue);
-                    }
-                }
-
-                println!(
-                    "Polar-converted {:?}: {} LEDs × {} radials",
-                    image, POLAR_LEDS, POLAR_RADIALS
-                );
-
-                encode_polar_rgb888_to_wire(
-                    &raw,
-                    LedCount::new(POLAR_LEDS as u8),
-                    RadialCount::new(POLAR_RADIALS as u16),
-                )
-                .map_err(|e| anyhow::anyhow!("Failed to encode polar image: {:?}", e))?
+                Some(PolarEncodeOptions {
+                    first_led_distance,
+                    last_led_distance,
+                })
             } else {
-                // --- Cartesian path (original) ---
-                let img = image::open(&image)
-                    .with_context(|| format!("Failed to open image {:?}", image))?;
-                let resized = img.resize_exact(64, 64, image::imageops::FilterType::Lanczos3);
-                let pixels: Vec<u8> = resized.to_rgb8().into_raw();
-
-                encode_rgb888_to_wire(&pixels).map_err(|e| {
-                    anyhow::anyhow!("Failed to encode image to pov-proto wire format: {:?}", e)
-                })?
+                None
             };
 
-            let iter = ChunkIter::new(
-                &wire_bytes,
-                DownloadKind::DisplayImage,
-                1,
-                max_chunk_payload,
-            )
-            .expect("Image payload too large for pov-proto transfer");
-
-            for chunk in iter {
-                let n = encode_packet(Packet::Download(chunk), &mut chunk_buf).map_err(|e| {
-                    anyhow::anyhow!(
-                        "encode_chunk failed: {:?}; payload_len={}, chunk_index={}, chunk_count={}, total_len={}, max_chunk_payload={}, wire_len={}",
-                        e,
-                        chunk.payload.len(),
-                        chunk.chunk_index,
-                        chunk.chunk_count,
-                        chunk.total_len,
-                        max_chunk_payload,
-                        wire_bytes.len()
-                    )
-                })?;
-                packets.push(chunk_buf[..n].to_vec());
-            }
-
-            println!("Collected {} chunks for image {:?}", packets.len(), image);
+            let stats = send_image(&config, &image, polar_options)?;
+            println!(
+                "Collected {} packets for image {:?}",
+                stats.packet_count, image
+            );
+            stats
         }
         Command::SendDownload { kind, file } => {
-            let payload = fs::read(&file)
-                .with_context(|| format!("Failed to read payload file {:?}", file))?;
-
-            let iter = ChunkIter::new(&payload, kind.into(), 1, max_chunk_payload)
-                .expect("Download payload too large for pov-proto transfer");
-
-            for chunk in iter {
-                let n = encode_packet(Packet::Download(chunk), &mut chunk_buf).map_err(|e| {
-                    anyhow::anyhow!(
-                        "encode download failed: {:?}; payload_len={}, chunk_index={}, chunk_count={}, total_len={}, max_chunk_payload={}",
-                        e,
-                        chunk.payload.len(),
-                        chunk.chunk_index,
-                        chunk.chunk_count,
-                        chunk.total_len,
-                        max_chunk_payload,
-                    )
-                })?;
-                packets.push(chunk_buf[..n].to_vec());
-            }
-
+            let request = DownloadRequest {
+                file_path: file.as_path(),
+                kind: kind.into(),
+            };
+            let stats = send_download(&config, request)?;
             println!(
-                "Collected {} chunks for {:?} payload {:?}",
-                packets.len(),
-                kind,
-                file
+                "Collected {} packets for payload {:?}",
+                stats.packet_count, file
             );
+            stats
         }
         Command::DisplayOff => {
-            let n = encode_packet(
-                Packet::Command(CommandFrame {
-                    transfer_id: 1,
-                    command: SpokeCommand::DisplayOff,
-                }),
-                &mut chunk_buf,
-            )
-            .map_err(|e| anyhow::anyhow!("Failed to encode DisplayOff command: {:?}", e))?;
-            packets.push(chunk_buf[..n].to_vec());
+            let stats = send_command(&config, SpokeCommand::DisplayOff)?;
             println!("Collected command: DisplayOff");
+            stats
         }
         Command::NextImage => {
-            let n = encode_packet(
-                Packet::Command(CommandFrame {
-                    transfer_id: 1,
-                    command: SpokeCommand::NextImage,
-                }),
-                &mut chunk_buf,
-            )
-            .map_err(|e| anyhow::anyhow!("Failed to encode NextImage command: {:?}", e))?;
-            packets.push(chunk_buf[..n].to_vec());
+            let stats = send_command(&config, SpokeCommand::NextImage)?;
             println!("Collected command: NextImage");
+            stats
         }
         Command::RandomizeDisplay => {
-            let n = encode_packet(
-                Packet::Command(CommandFrame {
-                    transfer_id: 1,
-                    command: SpokeCommand::RandomizeDisplay,
-                }),
-                &mut chunk_buf,
-            )
-            .map_err(|e| anyhow::anyhow!("Failed to encode RandomizeDisplay command: {:?}", e))?;
-            packets.push(chunk_buf[..n].to_vec());
+            let stats = send_command(&config, SpokeCommand::RandomizeDisplay)?;
             println!("Collected command: RandomizeDisplay");
+            stats
         }
-    }
-
-    // Send packets with repetition and randomization
-    let total_sends = packets.len() * args.repeat;
-    println!(
-        "Sending {} packets × {} repetitions = {} total transmissions",
-        packets.len(),
-        args.repeat,
-        total_sends
-    );
-
-    let mut rng = rand::rng();
-
-    for rep in 0..args.repeat {
-        // Shuffle packets for this repetition
-        let mut packet_indices: Vec<usize> = (0..packets.len()).collect();
-        packet_indices.shuffle(&mut rng);
-
-        for (i, &idx) in packet_indices.iter().enumerate() {
-            let packet_num = rep * packets.len() + i + 1;
-            print!(
-                "\r[{}/{}] Sending packet repetition {}/{}...",
-                packet_num,
-                total_sends,
-                rep + 1,
-                args.repeat
-            );
-            let _ = io::stdout().flush();
-
-            send_bridge_frame(&mut *port, transport_selector, &packets[idx])?;
-        }
-    }
-
-    println!("\n✓ All {} transmissions sent", total_sends);
-    Ok(())
-}
-
-fn send_bridge_frame(
-    port: &mut dyn SerialPort,
-    transport_selector: TransportSelector,
-    payload: &[u8],
-) -> anyhow::Result<()> {
-    let frame = BridgeFrame {
-        transport: transport_selector,
-        payload,
     };
 
-    let cobs_bytes = postcard::to_stdvec_cobs(&frame).context("postcard serialization failed")?;
-
-    port.write_all(&cobs_bytes)
-        .context("Failed to write to serial port")?;
-
-    // Give the bridge time to process each frame before the next arrives.
-    thread::sleep(Duration::from_millis(1000));
-
+    println!(
+        "✓ Sent {} packets as {} total transmissions",
+        stats.packet_count, stats.total_transmissions
+    );
     Ok(())
-}
-
-fn evenly_spaced_radii(led_count: usize, start: f32, end: f32) -> Vec<f32> {
-    if led_count == 0 {
-        return Vec::new();
-    }
-    if led_count == 1 {
-        return vec![start];
-    }
-
-    let denom = (led_count - 1) as f32;
-    (0..led_count)
-        .map(|i| {
-            let t = (i as f32) / denom;
-            start + (end - start) * t
-        })
-        .collect()
 }

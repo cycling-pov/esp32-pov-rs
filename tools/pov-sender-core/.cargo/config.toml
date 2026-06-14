@@ -1,0 +1,4 @@
+[build]
+# Override workspace default target (xtensa) with the current host target.
+# This keeps the host-side tool portable across Windows/macOS/Linux.
+target = "host-tuple"

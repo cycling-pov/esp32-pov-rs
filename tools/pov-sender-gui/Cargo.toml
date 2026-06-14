@@ -1,9 +1,10 @@
 [package]
-name = "pov-sender-cli"
+name = "pov-sender-gui"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 pov-sender-core = { path = "../pov-sender-core" }
-clap = { version = "4", features = ["derive"] }
+iced = "0.12"
+rfd = "0.15"
 anyhow = "1"

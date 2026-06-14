@@ -54,6 +54,16 @@ Host CLI for sending commands, images, and downloads through the bridge.
 
 - README: [README-pov-sender-cli.md](README-pov-sender-cli.md)
 
+### pov-sender-core
+Shared host-side sender crate used by both sender frontends.
+
+- README: [tools/pov-sender-core/README.md](tools/pov-sender-core/README.md)
+
+### pov-sender-gui
+Host GUI (iced) for sending commands, images, and downloads through the bridge.
+
+- README: [tools/pov-sender-gui/README.md](tools/pov-sender-gui/README.md)
+
 ### pov-sim
 Simulation tool to help preview images and algorithms on a workstation.
 
@@ -79,9 +89,12 @@ cargo build -p esp-bridge-firmware
 
 See each component README for flashing and runtime details.
 
-## 4. Build and Run Host CLI
+## 4. Build and Run Host Sender Tools
 
-The sender CLI lives outside the firmware workspace and uses its own toolchain/target configuration, see [README-pov-sender-cli.md](README-pov-sender-cli.md).
+The sender tools live outside the firmware workspace and use local stable host toolchains.
+
+- CLI: [README-pov-sender-cli.md](README-pov-sender-cli.md)
+- GUI: [tools/pov-sender-gui/README.md](tools/pov-sender-gui/README.md)
 
 ## 5. Local Commit Hooks (pre-commit and prek)
 
@@ -89,6 +102,8 @@ This repository provides a `.pre-commit-config.yaml` config.
 
 - Root ESP workspace: `cargo fmt --all -- --check` and `cargo clippy --all-features --workspace -- -D warnings`
 - `tools/pov-sender-cli`: `cargo fmt --all -- --check` and `cargo clippy --all-features --workspace -- -D warnings`
+- `tools/pov-sender-core`: `cargo fmt --all -- --check` and `cargo clippy --all-features --workspace -- -D warnings`
+- `tools/pov-sender-gui`: `cargo fmt --all -- --check` and `cargo clippy --all-features --workspace -- -D warnings`
 - `tools/pov-sim`: `cargo fmt --all -- --check` and `cargo clippy --all-features --workspace -- -D warnings`
 
 ### Install and run with pre-commit

@@ -1,5 +1,18 @@
-# pov-sender-cli
-Host-side command line sender that transmits POV protocol frames to the bridge firmware over USB serial. The bridge then forwards payloads over BLE or ESP-NOW.
+# pov-sender
+Host-side sender that transmits POV protocol frames to the bridge firmware over USB serial. The bridge then forwards payloads over BLE or ESP-NOW.
+
+A CLI and GUI are provided to send packets using the same core logic in pov-sender-core.
+
+# GUI
+## 1. Run the tool
+
+Builds must be executed from the tool's directory.
+```sh
+cd tools/pov-sender-gui
+cargo run --release
+```
+
+# CLI
 
 ## 1. Build the tool
 

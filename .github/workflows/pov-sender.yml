@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - "tools/pov-sender-cli/**"
+      - "tools/pov-sender-core/**"
+      - "tools/pov-sender-gui/**"
       - "!**/README.md"
   pull_request:
   workflow_dispatch:
