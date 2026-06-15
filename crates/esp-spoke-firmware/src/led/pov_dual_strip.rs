@@ -269,6 +269,18 @@ pub async fn pov_render_task(
             r0.expect("pov: strip0 show failed");
             r1.expect("pov: strip1 show failed");
         } else {
+            strips.strip0.clear();
+            strips.strip1.clear();
+            strips
+                .strip0
+                .show()
+                .await
+                .expect("pov: strip0 clear failed");
+            strips
+                .strip1
+                .show()
+                .await
+                .expect("pov: strip1 clear failed");
             // Nothing to display — yield briefly to avoid a busy-loop.
             Timer::after(Duration::from_millis(1)).await;
         }
