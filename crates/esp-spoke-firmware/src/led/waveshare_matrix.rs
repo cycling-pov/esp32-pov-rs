@@ -3,11 +3,12 @@ use embassy_futures::select::{Either, select};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use esp_hal::{Blocking, peripherals::GPIO14, rmt::TxChannelCreator, rng::Rng};
 use esp_hal_smartled::{RmtSmartLeds, Ws2811Timing, buffer_size, color_order};
+use pov_proto::transfer::SpokeCommand;
 use smart_leds_trait::{RGB8, SmartLedsWrite as _};
 use static_cell::StaticCell;
 
 use crate::bitmap::{Bitmap, BitmapStorage, generated_swapping_storage};
-use crate::led::task_common::{self, RenderBitmap};
+use crate::led::task_common;
 use crate::led::{LedBrightness, LedCommand, LedError, LedStrip, LedTimings};
 
 // The Waveshare Matrix has very poor thermal design. The manufacturer recommends limiting
@@ -69,6 +70,15 @@ impl<'d> WaveshareMatrix<'d> {
             framebuffer: [RGB8::default(); WAVESHARE_MATRIX_LED_COUNT],
         }
     }
+
+    async fn render_from_bitmap(&mut self, bitmap: &Bitmap<'_>) {
+        let target_width = 8;
+        let target_height = WaveshareMatrix::LED_COUNT / target_width;
+        bitmap
+            .scale_into(target_width, target_height, self.pixels_mut())
+            .expect("failed to scale bitmap into Waveshare matrix");
+        self.show().await.expect("failed to update LED strip");
+    }
 }
 
 impl LedStrip for WaveshareMatrix<'_> {
@@ -96,17 +106,6 @@ impl LedStrip for WaveshareMatrix<'_> {
         self.driver
             .write(self.framebuffer.iter().copied().map(apply_brightness_limit))
             .map_err(LedError::from)
-    }
-}
-
-impl RenderBitmap for WaveshareMatrix<'_> {
-    async fn render_from_bitmap(&mut self, bitmap: &Bitmap<'_>) {
-        let target_width = 8;
-        let target_height = WaveshareMatrix::LED_COUNT / target_width;
-        bitmap
-            .scale_into(target_width, target_height, self.pixels_mut())
-            .expect("failed to scale bitmap into Waveshare matrix");
-        self.show().await.expect("failed to update LED strip");
     }
 }
 
@@ -164,15 +163,63 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
                     "waveshare:loop handling frame transfer_id={} command={:?}",
                     frame.transfer_id, frame.command
                 );
-                task_common::apply_led_command(
-                    &mut led_strip,
-                    &mut *bitmap_store,
-                    &mut current_display_slot,
-                    decode_scratch,
-                    &mut randomizing,
-                    frame,
-                )
-                .await;
+
+                match frame.command {
+                    SpokeCommand::DisplayOff => {
+                        led_strip.clear();
+                        led_strip.show().await.expect("failed to clear LED strip");
+                        info!("applied DisplayOff from transfer {}", frame.transfer_id);
+                    }
+                    SpokeCommand::NextImage => {
+                        let next_slot = match current_display_slot {
+                            None => Some(0usize),
+                            Some(0) => Some(1),
+                            Some(_) => None,
+                        };
+                        current_display_slot = next_slot;
+                        match next_slot {
+                            None => {
+                                bitmap_store.activate_builtin();
+                                if let Ok(bitmap) = bitmap_store.bitmap(0) {
+                                    led_strip.render_from_bitmap(&bitmap).await;
+                                }
+                            }
+                            Some(slot) => {
+                                if task_common::load_flash_slot(
+                                    slot,
+                                    &mut *bitmap_store,
+                                    decode_scratch,
+                                )
+                                .await
+                                {
+                                    if let Ok(bitmap) = bitmap_store.bitmap(0) {
+                                        led_strip.render_from_bitmap(&bitmap).await;
+                                    }
+                                } else {
+                                    led_strip.clear();
+                                    led_strip.show().await.expect("failed to clear LED strip");
+                                }
+                            }
+                        }
+                        info!(
+                            "applied NextImage from transfer {}: display_slot={:?}",
+                            frame.transfer_id, current_display_slot
+                        );
+                    }
+                    SpokeCommand::RandomizeDisplay => {
+                        randomizing = true;
+                        info!(
+                            "applied RandomizeDisplay from transfer {}",
+                            frame.transfer_id
+                        );
+                    }
+                    SpokeCommand::SetSensorOffsets { .. } => {
+                        info!(
+                            "ignoring SetSensorOffsets in LED task for transfer {}",
+                            frame.transfer_id
+                        );
+                    }
+                }
             }
             LedCommand::LoadSlot(slot) => {
                 info!("waveshare:loop load_slot slot={}", slot);

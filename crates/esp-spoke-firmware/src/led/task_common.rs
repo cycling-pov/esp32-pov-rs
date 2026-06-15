@@ -1,9 +1,7 @@
 use defmt::info;
 use pov_proto::image::{DecodeMode, Encoding, decode_into_rgb8};
-use pov_proto::transfer::{CommandFrame, SpokeCommand};
 
-use crate::bitmap::{Bitmap, BitmapStorage, BitmapStorageMetadata};
-use crate::led::LedStrip;
+use crate::bitmap::{BitmapStorage, BitmapStorageMetadata};
 use crate::storage;
 use crate::storage::config::ImageSlotState;
 
@@ -81,90 +79,4 @@ pub async fn boot_restore(
         }
     }
     None
-}
-
-/// Renders the current active bitmap to an LED strip.
-///
-/// Implementors update the strip framebuffer from the provided `bitmap` and
-/// then call `show()`. For POV strips the render samples the polar bitmap at
-/// the current angular position; for matrix strips it scales into the LED grid.
-#[allow(
-    async_fn_in_trait,
-    reason = "RenderBitmap is an internal firmware trait"
-)]
-pub trait RenderBitmap: LedStrip {
-    async fn render_from_bitmap(&mut self, bitmap: &Bitmap<'_>);
-}
-
-/// Applies a [`CommandFrame`] to the LED strip and bitmap state.
-///
-/// Handles `DisplayOff`, `NextImage`, and `RandomizeDisplay`. Calls
-/// `render_from_bitmap` on the strip whenever a new image should be displayed.
-pub async fn apply_led_command<L>(
-    led: &mut L,
-    bitmap_store: &mut impl BitmapStorage,
-    current_display_slot: &mut Option<usize>,
-    decode_scratch: &mut [u8],
-    randomizing: &mut bool,
-    frame: CommandFrame,
-) where
-    L: LedStrip + RenderBitmap,
-{
-    info!(
-        "led_task:command transfer_id={} command={:?}",
-        frame.transfer_id, frame.command
-    );
-
-    match frame.command {
-        SpokeCommand::DisplayOff => {
-            *randomizing = false;
-            led.clear();
-            led.show().await.expect("failed to clear LED strip");
-            info!("applied DisplayOff from transfer {}", frame.transfer_id);
-        }
-        SpokeCommand::NextImage => {
-            *randomizing = false;
-            let next_slot = match *current_display_slot {
-                None => Some(0usize),
-                Some(0) => Some(1),
-                Some(_) => None,
-            };
-            *current_display_slot = next_slot;
-            match next_slot {
-                None => {
-                    bitmap_store.activate_builtin();
-                    if let Ok(bitmap) = bitmap_store.bitmap(0) {
-                        led.render_from_bitmap(&bitmap).await;
-                    }
-                }
-                Some(slot) => {
-                    if load_flash_slot(slot, bitmap_store, decode_scratch).await {
-                        if let Ok(bitmap) = bitmap_store.bitmap(0) {
-                            led.render_from_bitmap(&bitmap).await;
-                        }
-                    } else {
-                        led.clear();
-                        led.show().await.expect("failed to clear LED strip");
-                    }
-                }
-            }
-            info!(
-                "applied NextImage from transfer {}: display_slot={:?}",
-                frame.transfer_id, *current_display_slot
-            );
-        }
-        SpokeCommand::RandomizeDisplay => {
-            *randomizing = true;
-            info!(
-                "applied RandomizeDisplay from transfer {}",
-                frame.transfer_id
-            );
-        }
-        SpokeCommand::SetSensorOffsets { .. } => {
-            info!(
-                "ignoring SetSensorOffsets in LED task for transfer {}",
-                frame.transfer_id
-            );
-        }
-    }
 }

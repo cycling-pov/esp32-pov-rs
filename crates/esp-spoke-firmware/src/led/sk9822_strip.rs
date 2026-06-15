@@ -1,25 +1,13 @@
-use defmt::{info, warn};
-use embassy_futures::select::{Either, select};
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use crate::led::{LedBrightness, LedError, LedStrip, LedTimings};
 use esp_hal::{
     Async,
     dma::DmaLoopBuf,
     gpio::{AnyPin, Pin},
-    rng::Rng,
     spi::master::SpiDma,
 };
 use smart_leds_trait::RGB8;
-use static_cell::StaticCell;
-
-use crate::bitmap::{Bitmap, BitmapStorage, generated_swapping_storage};
-use crate::led::task_common::{self, RenderBitmap};
-use crate::led::{LedBrightness, LedCommand, LedError, LedStrip, LedTimings};
 
 pub const SK9822_LED_COUNT: usize = 30;
-
-// Must be large enough to hold the largest decompressed pixel payload:
-// polar 30×360×3 = 32 400 bytes; Cartesian 64×64×3 = 12 288 bytes.
-const SK9822_DECODE_SCRATCH_BYTES: usize = 1024 * 34;
 
 const SK9822_MAX_BRIGHTNESS: LedBrightness = LedBrightness::new(31);
 const SK9822_BRIGHTNESS_LIMIT_PERCENT: u8 = 5;
@@ -137,93 +125,5 @@ impl<const LED_COUNT: usize> LedStrip for Sk9822Strip<'_, LED_COUNT> {
         self.spi = Some(spi);
         self.dma_buf = Some(dma_buf);
         Ok(())
-    }
-}
-
-impl<const LED_COUNT: usize> RenderBitmap for Sk9822Strip<'_, LED_COUNT> {
-    async fn render_from_bitmap(&mut self, _bitmap: &Bitmap<'_>) {
-        // Single-strip POV rendering is not implemented.
-        // Use PovDualStrip for full POV display with spin-state-based sampling.
-        info!("sk9822: single-strip render_from_bitmap is a no-op; use PovDualStrip");
-    }
-}
-
-#[embassy_executor::task]
-pub async fn sk9822_strip_task(mut led_strip: Sk9822Strip<'static, SK9822_LED_COUNT>) -> ! {
-    info!(
-        "SK9822 strip ready: leds={}, timings={:?}",
-        led_strip.led_count(),
-        led_strip.timings()
-    );
-
-    static DECODE_SCRATCH: StaticCell<[u8; SK9822_DECODE_SCRATCH_BYTES]> = StaticCell::new();
-    let decode_scratch = DECODE_SCRATCH.init([0; SK9822_DECODE_SCRATCH_BYTES]);
-
-    let mut bitmap_store = generated_swapping_storage();
-    let mut randomizing = false;
-    let rng = Rng::new();
-
-    let mut current_display_slot =
-        task_common::boot_restore(&mut *bitmap_store, decode_scratch).await;
-    if current_display_slot.is_some() {
-        info!("sk9822:boot active image is downloaded from flash");
-        if let Ok(bitmap) = bitmap_store.bitmap(0) {
-            led_strip.render_from_bitmap(&bitmap).await;
-        }
-    } else {
-        info!("sk9822:boot no valid flash image; starting with built-in");
-    }
-    info!("rendered bitmap at startup");
-
-    loop {
-        let led_cmd = if randomizing {
-            let delay = EmbassyDuration::from_millis(10);
-            match select(super::LED_COMMAND_CHANNEL.receive(), Timer::after(delay)).await {
-                Either::First(cmd) => Some(cmd),
-                Either::Second(_) => {
-                    led_strip.randomize(&rng);
-                    led_strip
-                        .show()
-                        .await
-                        .expect("failed to show randomized SK9822 strip");
-                    None
-                }
-            }
-        } else {
-            Some(super::LED_COMMAND_CHANNEL.receive().await)
-        };
-
-        let Some(led_cmd) = led_cmd else { continue };
-        randomizing = false;
-
-        match led_cmd {
-            LedCommand::Frame(frame) => {
-                info!(
-                    "sk9822:loop handling frame transfer_id={} command={:?}",
-                    frame.transfer_id, frame.command
-                );
-                task_common::apply_led_command(
-                    &mut led_strip,
-                    &mut *bitmap_store,
-                    &mut current_display_slot,
-                    decode_scratch,
-                    &mut randomizing,
-                    frame,
-                )
-                .await;
-            }
-            LedCommand::LoadSlot(slot) => {
-                info!("sk9822:loop load_slot slot={}", slot);
-                if task_common::load_flash_slot(slot, &mut *bitmap_store, decode_scratch).await {
-                    current_display_slot = Some(slot);
-                    if let Ok(bitmap) = bitmap_store.bitmap(0) {
-                        led_strip.render_from_bitmap(&bitmap).await;
-                    }
-                    info!("sk9822:loop loaded flash slot {}", slot);
-                } else {
-                    warn!("sk9822:loop failed to load flash slot {}", slot);
-                }
-            }
-        }
     }
 }

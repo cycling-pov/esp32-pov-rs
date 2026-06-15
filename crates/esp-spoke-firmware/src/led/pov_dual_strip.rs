@@ -17,7 +17,7 @@ use crate::bitmap::{
     Bitmap, BitmapStorage, MAX_POLAR_PIXEL_COUNT, SwappingImageStorage, generated_swapping_storage,
 };
 use crate::led::sk9822_strip::{SK9822_LED_COUNT, Sk9822Strip};
-use crate::led::task_common::{self, RenderBitmap};
+use crate::led::task_common;
 use crate::led::{CORE1_FLASH_PAUSE_REQUESTED, CORE1_FLASH_PAUSED_COUNT};
 use crate::led::{LedCommand, LedError, LedStrip, LedTimings};
 
@@ -156,29 +156,6 @@ impl<const LEDS: usize> LedStrip for PovDualStrip<'_, LEDS> {
     fn randomize(&mut self, rng: &Rng) {
         self.strip0.randomize(rng);
         self.strip1.randomize(rng);
-    }
-}
-
-impl<const LEDS: usize> RenderBitmap for PovDualStrip<'_, LEDS> {
-    async fn render_from_bitmap(&mut self, bitmap: &Bitmap<'_>) {
-        let num_radials = bitmap.height();
-        let bm_width = bitmap.width();
-        let pixels = bitmap.pixels();
-
-        // Each strip reads its own independently-calibrated angular position.
-        let angle0_rad = self.spin0.lock(|s| s.borrow().position.radians());
-        let angle1_rad = self.spin1.lock(|s| s.borrow().position.radians());
-
-        let radial0 = radial_index(angle0_rad, num_radials);
-        let radial1 = radial_index(angle1_rad, num_radials);
-
-        copy_radial(pixels, bm_width, radial0, self.strip0.pixels_mut());
-        copy_radial(pixels, bm_width, radial1, self.strip1.pixels_mut());
-
-        let (s0, s1) = (&mut self.strip0, &mut self.strip1);
-        let (r0, r1) = join(s0.show(), s1.show()).await;
-        r0.expect("pov: strip0 show failed");
-        r1.expect("pov: strip1 show failed");
     }
 }
 
