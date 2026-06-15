@@ -16,7 +16,8 @@ use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
 use esp_spoke_firmware::angle_estimator::hall_effect::adc_monitor::{
-    AdcMonitor, AdcSample, MonitorConfig, MonitorThreshold, SampleRate, wait_for_threshold0, wait_for_threshold1,
+    AdcMonitor, AdcSample, MonitorConfig, MonitorThreshold, SampleRate, wait_for_threshold0,
+    wait_for_threshold1,
 };
 use {esp_backtrace as _, esp_println as _};
 
@@ -25,8 +26,10 @@ use esp_hal::analog::adc::AdcConfig;
 
 extern crate alloc;
 
-static LAST_TICK_0: Mutex<RefCell<esp_hal::time::Duration>> = Mutex::new(RefCell::new(esp_hal::time::Duration::ZERO));
-static LAST_TICK_1: Mutex<RefCell<esp_hal::time::Duration>> = Mutex::new(RefCell::new(esp_hal::time::Duration::ZERO));
+static LAST_TICK_0: Mutex<RefCell<esp_hal::time::Duration>> =
+    Mutex::new(RefCell::new(esp_hal::time::Duration::ZERO));
+static LAST_TICK_1: Mutex<RefCell<esp_hal::time::Duration>> =
+    Mutex::new(RefCell::new(esp_hal::time::Duration::ZERO));
 
 #[embassy_executor::task]
 async fn hall_monitor_task(start_time: esp_hal::time::Instant) {
@@ -35,7 +38,7 @@ async fn hall_monitor_task(start_time: esp_hal::time::Instant) {
 
         critical_section::with(|cs| {
             let last_tick = LAST_TICK_0.replace(cs, start_time.elapsed());
-            info!("tick 0: time since start = {=u64}",last_tick.as_millis());
+            info!("tick 0: time since start = {=u64}", last_tick.as_millis());
         });
     }
 }
@@ -46,8 +49,8 @@ async fn hall_monitor_task1(start_time: esp_hal::time::Instant) {
         let _ = wait_for_threshold1().await;
 
         critical_section::with(|cs| {
-                let last_tick = LAST_TICK_1.replace(cs, start_time.elapsed());
-                info!("tick 1: time since start = {=u64}",last_tick.as_millis());
+            let last_tick = LAST_TICK_1.replace(cs, start_time.elapsed());
+            info!("tick 1: time since start = {=u64}", last_tick.as_millis());
         });
     }
 }
