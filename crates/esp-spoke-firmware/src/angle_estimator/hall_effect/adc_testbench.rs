@@ -7,14 +7,16 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
+use core::cell::RefCell;
+
+use critical_section::Mutex;
 use defmt::info;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
 use esp_spoke_firmware::angle_estimator::hall_effect::adc_monitor::{
-    AdcMonitor, AdcSample, MonitorConfig, MonitorThreshold, SampleRate, ThresholdEvent,
-    latest_sample0, latest_sample1, wait_for_threshold0, wait_for_threshold1,
+    AdcMonitor, AdcSample, MonitorConfig, MonitorThreshold, SampleRate, wait_for_threshold0, wait_for_threshold1,
 };
 use {esp_backtrace as _, esp_println as _};
 
@@ -23,35 +25,30 @@ use esp_hal::analog::adc::AdcConfig;
 
 extern crate alloc;
 
-#[embassy_executor::task]
-async fn hall_monitor_task() {
-    loop {
-        let event = wait_for_threshold0().await;
-        let sample = latest_sample0();
+static LAST_TICK_0: Mutex<RefCell<esp_hal::time::Duration>> = Mutex::new(RefCell::new(esp_hal::time::Duration::ZERO));
+static LAST_TICK_1: Mutex<RefCell<esp_hal::time::Duration>> = Mutex::new(RefCell::new(esp_hal::time::Duration::ZERO));
 
-        match event {
-            ThresholdEvent::High => info!("hall0: high threshold hit, sample={=u16}", sample.raw()),
-            ThresholdEvent::Low => info!("hall0: low threshold hit, sample={=u16}", sample.raw()),
-            ThresholdEvent::Both => {
-                info!("hall0: both thresholds hit, sample={=u16}", sample.raw())
-            }
-        }
+#[embassy_executor::task]
+async fn hall_monitor_task(start_time: esp_hal::time::Instant) {
+    loop {
+        let _ = wait_for_threshold0().await;
+
+        critical_section::with(|cs| {
+            let last_tick = LAST_TICK_0.replace(cs, start_time.elapsed());
+            info!("tick 0: time since start = {=u64}",last_tick.as_millis());
+        });
     }
 }
 
 #[embassy_executor::task]
-async fn hall_monitor_task1() {
+async fn hall_monitor_task1(start_time: esp_hal::time::Instant) {
     loop {
-        let event = wait_for_threshold1().await;
-        let sample = latest_sample1();
+        let _ = wait_for_threshold1().await;
 
-        match event {
-            ThresholdEvent::High => info!("hall1: high threshold hit, sample={=u16}", sample.raw()),
-            ThresholdEvent::Low => info!("hall1: low threshold hit, sample={=u16}", sample.raw()),
-            ThresholdEvent::Both => {
-                info!("hall1: both thresholds hit, sample={=u16}", sample.raw())
-            }
-        }
+        critical_section::with(|cs| {
+                let last_tick = LAST_TICK_1.replace(cs, start_time.elapsed());
+                info!("tick 1: time since start = {=u64}",last_tick.as_millis());
+        });
     }
 }
 
@@ -79,6 +76,9 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("Embassy initialized!");
 
+    // Get start time
+    let start_time = esp_hal::time::Instant::now();
+
     // Configure a hall-sensor GPIO as ADC1 input and monitor it continuously.
     let mut adc1_config: AdcConfig<_> = AdcConfig::new();
     let hall_pin1 = adc1_config.enable_pin(peripherals.GPIO5, analog::adc::Attenuation::_0dB);
@@ -104,8 +104,8 @@ async fn main(spawner: Spawner) -> ! {
         AdcMonitor::new_dual(peripherals.ADC1, hall_pin1, hall_pin2, config, config);
     hall_monitor.start();
 
-    spawner.spawn(hall_monitor_task().unwrap());
-    spawner.spawn(hall_monitor_task1().unwrap());
+    spawner.spawn(hall_monitor_task(start_time).unwrap());
+    spawner.spawn(hall_monitor_task1(start_time).unwrap());
 
     loop {
         info!("Hello world!");
