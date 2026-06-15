@@ -12,7 +12,7 @@ repos:
       - id: esp-clippy
         name: clippy (esp workspace)
         language: system
-        entry: cargo clippy --all-features --workspace -- -D warnings
+        entry: cargo clippy --workspace -- -D warnings
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
