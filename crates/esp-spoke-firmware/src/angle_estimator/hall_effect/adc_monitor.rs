@@ -1,11 +1,7 @@
 #![allow(dead_code)]
 
 use core::cell::RefCell;
-use core::future::Future;
 use core::marker::PhantomData;
-use core::pin::Pin;
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
-use core::task::{Context, Poll, Waker};
 
 use critical_section::Mutex;
 use esp_hal::analog::adc::{AdcChannel, AdcPin, Attenuation};
@@ -13,6 +9,7 @@ use esp_hal::handler;
 use esp_hal::interrupt::Priority;
 use esp_hal::peripherals;
 use esp_hal::peripherals::{ADC1, APB_SARADC, Interrupt, SENS, SYSTEM};
+use esp_hal::time::{Duration, Instant};
 
 const ADC_DIGITAL_RAW_MASK: u32 = 0x0fff;
 
@@ -43,17 +40,11 @@ macro_rules! impl_adc1_monitor_channel {
 
 impl_adc1_monitor_channel!(GPIO1, GPIO2, GPIO3, GPIO4, GPIO5, GPIO6, GPIO7, GPIO8);
 
-// ---- Monitor 0 state ----
-static ADC_MONITOR_TRIGGERED: AtomicBool = AtomicBool::new(false);
-static ADC_MONITOR_EVENT: AtomicU8 = AtomicU8::new(0);
-static ADC_MONITOR_LAST_SAMPLE: AtomicU32 = AtomicU32::new(0);
-static ADC_MONITOR_WAKER: Mutex<RefCell<Option<Waker>>> = Mutex::new(RefCell::new(None));
-
-// ---- Monitor 1 state ----
-static ADC_MONITOR1_TRIGGERED: AtomicBool = AtomicBool::new(false);
-static ADC_MONITOR1_EVENT: AtomicU8 = AtomicU8::new(0);
-static ADC_MONITOR1_LAST_SAMPLE: AtomicU32 = AtomicU32::new(0);
-static ADC_MONITOR1_WAKER: Mutex<RefCell<Option<Waker>>> = Mutex::new(RefCell::new(None));
+/// Tick of the last adc monitor trigger
+pub static LAST_TICK_0: Mutex<RefCell<Duration>> =
+    Mutex::new(RefCell::new(esp_hal::time::Duration::ZERO));
+pub static LAST_TICK_1: Mutex<RefCell<Duration>> =
+    Mutex::new(RefCell::new(esp_hal::time::Duration::ZERO));
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ThresholdEvent {
@@ -193,50 +184,17 @@ fn adc_monitor_interrupt_handler_tracking() {
         return;
     }
 
-    let raw = saradc
-        .apb_saradc1_data_status()
-        .read()
-        .saradc1_data()
-        .bits()
-        & ADC_DIGITAL_RAW_MASK;
-
     if high0 || low0 {
-        let event = if high0 && low0 {
-            ThresholdEvent::Both
-        } else if high0 {
-            ThresholdEvent::High
-        } else {
-            ThresholdEvent::Low
-        };
-
-        ADC_MONITOR_LAST_SAMPLE.store(raw, Ordering::Release);
-        ADC_MONITOR_EVENT.store(event.as_u8(), Ordering::Release);
-        ADC_MONITOR_TRIGGERED.store(true, Ordering::Release);
-
         critical_section::with(|cs| {
-            if let Some(waker) = ADC_MONITOR_WAKER.borrow(cs).borrow().as_ref() {
-                waker.wake_by_ref();
-            }
+            let now = Instant::now();
+            LAST_TICK_0.replace(cs, now.duration_since_epoch());
         });
     }
 
     if high1 || low1 {
-        let event = if high1 && low1 {
-            ThresholdEvent::Both
-        } else if high1 {
-            ThresholdEvent::High
-        } else {
-            ThresholdEvent::Low
-        };
-
-        ADC_MONITOR1_LAST_SAMPLE.store(raw, Ordering::Release);
-        ADC_MONITOR1_EVENT.store(event.as_u8(), Ordering::Release);
-        ADC_MONITOR1_TRIGGERED.store(true, Ordering::Release);
-
         critical_section::with(|cs| {
-            if let Some(waker) = ADC_MONITOR1_WAKER.borrow(cs).borrow().as_ref() {
-                waker.wake_by_ref();
-            }
+            let now = Instant::now();
+            LAST_TICK_1.replace(cs, now.duration_since_epoch());
         });
     }
 
@@ -274,40 +232,16 @@ fn adc_monitor_interrupt_handler_no_sample() {
     }
 
     if high0 || low0 {
-        let event = if high0 && low0 {
-            ThresholdEvent::Both
-        } else if high0 {
-            ThresholdEvent::High
-        } else {
-            ThresholdEvent::Low
-        };
-
-        ADC_MONITOR_EVENT.store(event.as_u8(), Ordering::Release);
-        ADC_MONITOR_TRIGGERED.store(true, Ordering::Release);
-
         critical_section::with(|cs| {
-            if let Some(waker) = ADC_MONITOR_WAKER.borrow(cs).borrow().as_ref() {
-                waker.wake_by_ref();
-            }
+            let now = Instant::now();
+            LAST_TICK_0.replace(cs, now.duration_since_epoch());
         });
     }
 
     if high1 || low1 {
-        let event = if high1 && low1 {
-            ThresholdEvent::Both
-        } else if high1 {
-            ThresholdEvent::High
-        } else {
-            ThresholdEvent::Low
-        };
-
-        ADC_MONITOR1_EVENT.store(event.as_u8(), Ordering::Release);
-        ADC_MONITOR1_TRIGGERED.store(true, Ordering::Release);
-
         critical_section::with(|cs| {
-            if let Some(waker) = ADC_MONITOR1_WAKER.borrow(cs).borrow().as_ref() {
-                waker.wake_by_ref();
-            }
+            let now = Instant::now();
+            LAST_TICK_1.replace(cs, now.duration_since_epoch());
         });
     }
 
@@ -517,9 +451,6 @@ where
             w.thres0_low().set_bit()
         });
 
-        ADC_MONITOR_TRIGGERED.store(false, Ordering::Release);
-        ADC_MONITOR_EVENT.store(0, Ordering::Release);
-
         bind_and_enable_interrupt(if S::ENABLED {
             adc_monitor_interrupt_handler_tracking
         } else {
@@ -548,10 +479,6 @@ where
                 .bits(threshold.low.raw().min(ADC_DIGITAL_RAW_MASK as u16))
         });
     }
-
-    pub fn wait_threshold(&self) -> MonitorFuture {
-        MonitorFuture { monitor: 0 }
-    }
 }
 
 impl<'d, PIN0> AdcMonitor<'d, PIN0, (), Single, TrackSample>
@@ -564,10 +491,6 @@ where
     /// that the GPIO is already configured for analog use.
     pub fn new<CS>(adc1: ADC1<'d>, pin: AdcPin<PIN0, ADC1<'d>, CS>, config: MonitorConfig) -> Self {
         Self::new_impl(adc1, pin, config)
-    }
-
-    pub fn last_sample(&self) -> AdcSample {
-        AdcSample::new(ADC_MONITOR_LAST_SAMPLE.load(Ordering::Acquire) as u16)
     }
 }
 
@@ -675,10 +598,10 @@ where
             w.thres1_low().set_bit()
         });
 
-        ADC_MONITOR_TRIGGERED.store(false, Ordering::Release);
-        ADC_MONITOR_EVENT.store(0, Ordering::Release);
-        ADC_MONITOR1_TRIGGERED.store(false, Ordering::Release);
-        ADC_MONITOR1_EVENT.store(0, Ordering::Release);
+        // ADC_MONITOR_TRIGGERED.store(false, Ordering::Release);
+        // ADC_MONITOR_EVENT.store(0, Ordering::Release);
+        // ADC_MONITOR1_TRIGGERED.store(false, Ordering::Release);
+        // ADC_MONITOR1_EVENT.store(0, Ordering::Release);
 
         bind_and_enable_interrupt(if S::ENABLED {
             adc_monitor_interrupt_handler_tracking
@@ -720,14 +643,6 @@ where
                 .bits(threshold.low.raw().min(ADC_DIGITAL_RAW_MASK as u16))
         });
     }
-
-    pub fn wait_threshold0(&self) -> MonitorFuture {
-        MonitorFuture { monitor: 0 }
-    }
-
-    pub fn wait_threshold1(&self) -> MonitorFuture {
-        MonitorFuture { monitor: 1 }
-    }
 }
 
 impl<'d, PIN0, PIN1> AdcMonitor<'d, PIN0, PIN1, Dual, TrackSample>
@@ -747,14 +662,6 @@ where
         config1: MonitorConfig,
     ) -> Self {
         Self::new_dual_impl(adc1, pin0, pin1, config0, config1)
-    }
-
-    pub fn last_sample0(&self) -> AdcSample {
-        AdcSample::new(ADC_MONITOR_LAST_SAMPLE.load(Ordering::Acquire) as u16)
-    }
-
-    pub fn last_sample1(&self) -> AdcSample {
-        AdcSample::new(ADC_MONITOR1_LAST_SAMPLE.load(Ordering::Acquire) as u16)
     }
 }
 
@@ -793,71 +700,5 @@ impl<'d, PIN0, PIN1, Mode, S> Drop for AdcMonitor<'d, PIN0, PIN1, Mode, S> {
             w.thres1_en().clear_bit()
         });
         self.stop();
-    }
-}
-
-// ---- Future ----
-
-/// A future that resolves when the ADC threshold monitor fires.
-/// The `monitor` field selects which monitor (0 or 1) to wait on.
-pub struct MonitorFuture {
-    monitor: u8,
-}
-
-pub async fn wait_for_threshold0() -> ThresholdEvent {
-    MonitorFuture { monitor: 0 }.await
-}
-
-pub async fn wait_for_threshold1() -> ThresholdEvent {
-    MonitorFuture { monitor: 1 }.await
-}
-
-pub fn latest_sample0() -> AdcSample {
-    AdcSample::new(ADC_MONITOR_LAST_SAMPLE.load(Ordering::Acquire) as u16)
-}
-
-pub fn latest_sample1() -> AdcSample {
-    AdcSample::new(ADC_MONITOR1_LAST_SAMPLE.load(Ordering::Acquire) as u16)
-}
-
-impl Future for MonitorFuture {
-    type Output = ThresholdEvent;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let (triggered, event_atomic, waker_mutex) = if self.monitor == 0 {
-            (
-                &ADC_MONITOR_TRIGGERED,
-                &ADC_MONITOR_EVENT,
-                &ADC_MONITOR_WAKER,
-            )
-        } else {
-            (
-                &ADC_MONITOR1_TRIGGERED,
-                &ADC_MONITOR1_EVENT,
-                &ADC_MONITOR1_WAKER,
-            )
-        };
-
-        if triggered.swap(false, Ordering::AcqRel) {
-            let event = event_atomic.swap(0, Ordering::AcqRel);
-            if let Some(event) = ThresholdEvent::from_u8(event) {
-                return Poll::Ready(event);
-            }
-        }
-
-        critical_section::with(|cs| {
-            *waker_mutex.borrow(cs).borrow_mut() = Some(cx.waker().clone());
-        });
-
-        // Re-check after registering to avoid a race with an IRQ that fires
-        // between the first check and waker registration.
-        if triggered.swap(false, Ordering::AcqRel) {
-            let event = event_atomic.swap(0, Ordering::AcqRel);
-            if let Some(event) = ThresholdEvent::from_u8(event) {
-                return Poll::Ready(event);
-            }
-        }
-
-        Poll::Pending
     }
 }
