@@ -27,7 +27,7 @@ pub static SENSOR_TRIGGER_1: Signal<CriticalSectionRawMutex, ()> = Signal::new()
 /// access should call `SENSOR_TRIGGER.signal(())` from their own task whenever
 /// the spoke passes the hall-effect sensor.
 #[embassy_executor::task]
-pub async fn spin_estimator_task(state: &'static super::SharedSpinState) -> ! {
+pub async fn spin_estimator_task(state: &'static super::SharedSpinState, hall_offset: Angle) -> ! {
     let mut estimator = PositionEstimator::<1>::default();
     let mut last = Instant::now();
     let mut last_tick = Instant::MIN;
@@ -48,7 +48,7 @@ pub async fn spin_estimator_task(state: &'static super::SharedSpinState) -> ! {
 
         state.lock(|s| {
             *s.borrow_mut() = super::SpinState {
-                position: estimator.get_current_pos(),
+                position: (estimator.get_current_pos() + hall_offset).constrain_circle(),
                 rate: estimator.get_current_rate(),
             };
         });
