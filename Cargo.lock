@@ -2142,6 +2142,7 @@ dependencies = [
 name = "pov-algs"
 version = "0.1.0"
 dependencies = [
+ "embassy-time",
  "zerocopy",
 ]
 

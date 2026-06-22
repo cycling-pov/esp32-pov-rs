@@ -4,12 +4,12 @@ use core::cell::RefCell;
 use core::marker::PhantomData;
 
 use critical_section::Mutex;
+use embassy_time::Instant;
 use esp_hal::analog::adc::{AdcChannel, AdcPin, Attenuation};
 use esp_hal::handler;
 use esp_hal::interrupt::Priority;
 use esp_hal::peripherals;
 use esp_hal::peripherals::{ADC1, APB_SARADC, Interrupt, SENS, SYSTEM};
-use esp_hal::time::{Duration, Instant};
 
 const ADC_DIGITAL_RAW_MASK: u32 = 0x0fff;
 
@@ -41,10 +41,8 @@ macro_rules! impl_adc1_monitor_channel {
 impl_adc1_monitor_channel!(GPIO1, GPIO2, GPIO3, GPIO4, GPIO5, GPIO6, GPIO7, GPIO8);
 
 /// Tick of the last adc monitor trigger
-pub static LAST_TICK_0: Mutex<RefCell<Duration>> =
-    Mutex::new(RefCell::new(esp_hal::time::Duration::ZERO));
-pub static LAST_TICK_1: Mutex<RefCell<Duration>> =
-    Mutex::new(RefCell::new(esp_hal::time::Duration::ZERO));
+pub static LAST_TICK_0: Mutex<RefCell<Instant>> = Mutex::new(RefCell::new(Instant::MIN));
+pub static LAST_TICK_1: Mutex<RefCell<Instant>> = Mutex::new(RefCell::new(Instant::MIN));
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ThresholdEvent {
@@ -186,15 +184,13 @@ fn adc_monitor_interrupt_handler_tracking() {
 
     if high0 || low0 {
         critical_section::with(|cs| {
-            let now = Instant::now();
-            LAST_TICK_0.replace(cs, now.duration_since_epoch());
+            LAST_TICK_0.replace(cs, Instant::now());
         });
     }
 
     if high1 || low1 {
         critical_section::with(|cs| {
-            let now = Instant::now();
-            LAST_TICK_1.replace(cs, now.duration_since_epoch());
+            LAST_TICK_1.replace(cs, Instant::now());
         });
     }
 
@@ -233,15 +229,13 @@ fn adc_monitor_interrupt_handler_no_sample() {
 
     if high0 || low0 {
         critical_section::with(|cs| {
-            let now = Instant::now();
-            LAST_TICK_0.replace(cs, now.duration_since_epoch());
+            LAST_TICK_0.replace(cs, Instant::now());
         });
     }
 
     if high1 || low1 {
         critical_section::with(|cs| {
-            let now = Instant::now();
-            LAST_TICK_1.replace(cs, now.duration_since_epoch());
+            LAST_TICK_1.replace(cs, Instant::now());
         });
     }
 

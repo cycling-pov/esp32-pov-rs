@@ -8,6 +8,8 @@ use embassy_sync::signal::Signal;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use pov_algs::{Angle, filters::PositionEstimator};
 
+use adc_monitor::{LAST_TICK_0, LAST_TICK_1};
+
 /// Signal written by hardware sensor tasks when a spoke passes the reference point.
 /// Any write triggers a position update in [`spin_estimator_task`].
 pub static SENSOR_TRIGGER: Signal<CriticalSectionRawMutex, ()> = Signal::new();
@@ -28,6 +30,7 @@ pub static SENSOR_TRIGGER_1: Signal<CriticalSectionRawMutex, ()> = Signal::new()
 pub async fn spin_estimator_task(state: &'static super::SharedSpinState) -> ! {
     let mut estimator = PositionEstimator::<1>::default();
     let mut last = Instant::now();
+    let mut last_tick = Instant::MIN;
 
     loop {
         Timer::after(EmbassyDuration::from_millis(1)).await;
@@ -35,6 +38,10 @@ pub async fn spin_estimator_task(state: &'static super::SharedSpinState) -> ! {
         let now = Instant::now();
         let dt = Duration::from_micros(now.duration_since(last).as_micros());
         last = now;
+
+        critical_section::with(|cs| {
+            last_tick = *LAST_TICK_0.borrow_ref(cs);
+        });
 
         let triggered = SENSOR_TRIGGER.try_take().map(|_| 0usize);
         estimator.step(dt, triggered);
@@ -66,6 +73,8 @@ pub async fn dual_spin_estimator_task(
     let mut estimator0 = PositionEstimator::<1>::default();
     let mut estimator1 = PositionEstimator::<1>::default();
     let mut last = Instant::now();
+    let mut last_tick_0 = Instant::MIN;
+    let mut last_tick_1 = Instant::MIN;
 
     loop {
         Timer::after(EmbassyDuration::from_millis(1)).await;
@@ -81,6 +90,10 @@ pub async fn dual_spin_estimator_task(
         let dt = Duration::from_micros(now.duration_since(last).as_micros());
         last = now;
 
+        critical_section::with(|cs| {
+            last_tick_0 = *LAST_TICK_0.borrow_ref(cs);
+        });
+
         let triggered0 = SENSOR_TRIGGER_0.try_take().map(|_| 0usize);
         estimator0.step(dt, triggered0);
         state0.lock(|s| {
@@ -90,6 +103,9 @@ pub async fn dual_spin_estimator_task(
             };
         });
 
+        critical_section::with(|cs| {
+            last_tick_1 = *LAST_TICK_1.borrow_ref(cs);
+        });
         let triggered1 = SENSOR_TRIGGER_1.try_take().map(|_| 0usize);
         estimator1.step(dt, triggered1);
         state1.lock(|s| {
