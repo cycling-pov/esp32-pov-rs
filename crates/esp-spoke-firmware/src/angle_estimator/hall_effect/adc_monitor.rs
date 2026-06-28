@@ -4,6 +4,8 @@ use core::cell::RefCell;
 use core::marker::PhantomData;
 
 use critical_section::Mutex;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::signal::Signal;
 use embassy_time::Instant;
 use esp_hal::analog::adc::{AdcChannel, AdcPin, Attenuation};
 use esp_hal::handler;
@@ -39,6 +41,17 @@ macro_rules! impl_adc1_monitor_channel {
 }
 
 impl_adc1_monitor_channel!(GPIO1, GPIO2, GPIO3, GPIO4, GPIO5, GPIO6, GPIO7, GPIO8);
+
+/// Signal written by hardware sensor tasks when a spoke passes the reference point.
+/// Any write triggers a position update in [`spin_estimator_task`].
+pub static SENSOR_TRIGGER: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Per-strip sensor signals for dual-strip POV mode.
+/// Strip 0's hall-effect sensor task calls `SENSOR_TRIGGER_0.signal(())`;
+/// strip 1's sensor task calls `SENSOR_TRIGGER_1.signal(())`.  Both are
+/// consumed by [`dual_spin_estimator_task`].
+pub static SENSOR_TRIGGER_0: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+pub static SENSOR_TRIGGER_1: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Tick of the last adc monitor trigger
 pub static LAST_TICK_0: Mutex<RefCell<Instant>> = Mutex::new(RefCell::new(Instant::MIN));
@@ -180,18 +193,22 @@ fn adc_monitor_interrupt_handler_tracking() {
 
     if !(high0 || low0 || high1 || low1) {
         return;
+    } else {
+        SENSOR_TRIGGER.signal(());
     }
 
     if high0 || low0 {
         critical_section::with(|cs| {
             LAST_TICK_0.replace(cs, Instant::now());
         });
+        SENSOR_TRIGGER_0.signal(());
     }
 
     if high1 || low1 {
         critical_section::with(|cs| {
             LAST_TICK_1.replace(cs, Instant::now());
         });
+        SENSOR_TRIGGER_1.signal(());
     }
 
     saradc.int_clr().write(|w| {
@@ -225,18 +242,22 @@ fn adc_monitor_interrupt_handler_no_sample() {
 
     if !(high0 || low0 || high1 || low1) {
         return;
+    } else {
+        SENSOR_TRIGGER.signal(());
     }
 
     if high0 || low0 {
         critical_section::with(|cs| {
             LAST_TICK_0.replace(cs, Instant::now());
         });
+        SENSOR_TRIGGER_0.signal(());
     }
 
     if high1 || low1 {
         critical_section::with(|cs| {
             LAST_TICK_1.replace(cs, Instant::now());
         });
+        SENSOR_TRIGGER_1.signal(());
     }
 
     saradc.int_clr().write(|w| {

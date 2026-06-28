@@ -3,23 +3,10 @@ pub mod adc_monitor;
 use core::time::Duration;
 
 use defmt::info;
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::signal::Signal;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use pov_algs::{Angle, filters::PositionEstimator};
 
-use adc_monitor::{LAST_TICK_0, LAST_TICK_1};
-
-/// Signal written by hardware sensor tasks when a spoke passes the reference point.
-/// Any write triggers a position update in [`spin_estimator_task`].
-pub static SENSOR_TRIGGER: Signal<CriticalSectionRawMutex, ()> = Signal::new();
-
-/// Per-strip sensor signals for dual-strip POV mode.
-/// Strip 0's hall-effect sensor task calls `SENSOR_TRIGGER_0.signal(())`;
-/// strip 1's sensor task calls `SENSOR_TRIGGER_1.signal(())`.  Both are
-/// consumed by [`dual_spin_estimator_task`].
-pub static SENSOR_TRIGGER_0: Signal<CriticalSectionRawMutex, ()> = Signal::new();
-pub static SENSOR_TRIGGER_1: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+use adc_monitor::{LAST_TICK_0, LAST_TICK_1, SENSOR_TRIGGER, SENSOR_TRIGGER_0, SENSOR_TRIGGER_1};
 
 /// Background task that maintains the spoke wheel position estimate.
 ///

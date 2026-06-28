@@ -13,7 +13,8 @@ use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
 use esp_spoke_firmware::angle_estimator::hall_effect::adc_monitor::{
-    AdcMonitor, AdcSample, LAST_TICK_0, LAST_TICK_1, MonitorConfig, MonitorThreshold, SampleRate,
+    AdcMonitor, AdcSample, LAST_TICK_0, LAST_TICK_1, MonitorConfig, MonitorThreshold,
+    SENSOR_TRIGGER, SENSOR_TRIGGER_0, SENSOR_TRIGGER_1, SampleRate,
 };
 use {esp_backtrace as _, esp_println as _};
 
@@ -73,19 +74,33 @@ async fn main(_spawner: Spawner) -> ! {
 
     loop {
         info!("--------------------------");
-        critical_section::with(|cs| {
-            info!(
-                "last adc tick0: {=u64}",
-                LAST_TICK_0.borrow_ref(cs).as_millis()
-            );
-        });
 
-        critical_section::with(|cs| {
-            info!(
-                "last adc tick1: {=u64}",
-                LAST_TICK_1.borrow_ref(cs).as_millis()
-            );
-        });
+        let triggered = SENSOR_TRIGGER.try_take().map(|_| 0usize);
+        if triggered.is_some() {
+            info!("an adc monitor triggered",);
+        }
+
+        let triggered = SENSOR_TRIGGER_0.try_take().map(|_| 0usize);
+        if let Some(ind) = triggered {
+            critical_section::with(|cs| {
+                info!(
+                    "last adc tick0: {=u64},{=usize}",
+                    LAST_TICK_0.borrow_ref(cs).as_millis(),
+                    ind
+                );
+            });
+        }
+
+        let triggered = SENSOR_TRIGGER_1.try_take().map(|_| 0usize);
+        if let Some(ind) = triggered {
+            critical_section::with(|cs| {
+                info!(
+                    "last adc tick1: {=u64},{=usize}",
+                    LAST_TICK_1.borrow_ref(cs).as_millis(),
+                    ind
+                );
+            });
+        }
 
         Timer::after(Duration::from_secs(1)).await;
     }
