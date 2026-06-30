@@ -11,6 +11,7 @@ use esp_bootloader_esp_idf::partitions;
 use esp_storage::FlashStorage;
 use pov_proto::image::Encoding;
 use pov_proto::transfer::DownloadKind;
+use pov_proto::video;
 
 use self::config::{ImageKind, ImageSlotState, SensorConfig, SlotMetadata, StorageIndex};
 use self::ekv_flash::EkvFlash;
@@ -34,6 +35,17 @@ pub struct StorageStats {
     pub active_image_id: Option<usize>,
 }
 
+struct WriteState {
+    crc: Option<Crc32Hasher>,
+    chunk_count: u16,
+    header: Option<[u8; 16]>,
+}
+
+struct CommitContext<'a> {
+    total_capacity_bytes: u32,
+    write: &'a mut WriteState,
+}
+
 enum StorageRequest {
     GetActiveSlot,
     SetActiveSlot(usize),
@@ -44,7 +56,9 @@ enum StorageRequest {
     ReadSlotData(usize),
     ListImageIds,
     GetStorageStats,
-    BeginSlotWrite { expected_bytes: u32 },
+    BeginSlotWrite {
+        expected_bytes: u32,
+    },
     WriteSlotChunk {
         slot: usize,
         chunk_num: u16,
@@ -335,9 +349,7 @@ pub async fn storage_task(flash: esp_hal::peripherals::FLASH<'static>) -> ! {
 
     info!(
         "storage:task pov_store={:#x}..{:#x} usable_bytes={}",
-        pov_store_range.start,
-        pov_store_range.end,
-        total_capacity_bytes
+        pov_store_range.start, pov_store_range.end, total_capacity_bytes
     );
 
     let ekv_flash = EkvFlash::new(flash_storage, pov_store_range.start, raw_capacity);
@@ -351,26 +363,37 @@ pub async fn storage_task(flash: esp_hal::peripherals::FLASH<'static>) -> ! {
             db.mount().await.expect("storage:task ekv re-mount failed");
         }
         Err(e) => {
-            error!("storage:task ekv mount error: {:?}", defmt::Debug2Format(&e));
+            error!(
+                "storage:task ekv mount error: {:?}",
+                defmt::Debug2Format(&e)
+            );
             panic!()
         }
     }
 
     if config::read_schema_version(&db).await != Some(config::STORAGE_SCHEMA_VERSION) {
         warn!("storage:task schema mismatch, resetting storage");
-        db.format().await.expect("storage:task schema format failed");
-        db.mount().await.expect("storage:task schema re-mount failed");
+        db.format()
+            .await
+            .expect("storage:task schema format failed");
+        db.mount()
+            .await
+            .expect("storage:task schema re-mount failed");
         config::write_schema_version(&db, config::STORAGE_SCHEMA_VERSION)
             .await
             .ok();
-        config::set_storage_index(&db, &StorageIndex::default()).await.ok();
+        config::set_storage_index(&db, &StorageIndex::default())
+            .await
+            .ok();
         config::clear_active_slot(&db).await.ok();
     }
 
     let mut write_slot: Option<usize> = None;
-    let mut write_crc: Option<Crc32Hasher> = None;
-    let mut write_chunk_count: u16 = 0;
-    let mut write_header: Option<[u8; 16]> = None;
+    let mut write = WriteState {
+        crc: None,
+        chunk_count: 0,
+        header: None,
+    };
 
     loop {
         let req = STORAGE_REQUEST_CHANNEL.receive().await;
@@ -462,45 +485,48 @@ pub async fn storage_task(flash: esp_hal::peripherals::FLASH<'static>) -> ! {
             }
             StorageRequest::BeginSlotWrite { expected_bytes } => {
                 if let Some(prev_slot) = write_slot.take() {
-                    image_file::purge_image(&db, prev_slot as u32, write_chunk_count)
+                    image_file::purge_image(&db, prev_slot as u32, write.chunk_count)
                         .await
                         .ok();
                 }
-                write_crc = None;
-                write_chunk_count = 0;
-                write_header = None;
+                write.crc = None;
+                write.chunk_count = 0;
+                write.header = None;
 
                 let est_chunks = expected_bytes.div_ceil(CHUNK_SIZE as u32) as u16;
                 let required = estimate_image_footprint(expected_bytes, est_chunks);
                 let mut index = config::get_storage_index(&db).await;
-                let result = if evict_until_capacity(&db, &mut index, total_capacity_bytes, required)
-                    .await
-                    .is_err()
-                {
-                    Err(())
-                } else {
-                    let image_id = index.next_image_id;
-                    index.next_image_id = index.next_image_id.saturating_add(1);
-
-                    let meta = SlotMetadata {
-                        image_id,
-                        state: ImageSlotState::Writing,
-                        chunk_count: 0,
-                    };
-
-                    if image_file::write_slot_metadata(&db, image_id as usize, &meta)
+                let result =
+                    if evict_until_capacity(&db, &mut index, total_capacity_bytes, required)
                         .await
                         .is_err()
                     {
                         Err(())
-                    } else if config::set_storage_index(&db, &index).await.is_err() {
-                        Err(())
                     } else {
-                        write_slot = Some(image_id as usize);
-                        write_crc = Some(Crc32Hasher::new());
-                        Ok(image_id as usize)
-                    }
-                };
+                        let image_id = index.next_image_id;
+                        index.next_image_id = index.next_image_id.saturating_add(1);
+
+                        let meta = SlotMetadata {
+                            image_id,
+                            state: ImageSlotState::Writing,
+                            chunk_count: 0,
+                        };
+
+                        if image_file::write_slot_metadata(&db, image_id as usize, &meta)
+                            .await
+                            .is_err()
+                        {
+                            Err(())
+                        } else {
+                            if config::set_storage_index(&db, &index).await.is_err() {
+                                Err(())
+                            } else {
+                                write_slot = Some(image_id as usize);
+                                write.crc = Some(Crc32Hasher::new());
+                                Ok(image_id as usize)
+                            }
+                        }
+                    };
 
                 STORAGE_RESPONSE_CHANNEL
                     .send(StorageResponse::BeginSlotWrite(result))
@@ -516,14 +542,14 @@ pub async fn storage_task(flash: esp_hal::peripherals::FLASH<'static>) -> ! {
                 } else {
                     match image_file::write_chunk(&db, slot, chunk_num, &data).await {
                         Ok(()) => {
-                            if let Some(ref mut h) = write_crc {
+                            if let Some(ref mut h) = write.crc {
                                 h.update(&data);
                             }
-                            write_chunk_count = write_chunk_count.saturating_add(1);
-                            if chunk_num == 0 && data.len() >= 16 && write_header.is_none() {
+                            write.chunk_count = write.chunk_count.saturating_add(1);
+                            if chunk_num == 0 && data.len() >= 16 && write.header.is_none() {
                                 let mut hdr = [0u8; 16];
                                 hdr.copy_from_slice(&data[..16]);
-                                write_header = Some(hdr);
+                                write.header = Some(hdr);
                             }
                             Ok(())
                         }
@@ -544,6 +570,10 @@ pub async fn storage_task(flash: esp_hal::peripherals::FLASH<'static>) -> ! {
                 let result = if write_slot != Some(slot) {
                     Err(())
                 } else {
+                    let mut commit = CommitContext {
+                        total_capacity_bytes,
+                        write: &mut write,
+                    };
                     commit_slot_ekv(
                         &db,
                         slot,
@@ -551,21 +581,23 @@ pub async fn storage_task(flash: esp_hal::peripherals::FLASH<'static>) -> ! {
                         total_bytes,
                         kind,
                         chunk_count,
-                        total_capacity_bytes,
-                        &mut write_crc,
-                        &mut write_header,
+                        &mut commit,
                     )
                     .await
                 };
 
                 if result.is_err() {
-                    image_file::purge_image(&db, slot as u32, chunk_count).await.ok();
+                    image_file::purge_image(&db, slot as u32, chunk_count)
+                        .await
+                        .ok();
                 }
 
                 write_slot = None;
-                write_crc = None;
-                write_chunk_count = 0;
-                write_header = None;
+                write = WriteState {
+                    crc: None,
+                    chunk_count: 0,
+                    header: None,
+                };
 
                 STORAGE_RESPONSE_CHANNEL
                     .send(StorageResponse::CommitSlot(result))
@@ -578,9 +610,11 @@ pub async fn storage_task(flash: esp_hal::peripherals::FLASH<'static>) -> ! {
                     Err(())
                 };
                 write_slot = None;
-                write_crc = None;
-                write_chunk_count = 0;
-                write_header = None;
+                write = WriteState {
+                    crc: None,
+                    chunk_count: 0,
+                    header: None,
+                };
                 STORAGE_RESPONSE_CHANNEL
                     .send(StorageResponse::AbortSlot(result))
                     .await;
@@ -596,11 +630,9 @@ async fn commit_slot_ekv(
     total_bytes: u32,
     kind: DownloadKind,
     chunk_count: u16,
-    total_capacity_bytes: u32,
-    write_crc: &mut Option<Crc32Hasher>,
-    write_header: &mut Option<[u8; 16]>,
+    context: &mut CommitContext<'_>,
 ) -> Result<(), ()> {
-    let actual_crc = write_crc.take().map(|h| h.finalize()).unwrap_or(0);
+    let actual_crc = context.write.crc.take().map(|h| h.finalize()).unwrap_or(0);
     if actual_crc != expected_crc32 {
         warn!(
             "storage:commit_slot CRC mismatch image_id={} expected={=u32:#010x} actual={=u32:#010x}",
@@ -609,7 +641,7 @@ async fn commit_slot_ekv(
         return Err(());
     }
 
-    let header = match write_header.take() {
+    let header = match context.write.header.take() {
         Some(h) => h,
         None => {
             warn!("storage:commit_slot missing header image_id={}", slot);
@@ -627,10 +659,28 @@ async fn commit_slot_ekv(
         return Err(());
     }
 
-    let encoding = match postcard::take_from_bytes::<Encoding>(&header[4..]) {
-        Ok((enc, _)) => enc,
-        Err(_) => {
-            warn!("storage:commit_slot unknown encoding image_id={}", slot);
+    let encoding = match kind {
+        DownloadKind::DisplayImage => match postcard::take_from_bytes::<Encoding>(&header[4..]) {
+            Ok((enc, _)) => enc,
+            Err(_) => {
+                warn!("storage:commit_slot unknown encoding image_id={}", slot);
+                return Err(());
+            }
+        },
+        DownloadKind::Video => {
+            if video::parse_header(&header).is_err() {
+                warn!("storage:commit_slot invalid video header image_id={}", slot);
+                return Err(());
+            }
+            // Video frames carry per-frame image headers. Metadata encoding is
+            // not used for playback selection, so keep a stable placeholder.
+            Encoding::Rgb888Deflate
+        }
+        DownloadKind::OtaImage => {
+            warn!(
+                "storage:commit_slot unexpected OtaImage for image_id={}",
+                slot
+            );
             return Err(());
         }
     };
@@ -639,7 +689,10 @@ async fn commit_slot_ekv(
         DownloadKind::DisplayImage => ImageKind::Static,
         DownloadKind::Video => ImageKind::Video,
         DownloadKind::OtaImage => {
-            warn!("storage:commit_slot unexpected OtaImage for image_id={}", slot);
+            warn!(
+                "storage:commit_slot unexpected OtaImage for image_id={}",
+                slot
+            );
             return Err(());
         }
     };
@@ -663,10 +716,10 @@ async fn commit_slot_ekv(
         .saturating_add(estimate_image_footprint(total_bytes, chunk_count));
     index.active_image_id = Some(slot as u32);
 
-    if index.used_bytes > total_capacity_bytes {
+    if index.used_bytes > context.total_capacity_bytes {
         warn!(
             "storage:commit_slot accounting overflow used={} total={}",
-            index.used_bytes, total_capacity_bytes
+            index.used_bytes, context.total_capacity_bytes
         );
     }
 

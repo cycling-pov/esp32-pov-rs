@@ -4,6 +4,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use defmt::{info, warn};
 use embassy_futures::join::join;
+use embassy_futures::select::{Either, select};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Timer};
@@ -22,6 +23,7 @@ use crate::led::{CORE1_FLASH_PAUSE_REQUESTED, CORE1_FLASH_PAUSED_COUNT};
 use crate::led::{LedCommand, LedError, LedStrip, LedTimings};
 #[cfg(feature = "status-led")]
 use crate::status_led::{self, StatusLedRequest};
+use crate::storage;
 
 /// Scratch buffer size: large enough for a full polar image (30×360×3 bytes).
 pub const POV_DECODE_SCRATCH_BYTES: usize = 1024 * 34;
@@ -283,6 +285,16 @@ pub async fn pov_command_task(bitmap: &'static SharedBitmapMutex) -> ! {
         let mut guard = bitmap.lock().await;
         task_common::boot_restore(&mut **guard, decode_scratch).await
     };
+    let mut video_playback = None;
+    if let Some(slot) = initial_slot {
+        let mut guard = bitmap.lock().await;
+        if let Some(task_common::LoadedFlashContent::Video(playback)) =
+            task_common::load_flash_slot(slot, &mut **guard, decode_scratch).await
+        {
+            video_playback = Some(playback);
+        }
+    }
+
     if initial_slot.is_some() {
         RENDERING_ACTIVE.store(true, Ordering::Relaxed);
         info!("pov:boot active image is downloaded from flash");
@@ -294,12 +306,31 @@ pub async fn pov_command_task(bitmap: &'static SharedBitmapMutex) -> ! {
         info!("pov:boot no valid flash image; starting with built-in");
     }
 
-    // Tracks which flash slot is active so NextImage can cycle in order:
-    // None → slot 0 → slot 1 → None → …
+    // Tracks which flash image is active so NextImage can cycle in order.
     let mut current_display_slot = initial_slot;
 
     loop {
-        let cmd = super::LED_COMMAND_CHANNEL.receive().await;
+        let cmd = if let Some(playback) = video_playback.as_ref() {
+            let delay = Duration::from_millis(playback.frame_delay_ms as u64);
+            match select(super::LED_COMMAND_CHANNEL.receive(), Timer::after(delay)).await {
+                Either::First(cmd) => Some(cmd),
+                Either::Second(_) => {
+                    let mut guard = bitmap.lock().await;
+                    if let Some(state) = video_playback.as_mut()
+                        && !task_common::advance_video_frame(state, &mut **guard, decode_scratch)
+                    {
+                        warn!("pov:video failed to advance frame");
+                    }
+                    None
+                }
+            }
+        } else {
+            Some(super::LED_COMMAND_CHANNEL.receive().await)
+        };
+
+        let Some(cmd) = cmd else {
+            continue;
+        };
 
         match cmd {
             LedCommand::Frame(frame) => {
@@ -312,6 +343,7 @@ pub async fn pov_command_task(bitmap: &'static SharedBitmapMutex) -> ! {
                     SpokeCommand::DisplayOff => {
                         RANDOMIZING.store(false, Ordering::Relaxed);
                         RENDERING_ACTIVE.store(false, Ordering::Relaxed);
+                        video_playback = None;
                         #[cfg(feature = "status-led")]
                         {
                             let _ = status_led::try_send_request(StatusLedRequest::OFF);
@@ -334,28 +366,55 @@ pub async fn pov_command_task(bitmap: &'static SharedBitmapMutex) -> ! {
                         {
                             let _ = status_led::try_send_request(StatusLedRequest::BLINK_SLOW);
                         }
-                        let next_slot = match current_display_slot {
-                            None => Some(0usize),
-                            Some(0) => Some(1),
-                            Some(_) => None,
+                        let image_ids = storage::list_image_ids().await.unwrap_or_default();
+                        let next_slot = if image_ids.is_empty() {
+                            None
+                        } else {
+                            match current_display_slot {
+                                None => Some(image_ids[0]),
+                                Some(current) => {
+                                    let pos = image_ids.iter().position(|id| *id == current);
+                                    match pos {
+                                        Some(p) if p + 1 < image_ids.len() => {
+                                            Some(image_ids[p + 1])
+                                        }
+                                        _ => None,
+                                    }
+                                }
+                            }
                         };
+
                         current_display_slot = next_slot;
 
                         let mut guard = bitmap.lock().await;
                         match next_slot {
                             None => {
+                                video_playback = None;
                                 guard.activate_builtin();
                                 // Render the built-in image continuously.
                                 RENDERING_ACTIVE.store(true, Ordering::Relaxed);
                             }
                             Some(slot) => {
-                                if task_common::load_flash_slot(slot, &mut **guard, decode_scratch)
-                                    .await
+                                match task_common::load_flash_slot(
+                                    slot,
+                                    &mut **guard,
+                                    decode_scratch,
+                                )
+                                .await
                                 {
-                                    RENDERING_ACTIVE.store(true, Ordering::Relaxed);
-                                } else {
-                                    RENDERING_ACTIVE.store(false, Ordering::Relaxed);
-                                    warn!("pov:cmd NextImage failed to load slot {}", slot);
+                                    Some(task_common::LoadedFlashContent::StaticImage) => {
+                                        video_playback = None;
+                                        RENDERING_ACTIVE.store(true, Ordering::Relaxed);
+                                    }
+                                    Some(task_common::LoadedFlashContent::Video(playback)) => {
+                                        video_playback = Some(playback);
+                                        RENDERING_ACTIVE.store(true, Ordering::Relaxed);
+                                    }
+                                    None => {
+                                        video_playback = None;
+                                        RENDERING_ACTIVE.store(false, Ordering::Relaxed);
+                                        warn!("pov:cmd NextImage failed to load slot {}", slot);
+                                    }
                                 }
                             }
                         }
@@ -372,17 +431,27 @@ pub async fn pov_command_task(bitmap: &'static SharedBitmapMutex) -> ! {
                 info!("pov:cmd load_slot slot={}", slot);
                 RANDOMIZING.store(false, Ordering::Relaxed);
                 let mut guard = bitmap.lock().await;
-                if task_common::load_flash_slot(slot, &mut **guard, decode_scratch).await {
-                    current_display_slot = Some(slot);
-                    RENDERING_ACTIVE.store(true, Ordering::Relaxed);
-                    #[cfg(feature = "status-led")]
-                    {
-                        let _ = status_led::try_send_request(StatusLedRequest::BLINK_SLOW);
+                match task_common::load_flash_slot(slot, &mut **guard, decode_scratch).await {
+                    Some(task_common::LoadedFlashContent::StaticImage) => {
+                        current_display_slot = Some(slot);
+                        video_playback = None;
+                        RENDERING_ACTIVE.store(true, Ordering::Relaxed);
+                        #[cfg(feature = "status-led")]
+                        {
+                            let _ = status_led::try_send_request(StatusLedRequest::BLINK_SLOW);
+                        }
+                        info!("pov:cmd loaded flash slot {}", slot);
                     }
-                    info!("pov:cmd loaded flash slot {}", slot);
-                } else {
-                    warn!("pov:cmd failed to load flash slot {}", slot);
-                    // Keep the current rendering state — old image stays on screen.
+                    Some(task_common::LoadedFlashContent::Video(playback)) => {
+                        current_display_slot = Some(slot);
+                        video_playback = Some(playback);
+                        RENDERING_ACTIVE.store(true, Ordering::Relaxed);
+                        info!("pov:cmd loaded video slot {}", slot);
+                    }
+                    None => {
+                        warn!("pov:cmd failed to load flash slot {}", slot);
+                        // Keep the current rendering state — old image stays on screen.
+                    }
                 }
             }
         }

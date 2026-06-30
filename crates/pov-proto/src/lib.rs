@@ -9,3 +9,4 @@ extern crate alloc;
 pub mod bridge;
 pub mod image;
 pub mod transfer;
+pub mod video;

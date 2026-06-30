@@ -128,6 +128,13 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
 
     let mut current_display_slot =
         task_common::boot_restore(&mut *bitmap_store, decode_scratch).await;
+    let mut video_playback = None;
+    if let Some(slot) = current_display_slot
+        && let Some(task_common::LoadedFlashContent::Video(playback)) =
+            task_common::load_flash_slot(slot, &mut *bitmap_store, decode_scratch).await
+    {
+        video_playback = Some(playback);
+    }
     if current_display_slot.is_some() {
         info!("waveshare:boot active image is downloaded from flash");
         #[cfg(feature = "status-led")]
@@ -156,6 +163,24 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
                     None
                 }
             }
+        } else if let Some(playback) = video_playback.as_ref() {
+            let delay = EmbassyDuration::from_millis(playback.frame_delay_ms as u64);
+            match select(super::LED_COMMAND_CHANNEL.receive(), Timer::after(delay)).await {
+                Either::First(cmd) => Some(cmd),
+                Either::Second(_) => {
+                    if let Some(state) = video_playback.as_mut()
+                        && task_common::advance_video_frame(
+                            state,
+                            &mut *bitmap_store,
+                            decode_scratch,
+                        )
+                        && let Ok(bitmap) = bitmap_store.bitmap(0)
+                    {
+                        led_strip.render_from_bitmap(&bitmap).await;
+                    }
+                    None
+                }
+            }
         } else {
             Some(super::LED_COMMAND_CHANNEL.receive().await)
         };
@@ -176,6 +201,7 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
                         {
                             let _ = status_led::try_send_request(StatusLedRequest::OFF);
                         }
+                        video_playback = None;
                         led_strip.clear();
                         led_strip.show().await.expect("failed to clear LED strip");
                         info!("applied DisplayOff from transfer {}", frame.transfer_id);
@@ -185,33 +211,58 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
                         {
                             let _ = status_led::try_send_request(StatusLedRequest::BLINK_SLOW);
                         }
-                        let next_slot = match current_display_slot {
-                            None => Some(0usize),
-                            Some(0) => Some(1),
-                            Some(_) => None,
+                        let image_ids = crate::storage::list_image_ids().await.unwrap_or_default();
+                        let next_slot = if image_ids.is_empty() {
+                            None
+                        } else {
+                            match current_display_slot {
+                                None => Some(image_ids[0]),
+                                Some(current) => {
+                                    let pos = image_ids.iter().position(|id| *id == current);
+                                    match pos {
+                                        Some(p) if p + 1 < image_ids.len() => {
+                                            Some(image_ids[p + 1])
+                                        }
+                                        _ => None,
+                                    }
+                                }
+                            }
                         };
+
                         current_display_slot = next_slot;
                         match next_slot {
                             None => {
+                                video_playback = None;
                                 bitmap_store.activate_builtin();
                                 if let Ok(bitmap) = bitmap_store.bitmap(0) {
                                     led_strip.render_from_bitmap(&bitmap).await;
                                 }
                             }
                             Some(slot) => {
-                                if task_common::load_flash_slot(
+                                match task_common::load_flash_slot(
                                     slot,
                                     &mut *bitmap_store,
                                     decode_scratch,
                                 )
                                 .await
                                 {
-                                    if let Ok(bitmap) = bitmap_store.bitmap(0) {
-                                        led_strip.render_from_bitmap(&bitmap).await;
+                                    Some(task_common::LoadedFlashContent::StaticImage) => {
+                                        video_playback = None;
+                                        if let Ok(bitmap) = bitmap_store.bitmap(0) {
+                                            led_strip.render_from_bitmap(&bitmap).await;
+                                        }
                                     }
-                                } else {
-                                    led_strip.clear();
-                                    led_strip.show().await.expect("failed to clear LED strip");
+                                    Some(task_common::LoadedFlashContent::Video(playback)) => {
+                                        video_playback = Some(playback);
+                                        if let Ok(bitmap) = bitmap_store.bitmap(0) {
+                                            led_strip.render_from_bitmap(&bitmap).await;
+                                        }
+                                    }
+                                    None => {
+                                        video_playback = None;
+                                        led_strip.clear();
+                                        led_strip.show().await.expect("failed to clear LED strip");
+                                    }
                                 }
                             }
                         }
@@ -241,18 +292,30 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
             }
             LedCommand::LoadSlot(slot) => {
                 info!("waveshare:loop load_slot slot={}", slot);
-                if task_common::load_flash_slot(slot, &mut *bitmap_store, decode_scratch).await {
-                    current_display_slot = Some(slot);
-                    #[cfg(feature = "status-led")]
-                    {
-                        let _ = status_led::try_send_request(StatusLedRequest::BLINK_SLOW);
+                match task_common::load_flash_slot(slot, &mut *bitmap_store, decode_scratch).await {
+                    Some(task_common::LoadedFlashContent::StaticImage) => {
+                        current_display_slot = Some(slot);
+                        video_playback = None;
+                        #[cfg(feature = "status-led")]
+                        {
+                            let _ = status_led::try_send_request(StatusLedRequest::BLINK_SLOW);
+                        }
+                        if let Ok(bitmap) = bitmap_store.bitmap(0) {
+                            led_strip.render_from_bitmap(&bitmap).await;
+                        }
+                        info!("waveshare:loop loaded flash slot {}", slot);
                     }
-                    if let Ok(bitmap) = bitmap_store.bitmap(0) {
-                        led_strip.render_from_bitmap(&bitmap).await;
+                    Some(task_common::LoadedFlashContent::Video(playback)) => {
+                        current_display_slot = Some(slot);
+                        video_playback = Some(playback);
+                        if let Ok(bitmap) = bitmap_store.bitmap(0) {
+                            led_strip.render_from_bitmap(&bitmap).await;
+                        }
+                        info!("waveshare:loop loaded video slot {}", slot);
                     }
-                    info!("waveshare:loop loaded flash slot {}", slot);
-                } else {
-                    warn!("waveshare:loop failed to load flash slot {}", slot);
+                    None => {
+                        warn!("waveshare:loop failed to load flash slot {}", slot);
+                    }
                 }
             }
         }

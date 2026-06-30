@@ -1,10 +1,12 @@
 use std::{fs, path::Path, thread, time::Duration};
 
 use anyhow::Context;
+use image::AnimationDecoder;
 use pov_proto::{
     bridge::{BridgeFrame, TransportSelector},
     image::{LedCount, RadialCount, encode_polar_rgb888_to_wire, encode_rgb888_to_wire},
     transfer::{ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand, encode_packet},
+    video,
 };
 use rand::seq::SliceRandom;
 use serialport::SerialPort;
@@ -113,6 +115,23 @@ pub fn send_download(
 
     let packets =
         chunk_download_payload(&payload, request.kind, config.transport.max_chunk_payload())?;
+    send_packets(config, &packets)
+}
+
+pub fn send_video(
+    config: &SerialLinkConfig,
+    gif_path: &Path,
+    polar: Option<PolarEncodeOptions>,
+) -> anyhow::Result<SendStats> {
+    if let Some(opts) = polar {
+        validate_polar_options(opts)?;
+    }
+    let payload = encode_gif_video_payload(gif_path, polar)?;
+    let packets = chunk_download_payload(
+        &payload,
+        DownloadKind::Video,
+        config.transport.max_chunk_payload(),
+    )?;
     send_packets(config, &packets)
 }
 
@@ -232,19 +251,7 @@ fn encode_cartesian_image(image_path: &Path) -> anyhow::Result<Vec<u8>> {
 }
 
 fn encode_polar_image(image_path: &Path, options: PolarEncodeOptions) -> anyhow::Result<Vec<u8>> {
-    if !options.first_led_distance.is_finite() || !options.last_led_distance.is_finite() {
-        anyhow::bail!("LED distances must be finite numbers");
-    }
-
-    if options.first_led_distance < 0.0 || options.last_led_distance <= 0.0 {
-        anyhow::bail!(
-            "LED distances must satisfy first_led_distance >= 0 and last_led_distance > 0"
-        );
-    }
-
-    if options.first_led_distance > options.last_led_distance {
-        anyhow::bail!("first_led_distance must be <= last_led_distance");
-    }
+    validate_polar_options(options)?;
 
     let first_radius = options.first_led_distance / options.last_led_distance;
     let radius_values = evenly_spaced_radii(POLAR_LEDS, first_radius, 1.0);
@@ -271,6 +278,123 @@ fn encode_polar_image(image_path: &Path, options: PolarEncodeOptions) -> anyhow:
         RadialCount::new(POLAR_RADIALS as u16),
     )
     .map_err(|e| anyhow::anyhow!("Failed to encode polar image: {:?}", e))
+}
+
+fn validate_polar_options(options: PolarEncodeOptions) -> anyhow::Result<()> {
+    if !options.first_led_distance.is_finite() || !options.last_led_distance.is_finite() {
+        anyhow::bail!("LED distances must be finite numbers");
+    }
+
+    if options.first_led_distance < 0.0 || options.last_led_distance <= 0.0 {
+        anyhow::bail!(
+            "LED distances must satisfy first_led_distance >= 0 and last_led_distance > 0"
+        );
+    }
+
+    if options.first_led_distance > options.last_led_distance {
+        anyhow::bail!("first_led_distance must be <= last_led_distance");
+    }
+
+    Ok(())
+}
+
+fn encode_gif_video_payload(
+    gif_path: &Path,
+    polar: Option<PolarEncodeOptions>,
+) -> anyhow::Result<Vec<u8>> {
+    let gif_file = std::fs::File::open(gif_path)
+        .with_context(|| format!("Failed to open GIF {:?}", gif_path))?;
+    let reader = std::io::BufReader::new(gif_file);
+    let decoder = image::codecs::gif::GifDecoder::new(reader)
+        .with_context(|| format!("Failed to decode GIF {:?}", gif_path))?;
+
+    let frames = decoder
+        .into_frames()
+        .collect_frames()
+        .with_context(|| format!("Failed to decode GIF frames {:?}", gif_path))?;
+
+    anyhow::ensure!(!frames.is_empty(), "GIF contains no frames: {:?}", gif_path);
+    anyhow::ensure!(
+        frames.len() <= u16::MAX as usize,
+        "GIF has too many frames ({})",
+        frames.len()
+    );
+
+    // GIF delays are in units of 10 ms. Use the first non-zero delay and keep
+    // a fixed cadence in the wire format.
+    let frame_delay_ms = frames
+        .iter()
+        .map(|f| f.delay().numer_denom_ms().0)
+        .find(|ms| *ms > 0)
+        .unwrap_or(100)
+        .min(u16::MAX as u32) as u16;
+
+    let mut encoded_frames: Vec<Vec<u8>> = Vec::with_capacity(frames.len());
+    for frame in &frames {
+        let rgba = frame.buffer().clone();
+        let encoded = match polar {
+            Some(opts) => encode_polar_rgba(&rgba, opts)?,
+            None => encode_cartesian_rgba(&rgba)?,
+        };
+        encoded_frames.push(encoded);
+    }
+
+    let total_frame_bytes: usize = encoded_frames
+        .iter()
+        .map(|f| 4usize.saturating_add(f.len()))
+        .sum();
+    let mut out = Vec::with_capacity(video::HEADER_LEN + total_frame_bytes);
+
+    out.extend_from_slice(&video::MAGIC);
+    out.push(video::WIRE_VERSION);
+    out.extend_from_slice(&frame_delay_ms.to_le_bytes());
+    out.extend_from_slice(&(encoded_frames.len() as u16).to_le_bytes());
+
+    for frame in &encoded_frames {
+        anyhow::ensure!(
+            frame.len() <= u32::MAX as usize,
+            "Single frame too large: {} bytes",
+            frame.len()
+        );
+        out.extend_from_slice(&(frame.len() as u32).to_le_bytes());
+        out.extend_from_slice(frame);
+    }
+
+    Ok(out)
+}
+
+fn encode_cartesian_rgba(rgba: &image::RgbaImage) -> anyhow::Result<Vec<u8>> {
+    let img = image::DynamicImage::ImageRgba8(rgba.clone());
+    let resized = img.resize_exact(64, 64, image::imageops::FilterType::Lanczos3);
+    let pixels: Vec<u8> = resized.to_rgb8().into_raw();
+    encode_rgb888_to_wire(&pixels)
+        .map_err(|e| anyhow::anyhow!("Failed to encode frame to wire format: {:?}", e))
+}
+
+fn encode_polar_rgba(
+    rgba: &image::RgbaImage,
+    options: PolarEncodeOptions,
+) -> anyhow::Result<Vec<u8>> {
+    let first_radius = options.first_led_distance / options.last_led_distance;
+    let radius_values = evenly_spaced_radii(POLAR_LEDS, first_radius, 1.0);
+    let polar_bitmap =
+        pov_images::polar_from_image::<POLAR_LEDS, POLAR_RADIALS>(rgba, &radius_values);
+
+    let mut raw: Vec<u8> = Vec::with_capacity(POLAR_LEDS * POLAR_RADIALS * 3);
+    for strip in &polar_bitmap.pixels {
+        for px in strip {
+            raw.push(px.red);
+            raw.push(px.green);
+            raw.push(px.blue);
+        }
+    }
+
+    encode_polar_rgb888_to_wire(
+        &raw,
+        LedCount::new(POLAR_LEDS as u8),
+        RadialCount::new(POLAR_RADIALS as u16),
+    )
+    .map_err(|e| anyhow::anyhow!("Failed to encode polar frame: {:?}", e))
 }
 
 fn evenly_spaced_radii(led_count: usize, start: f32, end: f32) -> Vec<f32> {

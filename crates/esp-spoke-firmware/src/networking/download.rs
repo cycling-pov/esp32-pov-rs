@@ -12,7 +12,7 @@ pub const BLE_MAX_CHUNK_PAYLOAD: usize = 224;
 /// ESP-NOW 2.0 supports up to 1470-byte packets including pov-proto metadata.
 /// Keep chunk payload at a multiple of 4 so flash write offsets are word-aligned.
 pub const ESPNOW_MAX_CHUNK_PAYLOAD: usize = 1448;
-pub const MAX_TRANSFER_BYTES: usize = 10 * 1024;
+pub const MAX_TRANSFER_BYTES: usize = 256 * 1024;
 
 #[cfg(feature = "ble")]
 const BLE_MAX_CHUNKS: usize = MAX_TRANSFER_BYTES.div_ceil(BLE_MAX_CHUNK_PAYLOAD);

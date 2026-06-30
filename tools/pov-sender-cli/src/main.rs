@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use pov_sender_core::{
     DownloadKind, DownloadRequest, PolarEncodeOptions, SensorOffsets, SerialLinkConfig,
     SpokeCommand, Transport as CoreTransport, send_command, send_download, send_image,
-    send_sensor_offsets,
+    send_sensor_offsets, send_video,
 };
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -88,6 +88,24 @@ enum Command {
         #[arg(long)]
         last_led_distance: Option<f32>,
     },
+    /// Send a GIF as a video payload.
+    SendVideo {
+        /// Path to a GIF file.
+        #[arg(short, long)]
+        gif: PathBuf,
+
+        /// Pre-convert each frame to polar coordinates before encoding.
+        #[arg(long, default_value_t = false)]
+        polar: bool,
+
+        /// Physical distance from hub center to LED 0 (innermost LED).
+        #[arg(long)]
+        first_led_distance: Option<f32>,
+
+        /// Physical distance from hub center to LED 29 (outermost LED).
+        #[arg(long)]
+        last_led_distance: Option<f32>,
+    },
     /// Send a raw file as a typed download payload.
     SendDownload {
         /// Payload kind for the receiver to route or apply.
@@ -149,6 +167,30 @@ fn main() -> anyhow::Result<()> {
                 "Collected {} packets for image {:?}",
                 stats.packet_count, image
             );
+            stats
+        }
+        Command::SendVideo {
+            gif,
+            polar,
+            first_led_distance,
+            last_led_distance,
+        } => {
+            let polar_options = if polar {
+                let first_led_distance =
+                    first_led_distance.context("--polar requires --first-led-distance")?;
+                let last_led_distance =
+                    last_led_distance.context("--polar requires --last-led-distance")?;
+
+                Some(PolarEncodeOptions {
+                    first_led_distance,
+                    last_led_distance,
+                })
+            } else {
+                None
+            };
+
+            let stats = send_video(&config, &gif, polar_options)?;
+            println!("Collected {} packets for GIF {:?}", stats.packet_count, gif);
             stats
         }
         Command::SendDownload { kind, file } => {
