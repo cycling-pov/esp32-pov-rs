@@ -89,6 +89,7 @@ struct ActiveTransfer {
     kind: DownloadKind,
     expected_crc32: u32,
     total_len: u32,
+    chunk_count: u16,
 }
 
 #[cfg(feature = "i2c-1")]
@@ -408,9 +409,9 @@ async fn main(spawner: Spawner) -> ! {
                                 "main:new transfer {} aborts previous transfer {} in slot {}",
                                 transfer_id, old.transfer_id, old.slot
                             );
-                            storage::abort_slot(old.slot).await.ok();
+                            storage::abort_slot(old.slot, old.chunk_count).await.ok();
                         }
-                        match storage::begin_slot_write().await {
+                        match storage::begin_slot_write(chunk.total_len).await {
                             Ok(slot) => {
                                 info!(
                                     "main:began slot write slot={} transfer_id={}",
@@ -422,6 +423,7 @@ async fn main(spawner: Spawner) -> ! {
                                     kind: chunk.kind,
                                     expected_crc32: chunk.expected_crc32,
                                     total_len: chunk.total_len,
+                                    chunk_count: 0,
                                 });
                             }
                             Err(()) => {
@@ -439,7 +441,7 @@ async fn main(spawner: Spawner) -> ! {
                         }
                     }
 
-                    if let Some(ref a) = active
+                    if let Some(ref mut a) = active
                         && a.transfer_id == transfer_id
                     {
                         let slot = a.slot;
@@ -455,6 +457,8 @@ async fn main(spawner: Spawner) -> ! {
                                 "main:write_slot_chunk failed slot={} chunk={} transfer_id={}",
                                 slot, chunk_num, transfer_id
                             );
+                        } else {
+                            a.chunk_count = a.chunk_count.saturating_add(1);
                         }
 
                         if is_final {
@@ -468,6 +472,7 @@ async fn main(spawner: Spawner) -> ! {
                                 a.expected_crc32,
                                 a.total_len,
                                 a.kind,
+                                a.chunk_count,
                             )
                             .await
                             {

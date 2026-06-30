@@ -53,20 +53,23 @@ pub async fn load_flash_slot(
     false
 }
 
-/// Scans flash slots in preferred order at boot and loads the first valid image.
+/// Scans stored images in preferred order at boot and loads the first valid image.
 ///
-/// Returns the slot index that was loaded, or `None` if no valid slot was found.
+/// Returns the image id that was loaded, or `None` if no valid image was found.
 pub async fn boot_restore(
     bitmap_store: &mut impl BitmapStorage,
     decode_scratch: &mut [u8],
 ) -> Option<usize> {
-    let active_flash_slot = storage::get_active_slot().await;
-    let slots_to_try: [usize; 2] = match active_flash_slot {
-        Some(s) => [s as usize, (s as usize + 1) % 2],
-        None => [0, 1],
-    };
+    let active_image = storage::get_active_slot().await;
+    let mut ids_to_try = storage::list_image_ids().await.unwrap_or_default();
+    ids_to_try.reverse();
 
-    for &slot in &slots_to_try {
+    if let Some(active) = active_image {
+        ids_to_try.retain(|id| *id != active);
+        ids_to_try.insert(0, active);
+    }
+
+    for &slot in &ids_to_try {
         let state = storage::get_slot_state(slot).await;
         info!("led_task:boot slot={} state={:?}", slot, state);
         if let ImageSlotState::Valid { .. } = state {

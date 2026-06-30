@@ -202,27 +202,37 @@ pub type EkvDatabase = Database<EkvFlash<'static>, CriticalSectionRawMutex>;
 //
 // All keys are short byte arrays to stay within EKV_MAX_KEY_SIZE (8 bytes).
 //
-//   0x01          → active slot index (value: 1 byte: slot as u8)
-//   0x02 <slot>   → slot metadata     (value: postcard-encoded SlotMetadata)
-//   0x03 <slot> <chunk_hi> <chunk_lo> → image chunk data (value: raw bytes)
-//   0x04          → sensor config     (value: postcard-encoded SensorConfig)
+//   0x01                → active image id (value: u32 little-endian)
+//   0x02 <id:4>         → image metadata  (value: postcard-encoded SlotMetadata)
+//   0x03 <id:4> <chunk:2> → image chunk data (value: raw bytes)
+//   0x04                → sensor config   (value: postcard-encoded SensorConfig)
+//   0x05                → storage index   (value: postcard-encoded StorageIndex)
+//   0x06                → schema version  (value: 1 byte)
 
-/// Key for the active-slot index record.
+/// Key for the active-image id record.
 pub const KEY_ACTIVE_SLOT: &[u8] = &[0x01];
 
 /// Key for the persisted sensor-config record.
 pub const KEY_SENSOR_CONFIG: &[u8] = &[0x04];
 
-/// Key for the metadata record of `slot`.
+/// Key for the persisted storage index record.
+pub const KEY_STORAGE_INDEX: &[u8] = &[0x05];
+
+/// Key for storage schema versioning.
+pub const KEY_STORAGE_SCHEMA_VERSION: &[u8] = &[0x06];
+
+/// Key for the metadata record of `image_id`.
 #[inline]
-pub fn meta_key(slot: usize) -> [u8; 2] {
-    [0x02, slot as u8]
+pub fn meta_key(image_id: u32) -> [u8; 5] {
+    let id = image_id.to_le_bytes();
+    [0x02, id[0], id[1], id[2], id[3]]
 }
 
-/// Key for chunk number `chunk_num` of `slot`.
+/// Key for chunk number `chunk_num` of `image_id`.
 /// `chunk_num` is encoded big-endian so keys sort in chunk order.
 #[inline]
-pub fn chunk_key(slot: usize, chunk_num: u16) -> [u8; 4] {
+pub fn chunk_key(image_id: u32, chunk_num: u16) -> [u8; 7] {
+    let id = image_id.to_le_bytes();
     let [hi, lo] = chunk_num.to_be_bytes();
-    [0x03, slot as u8, hi, lo]
+    [0x03, id[0], id[1], id[2], id[3], hi, lo]
 }
