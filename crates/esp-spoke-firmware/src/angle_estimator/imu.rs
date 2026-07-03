@@ -1,7 +1,18 @@
+#[cfg(feature = "imu-spin")]
 use defmt::info;
+#[cfg(feature = "imu-spin")]
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+#[cfg(feature = "imu-spin")]
 use nalgebra::RealField;
+#[cfg(feature = "imu-spin")]
 use pov_algs::{Angle, AngularVelocity};
+
+#[cfg(feature = "imu-spin")]
+type SharedI2cDevice = embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice<
+    'static,
+    embassy_sync::blocking_mutex::raw::NoopRawMutex,
+    esp_hal::i2c::master::I2c<'static, esp_hal::Async>,
+>;
 
 #[cfg(feature = "imu-spin")]
 const L3GD20H_ADDR: u8 = 0x6B;
@@ -229,13 +240,15 @@ fn check_and_initialize_gyro_bias(
 /// frame) is captured once; subsequent angles are measured relative to that
 /// reference so that zero degrees corresponds to the world-up direction.
 #[cfg(feature = "imu-spin")]
-#[embassy_executor::task]
-pub async fn imu_dual_spin_estimator_task(
+async fn imu_dual_spin_estimator_impl<I2C>(
     state0: &'static super::SharedSpinState,
     state1: &'static super::SharedSpinState,
-    mut i2c: esp_hal::i2c::master::I2c<'static, esp_hal::Async>,
+    mut i2c: I2C,
     imu_offset_degrees: f32,
-) -> ! {
+) -> !
+where
+    I2C: embedded_hal_async::i2c::I2c,
+{
     use fusion_ahrs::{Ahrs, AhrsSettings, Convention};
 
     const GYRO_AXIS_MIN_RATE_DPS: f32 = 30.0;
@@ -400,4 +413,15 @@ pub async fn imu_dual_spin_estimator_task(
             }
         }
     }
+}
+
+#[cfg(feature = "imu-spin")]
+#[embassy_executor::task]
+pub async fn imu_dual_spin_estimator_task(
+    state0: &'static super::SharedSpinState,
+    state1: &'static super::SharedSpinState,
+    i2c: SharedI2cDevice,
+    imu_offset_degrees: f32,
+) -> ! {
+    imu_dual_spin_estimator_impl(state0, state1, i2c, imu_offset_degrees).await
 }

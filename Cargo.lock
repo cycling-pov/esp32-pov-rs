@@ -1115,6 +1115,7 @@ dependencies = [
  "critical-section",
  "defmt 1.1.0",
  "ekv",
+ "embassy-embedded-hal",
  "embassy-executor",
  "embassy-futures",
  "embassy-sync 0.6.2",
