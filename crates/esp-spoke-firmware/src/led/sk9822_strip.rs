@@ -7,7 +7,7 @@ use esp_hal::{
 };
 use smart_leds_trait::RGB8;
 
-pub const SK9822_LED_COUNT: usize = 30;
+pub const SK9822_LED_COUNT: usize = 26;
 
 const SK9822_MAX_BRIGHTNESS: LedBrightness = LedBrightness::new(31);
 const SK9822_BRIGHTNESS_LIMIT_PERCENT: u8 = 5;

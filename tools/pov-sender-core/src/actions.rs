@@ -3,8 +3,8 @@ use std::{fs, path::Path, thread, time::Duration};
 use anyhow::Context;
 use pov_proto::{
     bridge::{BridgeFrame, TransportSelector},
-    image::{LedCount, RadialCount, encode_polar_rgb888_to_wire, encode_rgb888_to_wire},
-    transfer::{ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand, encode_packet},
+    image::{encode_polar_rgb888_to_wire, encode_rgb888_to_wire, LedCount, RadialCount},
+    transfer::{encode_packet, ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand},
 };
 use rand::seq::SliceRandom;
 use serialport::SerialPort;
@@ -14,7 +14,7 @@ use crate::serial_link::open_serial_port;
 const ESPNOW_CHUNK_PAYLOAD_BYTES: usize = 1450;
 const BLE_CHUNK_PAYLOAD_BYTES: usize = 224;
 const SERIAL_TX_BUF_BYTES: usize = 1600;
-const POLAR_LEDS: usize = 30;
+const POLAR_LEDS: usize = 26;
 const POLAR_RADIALS: usize = 360;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
