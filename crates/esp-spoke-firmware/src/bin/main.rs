@@ -15,8 +15,10 @@ use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
 #[cfg(all(feature = "sk9822-strip", feature = "imu-spin"))]
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
+#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+use embassy_time::Duration;
 #[cfg(feature = "heap-stats")]
-use embassy_time::{Duration, Timer};
+use embassy_time::Timer;
 use esp_hal::clock::CpuClock;
 #[cfg(all(
     feature = "sk9822-strip",
@@ -383,7 +385,7 @@ async fn main(spawner: Spawner) -> ! {
                             // always be called afterward — even if the ack times out — to
                             // avoid leaving the render task stuck in its IRAM spin loop.
                             render_pause_held = true;
-                            if !led::pause_render_for_flash(500).await {
+                            if !led::pause_render_for_flash(Duration::from_millis(500)).await {
                                 warn!(
                                     "main:render pause ack timeout before transfer {}",
                                     transfer_id

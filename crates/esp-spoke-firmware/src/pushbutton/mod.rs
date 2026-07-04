@@ -4,7 +4,7 @@ use embassy_sync::pubsub::{PubSubChannel, Subscriber};
 use embassy_time::{Duration, Instant, Timer};
 use esp_hal::gpio::{AnyPin, Input, InputConfig, Pull};
 
-const BUTTON_DEBOUNCE_MS: u64 = 30;
+const BUTTON_DEBOUNCE_INTERVAL: Duration = Duration::from_millis(30);
 const BUTTON_EVENT_CAPACITY: usize = 8;
 const BUTTON_EVENT_SUBSCRIBERS: usize = 4;
 const BUTTON_EVENT_PUBLISHERS: usize = 2;
@@ -68,7 +68,7 @@ pub async fn button_input_task(pin: AnyPin<'static>, button: ButtonId) -> ! {
         input.wait_for_falling_edge().await;
 
         // Re-sample after the debounce interval to filter contact bounce.
-        Timer::after(Duration::from_millis(BUTTON_DEBOUNCE_MS)).await;
+        Timer::after(BUTTON_DEBOUNCE_INTERVAL).await;
 
         if !input.is_low() {
             continue;
@@ -80,7 +80,7 @@ pub async fn button_input_task(pin: AnyPin<'static>, button: ButtonId) -> ! {
 
         // Wait for stable release to avoid duplicate press events while held.
         input.wait_for_rising_edge().await;
-        Timer::after(Duration::from_millis(BUTTON_DEBOUNCE_MS)).await;
+        Timer::after(BUTTON_DEBOUNCE_INTERVAL).await;
 
         if input.is_low() {
             warn!("button:{:?} release bounce detected", button);

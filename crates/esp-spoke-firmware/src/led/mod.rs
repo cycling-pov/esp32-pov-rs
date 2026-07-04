@@ -45,6 +45,7 @@ pub enum LedCommand {
 static LED_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, LedCommand, 4> = Channel::new();
 
 pub(crate) const CORE1_FLASH_PAUSE_PARTICIPANTS: usize = 2;
+const CORE1_FLASH_PAUSE_POLL_INTERVAL: Duration = Duration::from_millis(1);
 
 pub(crate) static CORE1_FLASH_PAUSE_REQUESTED: AtomicBool = AtomicBool::new(false);
 pub(crate) static CORE1_FLASH_PAUSED_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -79,13 +80,13 @@ pub fn try_send_led_command(cmd: LedCommand) -> bool {
 ///
 /// Returns `true` when all core1 tasks have acknowledged, or `false` on timeout.
 /// For non-SK9822 builds this is a no-op that returns `true`.
-pub async fn pause_render_for_flash(timeout_ms: u64) -> bool {
+pub async fn pause_render_for_flash(timeout: Duration) -> bool {
     #[cfg(feature = "sk9822-strip")]
     {
         CORE1_FLASH_PAUSED_COUNT.store(0, Ordering::Release);
         CORE1_FLASH_PAUSE_REQUESTED.store(true, Ordering::Release);
 
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        let deadline = Instant::now() + timeout;
         loop {
             let paused_count = CORE1_FLASH_PAUSED_COUNT.load(Ordering::Acquire);
             if paused_count == CORE1_FLASH_PAUSE_PARTICIPANTS {
@@ -100,13 +101,13 @@ pub async fn pause_render_for_flash(timeout_ms: u64) -> bool {
                 );
                 return false;
             }
-            Timer::after(Duration::from_millis(1)).await;
+            Timer::after(CORE1_FLASH_PAUSE_POLL_INTERVAL).await;
         }
     }
 
     #[cfg(not(feature = "sk9822-strip"))]
     {
-        let _ = timeout_ms;
+        let _ = timeout;
         true
     }
 }

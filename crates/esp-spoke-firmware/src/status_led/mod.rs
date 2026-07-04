@@ -9,6 +9,7 @@ use esp_hal::peripherals::GPIO46;
 
 const STATUS_LED_BLINK_SLOW: Duration = Duration::from_millis(600);
 const STATUS_LED_BLINK_FAST: Duration = Duration::from_millis(180);
+const STATUS_LED_OFF_PERIOD: Duration = Duration::from_millis(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StatusLedRequest {
@@ -18,7 +19,7 @@ pub struct StatusLedRequest {
 
 impl StatusLedRequest {
     pub const OFF: Self = Self {
-        blink_period: Some(Duration::from_millis(0)),
+        blink_period: Some(STATUS_LED_OFF_PERIOD),
     };
 
     pub const SOLID_ON: Self = Self { blink_period: None };
@@ -88,7 +89,7 @@ pub async fn status_led_task(mut led: StatusLed<'static>) -> ! {
                 led.set_on();
                 current = STATUS_LED_REQUEST_CHANNEL.receive().await;
             }
-            Some(period) if period == Duration::from_millis(0) => {
+            Some(period) if period == STATUS_LED_OFF_PERIOD => {
                 led_on = false;
                 led.set_off();
                 current = STATUS_LED_REQUEST_CHANNEL.receive().await;
