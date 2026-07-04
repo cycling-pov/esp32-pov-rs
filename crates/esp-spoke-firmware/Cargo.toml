@@ -54,6 +54,7 @@ board-v1 = [
     "mock-spin",
     "pushbutton-1",
     "pushbutton-2",
+    "status-led",
 ]
 
 [dependencies]

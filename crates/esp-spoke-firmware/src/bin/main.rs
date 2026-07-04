@@ -49,6 +49,8 @@ use esp_spoke_firmware::networking;
 use esp_spoke_firmware::pushbutton;
 #[cfg(any(feature = "pushbutton-1", feature = "pushbutton-2"))]
 use esp_spoke_firmware::pushbutton::ButtonId;
+#[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
+use esp_spoke_firmware::status_led;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use esp_spoke_firmware::storage;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
@@ -152,6 +154,12 @@ async fn main(spawner: Spawner) -> ! {
             pushbutton::button_input_task(peripherals.GPIO6.into(), ButtonId::Button2).unwrap(),
         );
         info!("Pushbutton-2 initialized on GPIO7");
+    }
+
+    #[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
+    {
+        status_led::init(peripherals.GPIO46, spawner);
+        info!("Status LED initialized on GPIO46");
     }
 
     #[cfg(all(feature = "waveshare-matrix", not(feature = "sk9822-strip")))]

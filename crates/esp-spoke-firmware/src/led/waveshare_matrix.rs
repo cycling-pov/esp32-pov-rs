@@ -10,6 +10,8 @@ use static_cell::StaticCell;
 use crate::bitmap::{Bitmap, BitmapStorage, generated_swapping_storage};
 use crate::led::task_common;
 use crate::led::{LedBrightness, LedCommand, LedError, LedStrip, LedTimings};
+#[cfg(feature = "status-led")]
+use crate::status_led::{self, StatusLedRequest};
 
 // The Waveshare Matrix has very poor thermal design. The manufacturer recommends limiting
 // the brightness to 50%. We'll cap the brightness to 1% to prevent overheating and because
@@ -128,6 +130,10 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
         task_common::boot_restore(&mut *bitmap_store, decode_scratch).await;
     if current_display_slot.is_some() {
         info!("waveshare:boot active image is downloaded from flash");
+        #[cfg(feature = "status-led")]
+        {
+            let _ = status_led::try_send_request(StatusLedRequest::BLINK_SLOW);
+        }
         if let Ok(bitmap) = bitmap_store.bitmap(0) {
             led_strip.render_from_bitmap(&bitmap).await;
         }
@@ -166,11 +172,19 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
 
                 match frame.command {
                     SpokeCommand::DisplayOff => {
+                        #[cfg(feature = "status-led")]
+                        {
+                            let _ = status_led::try_send_request(StatusLedRequest::OFF);
+                        }
                         led_strip.clear();
                         led_strip.show().await.expect("failed to clear LED strip");
                         info!("applied DisplayOff from transfer {}", frame.transfer_id);
                     }
                     SpokeCommand::NextImage => {
+                        #[cfg(feature = "status-led")]
+                        {
+                            let _ = status_led::try_send_request(StatusLedRequest::BLINK_SLOW);
+                        }
                         let next_slot = match current_display_slot {
                             None => Some(0usize),
                             Some(0) => Some(1),
@@ -208,6 +222,10 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
                     }
                     SpokeCommand::RandomizeDisplay => {
                         randomizing = true;
+                        #[cfg(feature = "status-led")]
+                        {
+                            let _ = status_led::try_send_request(StatusLedRequest::BLINK_FAST);
+                        }
                         info!(
                             "applied RandomizeDisplay from transfer {}",
                             frame.transfer_id
@@ -225,6 +243,10 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
                 info!("waveshare:loop load_slot slot={}", slot);
                 if task_common::load_flash_slot(slot, &mut *bitmap_store, decode_scratch).await {
                     current_display_slot = Some(slot);
+                    #[cfg(feature = "status-led")]
+                    {
+                        let _ = status_led::try_send_request(StatusLedRequest::BLINK_SLOW);
+                    }
                     if let Ok(bitmap) = bitmap_store.bitmap(0) {
                         led_strip.render_from_bitmap(&bitmap).await;
                     }

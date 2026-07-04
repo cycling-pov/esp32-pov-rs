@@ -15,4 +15,6 @@ pub mod bitmap;
 pub mod led;
 pub mod networking;
 pub mod pushbutton;
+#[cfg(feature = "status-led")]
+pub mod status_led;
 pub mod storage;
