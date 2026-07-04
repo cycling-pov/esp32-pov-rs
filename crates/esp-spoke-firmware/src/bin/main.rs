@@ -25,8 +25,6 @@ use esp_hal::clock::CpuClock;
 ))]
 #[cfg(all(feature = "sk9822-strip", feature = "imu-spin"))]
 use esp_spoke_firmware::angle_estimator::imu_dual_spin_estimator_task;
-#[cfg(all(feature = "sk9822-strip", feature = "mock-spin"))]
-use esp_spoke_firmware::angle_estimator::mock_dual_spin_estimator_task;
 #[cfg(feature = "sk9822-strip")]
 use esp_spoke_firmware::angle_estimator::new_shared_spin_state;
 #[cfg(feature = "sk9822-strip")]
