@@ -14,4 +14,5 @@ pub mod angle_estimator;
 pub mod bitmap;
 pub mod led;
 pub mod networking;
+pub mod pushbutton;
 pub mod storage;

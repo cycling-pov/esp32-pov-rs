@@ -47,7 +47,14 @@ lsm303 = ["i2c-1"]
 # Grouping for test boards
 board-waveshare = ["espnow", "waveshare-matrix", "flash-4mb"]
 board-test-rig = ["espnow", "sk9822-strip", "imu-spin", "flash-16mb"]
-board-v1 = ["espnow", "flash-8mb", "sk9822-strip", "mock-spin"]
+board-v1 = [
+    "espnow",
+    "flash-8mb",
+    "sk9822-strip",
+    "mock-spin",
+    "pushbutton-1",
+    "pushbutton-2",
+]
 
 [dependencies]
 esp-hal = { version = "1.1.1", features = ["defmt", "esp32s3", "unstable"] }
