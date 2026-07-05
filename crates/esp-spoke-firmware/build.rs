@@ -27,15 +27,19 @@ fn copy_partition_table() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR");
     let manifest_path = PathBuf::from(&manifest_dir);
 
-    let csv_name = if cfg!(feature = "flash-16mb") {
+    let has_flash_16mb = std::env::var_os("CARGO_FEATURE_FLASH_16MB").is_some();
+    let has_flash_8mb = std::env::var_os("CARGO_FEATURE_FLASH_8MB").is_some();
+
+    let csv_name = if has_flash_16mb {
         "partitions-16mb.csv"
-    } else if cfg!(feature = "flash-8mb") {
+    } else if has_flash_8mb {
         "partitions-8mb.csv"
     } else {
         // default: flash-4mb
         "partitions-4mb.csv"
     };
     let src = manifest_path.join(csv_name);
+    let selection_stamp = manifest_path.join(".partitions-selected");
 
     // Write to `<workspace_root>/target/partitions.csv`.
     // CARGO_MANIFEST_DIR is `crates/esp-spoke-firmware`, so `../..` reaches the workspace root.
@@ -47,8 +51,36 @@ fn copy_partition_table() {
     std::fs::copy(&src, &dest)
         .unwrap_or_else(|e| panic!("failed to copy {csv_name} to target/: {e}"));
 
-    println!("cargo:rerun-if-changed={}", src.display());
+    // Keep a crate-local stamp that records the active partition profile.
+    // Tracking this file gives Cargo a stable, in-package signal to rerun the
+    // build script when switching between cached board feature sets.
+    std::fs::write(&selection_stamp, csv_name)
+        .unwrap_or_else(|e| panic!("failed to write {}: {e}", selection_stamp.display()));
+
+    // Track all partition templates so edits to any size-specific CSV retrigger.
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_path.join("partitions-4mb.csv").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_path.join("partitions-8mb.csv").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_path.join("partitions-16mb.csv").display()
+    );
+    println!("cargo:rerun-if-changed={}", selection_stamp.display());
+    // Track the generated destination too. This avoids stale partition-table state
+    // when switching between board feature sets that share cached build outputs.
+    println!("cargo:rerun-if-changed={}", dest.display());
+
+    // Track all feature toggles that can influence board selection / flash size.
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_BOARD_V1");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_BOARD_TEST_RIG");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_BOARD_WAVESHARE");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_FLASH_16MB");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_FLASH_8MB");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_FLASH_4MB");
 }
 
