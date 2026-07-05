@@ -100,6 +100,15 @@ struct I2CConfig<'d> {
 #[cfg(all(feature = "sk9822-strip", feature = "imu-spin"))]
 type SharedI2cBus = Mutex<NoopRawMutex, esp_hal::i2c::master::I2c<'static, esp_hal::Async>>;
 
+#[cfg(all(feature = "imu-spin", feature = "board-v1", feature = "board-test-rig"))]
+compile_error!("features `board-v1` and `board-test-rig` are mutually exclusive");
+
+#[cfg(all(
+    feature = "imu-spin",
+    not(any(feature = "board-v1", feature = "board-test-rig"))
+))]
+compile_error!("feature `imu-spin` requires either `board-v1` or `board-test-rig`");
+
 #[allow(
     clippy::large_stack_frames,
     reason = "it's not unusual to allocate larger buffers etc. in main"
@@ -191,21 +200,24 @@ async fn main(spawner: Spawner) -> ! {
     #[cfg(feature = "imu-spin")]
     let i2c0 = peripherals.I2C0;
 
-    #[cfg(feature = "imu-spin")]
-    let i2c_config = {
-        if cfg!(feature = "board-v1") {
-            Some(I2CConfig {
-                sda: peripherals.GPIO47.into(),
-                scl: peripherals.GPIO48.into(),
-            })
-        } else if cfg!(feature = "board-test-rig") {
-            Some(I2CConfig {
-                sda: peripherals.GPIO6.into(),
-                scl: peripherals.GPIO5.into(),
-            })
-        } else {
-            None
-        }
+    #[cfg(all(
+        feature = "imu-spin",
+        feature = "board-v1",
+        not(feature = "board-test-rig")
+    ))]
+    let i2c_config = I2CConfig {
+        sda: peripherals.GPIO47.into(),
+        scl: peripherals.GPIO48.into(),
+    };
+
+    #[cfg(all(
+        feature = "imu-spin",
+        feature = "board-test-rig",
+        not(feature = "board-v1")
+    ))]
+    let i2c_config = I2CConfig {
+        sda: peripherals.GPIO6.into(),
+        scl: peripherals.GPIO5.into(),
     };
 
     #[cfg(feature = "sk9822-strip")]
@@ -256,8 +268,6 @@ async fn main(spawner: Spawner) -> ! {
                 static CORE1_EXECUTOR: StaticCell<esp_rtos::embassy::Executor> = StaticCell::new();
                 #[cfg(feature = "imu-spin")]
                 static I2C_BUS: StaticCell<SharedI2cBus> = StaticCell::new();
-                #[cfg(feature = "imu-spin")]
-                let i2c_config = i2c_config.unwrap();
                 CORE1_EXECUTOR
                     .init(esp_rtos::embassy::Executor::new())
                     .run(|spawner| {
