@@ -1,34 +1,18 @@
-#[cfg(feature = "imu-spin")]
 use defmt::info;
-#[cfg(feature = "imu-spin")]
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
-#[cfg(feature = "imu-spin")]
 use nalgebra::RealField;
-#[cfg(feature = "imu-spin")]
 use pov_algs::{Angle, AngularVelocity};
 
-#[cfg(feature = "imu-spin")]
-type SharedI2cDevice = embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice<
-    'static,
-    embassy_sync::blocking_mutex::raw::NoopRawMutex,
-    esp_hal::i2c::master::I2c<'static, esp_hal::Async>,
->;
-
-#[cfg(feature = "imu-spin")]
 const L3GD20H_ADDR: u8 = 0x6B;
-#[cfg(feature = "imu-spin")]
 const LSM303_ACCEL_ADDR: u8 = 0x19;
-#[cfg(feature = "imu-spin")]
 const LSM303_MAG_ADDR: u8 = 0x1E;
 
-#[cfg(feature = "imu-spin")]
 struct ImuSample {
     gyro_dps: nalgebra::Vector3<f32>,
     accel_g: nalgebra::Vector3<f32>,
     mag_gauss: nalgebra::Vector3<f32>,
 }
 
-#[cfg(feature = "imu-spin")]
 async fn write_reg<I2C>(i2c: &mut I2C, addr: u8, reg: u8, value: u8) -> Result<(), I2C::Error>
 where
     I2C: embedded_hal_async::i2c::I2c,
@@ -36,7 +20,6 @@ where
     i2c.write(addr, &[reg, value]).await
 }
 
-#[cfg(feature = "imu-spin")]
 async fn read_regs<I2C>(i2c: &mut I2C, addr: u8, reg: u8, out: &mut [u8]) -> Result<(), I2C::Error>
 where
     I2C: embedded_hal_async::i2c::I2c,
@@ -44,7 +27,6 @@ where
     i2c.write_read(addr, &[reg], out).await
 }
 
-#[cfg(feature = "imu-spin")]
 async fn init_l3gd20h<I2C>(i2c: &mut I2C) -> Result<(), I2C::Error>
 where
     I2C: embedded_hal_async::i2c::I2c,
@@ -55,7 +37,6 @@ where
     write_reg(i2c, L3GD20H_ADDR, 0x23, 0x30).await
 }
 
-#[cfg(feature = "imu-spin")]
 async fn init_lsm303<I2C>(i2c: &mut I2C) -> Result<(), I2C::Error>
 where
     I2C: embedded_hal_async::i2c::I2c,
@@ -71,7 +52,6 @@ where
     write_reg(i2c, LSM303_MAG_ADDR, 0x02, 0x00).await
 }
 
-#[cfg(feature = "imu-spin")]
 async fn read_imu_sample<I2C>(i2c: &mut I2C) -> Result<ImuSample, I2C::Error>
 where
     I2C: embedded_hal_async::i2c::I2c,
@@ -129,7 +109,6 @@ where
     })
 }
 
-#[cfg(feature = "imu-spin")]
 struct CalibrationData {
     gyro_bias_dps: nalgebra::Vector3<f32>,
     calibrating_gyro_bias: bool,
@@ -139,13 +118,11 @@ struct CalibrationData {
     calibration_reset_log_divider: u8,
 }
 
-#[cfg(feature = "imu-spin")]
 struct SampleRateMonitor {
     sample_counter: u32,
     sample_time_accum_s: f32,
 }
 
-#[cfg(feature = "imu-spin")]
 fn check_sample_rate(monitor: &mut SampleRateMonitor, dt: f32) {
     monitor.sample_counter = monitor.sample_counter.wrapping_add(1);
     monitor.sample_time_accum_s += dt;
@@ -161,18 +138,15 @@ fn check_sample_rate(monitor: &mut SampleRateMonitor, dt: f32) {
     }
 }
 
-#[cfg(feature = "imu-spin")]
 fn check_and_initialize_gyro_bias(
     calibration_data: &mut CalibrationData,
     sample: &ImuSample,
     dt: f32,
     last_angle: Angle,
-    state0: &super::SharedSpinState,
-    state1: &super::SharedSpinState,
+    state0: &super::super::SharedSpinState,
+    state1: &super::super::SharedSpinState,
 ) -> bool {
-    #[cfg(feature = "imu-spin")]
     const IMU_CALIBRATION_DURATION_S: f32 = 5.0;
-    #[cfg(feature = "imu-spin")]
     const IMU_CALIBRATION_MOTION_MAX_DPS: f32 = 100.0;
 
     if !calibration_data.calibrating_gyro_bias {
@@ -215,13 +189,13 @@ fn check_and_initialize_gyro_bias(
 
     let zero_rate = AngularVelocity::from_radians_secs(0.0);
     state0.lock(|s| {
-        *s.borrow_mut() = super::SpinState {
+        *s.borrow_mut() = super::super::SpinState {
             position: last_angle,
             rate: zero_rate,
         };
     });
     state1.lock(|s| {
-        *s.borrow_mut() = super::SpinState {
+        *s.borrow_mut() = super::super::SpinState {
             position: last_angle,
             rate: zero_rate,
         };
@@ -239,10 +213,9 @@ fn check_and_initialize_gyro_bias(
 /// body-fixed reference direction (world-up projected into the spin plane in body
 /// frame) is captured once; subsequent angles are measured relative to that
 /// reference so that zero degrees corresponds to the world-up direction.
-#[cfg(feature = "imu-spin")]
-async fn imu_dual_spin_estimator_impl<I2C>(
-    state0: &'static super::SharedSpinState,
-    state1: &'static super::SharedSpinState,
+pub async fn imu_dual_spin_estimator_impl<I2C>(
+    state0: &'static super::super::SharedSpinState,
+    state1: &'static super::super::SharedSpinState,
     mut i2c: I2C,
     imu_offset_degrees: f32,
 ) -> !
@@ -294,9 +267,9 @@ where
     loop {
         Timer::after(EmbassyDuration::from_millis(1)).await;
 
-        if super::pause_needed_for_flash() {
+        if super::super::pause_needed_for_flash() {
             info!("spin:imu paused for flash write");
-            super::spin_estimator_pause_spin();
+            super::super::spin_estimator_pause_spin();
             info!("spin:imu resumed after flash write");
             continue;
         }
@@ -357,7 +330,7 @@ where
                     if up_norm >= GRAVITY_PROJECTION_MIN_NORM {
                         // Orthonormal basis for the spin plane in world frame:
                         //   up_in_spin_frame  — direction of world-up within the plane
-                        //   e2    — 90° ahead in the direction of rotation
+                        //   e2    — 90 degrees ahead in the direction of rotation
                         let up_in_spin_frame = up_raw / up_norm;
                         let e2 = spin_world.cross(&up_in_spin_frame);
 
@@ -393,13 +366,13 @@ where
                     (last_angle + STRIP1_PHASE_OFFSET_FROM_SENSOR + imu_offset).constrain_circle();
 
                 state0.lock(|s| {
-                    *s.borrow_mut() = super::SpinState {
+                    *s.borrow_mut() = super::super::SpinState {
                         position: strip0_angle,
                         rate,
                     };
                 });
                 state1.lock(|s| {
-                    *s.borrow_mut() = super::SpinState {
+                    *s.borrow_mut() = super::super::SpinState {
                         position: strip1_angle,
                         rate,
                     };
@@ -413,15 +386,4 @@ where
             }
         }
     }
-}
-
-#[cfg(feature = "imu-spin")]
-#[embassy_executor::task]
-pub async fn imu_dual_spin_estimator_task(
-    state0: &'static super::SharedSpinState,
-    state1: &'static super::SharedSpinState,
-    i2c: SharedI2cDevice,
-    imu_offset_degrees: f32,
-) -> ! {
-    imu_dual_spin_estimator_impl(state0, state1, i2c, imu_offset_degrees).await
 }

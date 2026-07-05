@@ -29,7 +29,7 @@ flash-16mb = []
 builtin-image = ["dep:image"]
 mock-spin = []
 adc = []
-imu-spin = ["dep:fusion-ahrs", "dep:nalgebra", "adafruit-9of"]
+imu-spin = ["dep:fusion-ahrs", "dep:nalgebra"]
 board-rev-resistor = []
 hall-effect-1 = []
 hall-effect-2 = []
@@ -39,19 +39,25 @@ status-led = []
 i2c-1 = []
 rtc-over-i2c = ["i2c-1"]
 oled-over-i2c = ["i2c-1"]
-bmi260 = ["i2c-1"]
-adafruit-9of = ["l3gd20", "lsm303"]
-l3gd20 = ["i2c-1"]
-lsm303 = ["i2c-1"]
+bmi260 = ["i2c-1", "dep:bmi2"]
+adafruit-9dof = ["i2c-1"]
 
 # Grouping for test boards
 board-waveshare = ["espnow", "waveshare-matrix", "flash-4mb"]
-board-test-rig = ["espnow", "sk9822-strip", "imu-spin", "flash-16mb"]
+board-test-rig = [
+    "espnow",
+    "sk9822-strip",
+    "imu-spin",
+    "adafruit-9dof",
+    "flash-16mb",
+]
 board-v1 = [
     "espnow",
     "flash-8mb",
     "sk9822-strip",
-    "mock-spin",
+    # "mock-spin",
+    "imu-spin",
+    "bmi260",
     "pushbutton-1",
     "pushbutton-2",
     "status-led",
@@ -123,6 +129,10 @@ serde = { version = "1", default-features = false, features = ["derive"] }
 fusion-ahrs = { version = "0.6.0", optional = true }
 nalgebra = { version = "0.34", default-features = false, features = [
     "libm",
+], optional = true }
+bmi2 = { git = "https://github.com/qrasmont/bmi2", default-features = false, features = [
+    "async",
+    "defmt",
 ], optional = true }
 
 [profile.dev.package.esp-storage]
