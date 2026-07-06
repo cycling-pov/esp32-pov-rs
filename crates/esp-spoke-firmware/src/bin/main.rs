@@ -61,7 +61,10 @@ use esp_spoke_firmware::storage::config::SensorConfig;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use pov_proto::transfer::DownloadKind;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
-use pov_proto::transfer::SpokeCommand;
+use pov_proto::transfer::{
+    Packet, ResponseFrame, SpokeCommand, SpokeResponse, StorageStats as WireStorageStats,
+    encode_packet,
+};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -333,9 +336,9 @@ async fn main(spawner: Spawner) -> ! {
 
             match select(networking::receive_command(), networking::receive_chunk()).await {
                 Either::First(Some(command)) => {
-                    let transfer_id = command.transfer_id;
-                    let command_kind = command.command;
-                    match command.command {
+                    let transfer_id = command.frame.transfer_id;
+                    let command_kind = command.frame.command;
+                    match command.frame.command {
                         SpokeCommand::SetSensorOffsets {
                             hall_offset_0_degrees,
                             hall_offset_1_degrees,
@@ -360,8 +363,73 @@ async fn main(spawner: Spawner) -> ! {
                                 );
                             }
                         }
+                        SpokeCommand::RequestStorageStats => {
+                            let Some(source_peer) = command.source_peer else {
+                                warn!(
+                                    "main:RequestStorageStats missing source peer transfer_id={}",
+                                    transfer_id
+                                );
+                                continue;
+                            };
+
+                            let stats = match storage::get_storage_stats().await {
+                                Ok(stats) => stats,
+                                Err(()) => {
+                                    warn!(
+                                        "main:failed to get storage stats transfer_id={}",
+                                        transfer_id
+                                    );
+                                    continue;
+                                }
+                            };
+
+                            let mut out = [0u8; 256];
+                            let encoded = match encode_packet(
+                                Packet::Response(ResponseFrame {
+                                    transfer_id,
+                                    response: SpokeResponse::StorageStats(WireStorageStats {
+                                        total_bytes: stats.total_bytes,
+                                        used_bytes: stats.used_bytes,
+                                        free_bytes: stats.free_bytes,
+                                        image_count: stats.image_count as u32,
+                                        active_image_id: stats.active_image_id.map(|v| v as u32),
+                                    }),
+                                }),
+                                &mut out,
+                            ) {
+                                Ok(n) => n,
+                                Err(_) => {
+                                    warn!(
+                                        "main:failed to encode storage stats response transfer_id={}",
+                                        transfer_id
+                                    );
+                                    continue;
+                                }
+                            };
+
+                            if networking::send_espnow_packet(source_peer, &out[..encoded])
+                                .await
+                                .is_err()
+                            {
+                                warn!(
+                                    "main:failed to send storage stats response transfer_id={}",
+                                    transfer_id
+                                );
+                            } else {
+                                info!(
+                                    "main:sent storage stats response transfer_id={} to {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                                    transfer_id,
+                                    source_peer[0],
+                                    source_peer[1],
+                                    source_peer[2],
+                                    source_peer[3],
+                                    source_peer[4],
+                                    source_peer[5]
+                                );
+                            }
+                        }
                         _ => {
-                            if !led::try_send_led_command(LedCommand::Frame(command)) {
+                            if !led::try_send_led_command(LedCommand::Frame(command.frame)) {
                                 warn!(
                                     "main:dropped frame transfer_id={} command={:?}",
                                     transfer_id, command_kind

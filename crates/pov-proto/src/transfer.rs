@@ -37,11 +37,28 @@ pub enum SpokeCommand {
     DisplayOff,
     NextImage,
     RandomizeDisplay,
+    RequestStorageStats,
     SetSensorOffsets {
         hall_offset_0_degrees: f32,
         hall_offset_1_degrees: f32,
         imu_offset_degrees: f32,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct StorageStats {
+    pub total_bytes: u32,
+    pub used_bytes: u32,
+    pub free_bytes: u32,
+    pub image_count: u32,
+    pub active_image_id: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum SpokeResponse {
+    StorageStats(StorageStats),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -71,11 +88,19 @@ pub struct CommandFrame {
     pub command: SpokeCommand,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct ResponseFrame {
+    pub transfer_id: usize,
+    pub response: SpokeResponse,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Packet<'a> {
     Download(DownloadChunk<'a>),
     Command(CommandFrame),
+    Response(ResponseFrame),
 }
 
 // ---------------------------------------------------------------------------
@@ -97,6 +122,10 @@ enum WirePacket<'a> {
     Command {
         transfer_id: usize,
         command: SpokeCommand,
+    },
+    Response {
+        transfer_id: usize,
+        response: SpokeResponse,
     },
 }
 
@@ -149,6 +178,13 @@ pub fn parse_packet<'a>(raw: &'a [u8]) -> Result<Packet<'a>, ParseError> {
             transfer_id,
             command,
         })),
+        WirePacket::Response {
+            transfer_id,
+            response,
+        } => Ok(Packet::Response(ResponseFrame {
+            transfer_id,
+            response,
+        })),
     }
 }
 
@@ -169,6 +205,10 @@ pub fn encode_packet(packet: Packet<'_>, out: &mut [u8]) -> Result<usize, Encode
         Packet::Command(frame) => WirePacket::Command {
             transfer_id: frame.transfer_id,
             command: frame.command,
+        },
+        Packet::Response(frame) => WirePacket::Response {
+            transfer_id: frame.transfer_id,
+            response: frame.response,
         },
     };
 

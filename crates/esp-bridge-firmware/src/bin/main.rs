@@ -14,7 +14,7 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channe
 use embassy_time::{Duration, Timer};
 use esp_bridge_firmware::{
     ble_adv::{BleController, ble_adv_task},
-    esp_now_broadcaster::esp_now_task,
+    esp_now_broadcaster::{InboundMsg, esp_now_task},
     usb_serial::{ChunkMsg, usb_serial_task},
 };
 use esp_hal::{clock::CpuClock, timer::timg::TimerGroup, usb_serial_jtag::UsbSerialJtag};
@@ -31,6 +31,8 @@ const CHAN_CAP: usize = 4;
 
 static BLE_CHANNEL: Channel<CriticalSectionRawMutex, ChunkMsg, CHAN_CAP> = Channel::new();
 static ESP_NOW_CHANNEL: Channel<CriticalSectionRawMutex, ChunkMsg, CHAN_CAP> = Channel::new();
+static ESP_NOW_INBOUND_CHANNEL: Channel<CriticalSectionRawMutex, InboundMsg, CHAN_CAP> =
+    Channel::new();
 
 #[allow(
     clippy::large_stack_frames,
@@ -99,11 +101,26 @@ async fn main(spawner: Spawner) -> ! {
     let usb = UsbSerialJtag::new(peripherals.USB_DEVICE).into_async();
 
     // ---------- Spawn tasks -------------------------------------------------------
-    spawner.spawn(usb_serial_task(usb, BLE_CHANNEL.sender(), ESP_NOW_CHANNEL.sender()).unwrap());
+    spawner.spawn(
+        usb_serial_task(
+            usb,
+            BLE_CHANNEL.sender(),
+            ESP_NOW_CHANNEL.sender(),
+            ESP_NOW_INBOUND_CHANNEL.receiver(),
+        )
+        .unwrap(),
+    );
 
     spawner.spawn(ble_adv_task(ble_ctrl, BLE_CHANNEL.receiver()).unwrap());
 
-    spawner.spawn(esp_now_task(esp_now, ESP_NOW_CHANNEL.receiver()).unwrap());
+    spawner.spawn(
+        esp_now_task(
+            esp_now,
+            ESP_NOW_CHANNEL.receiver(),
+            ESP_NOW_INBOUND_CHANNEL.sender(),
+        )
+        .unwrap(),
+    );
 
     // Keep `wifi_ctrl` alive — dropping it would call `esp_wifi_stop()`.
     let _wifi_ctrl: WifiController<'static> = wifi_ctrl;

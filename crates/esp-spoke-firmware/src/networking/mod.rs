@@ -18,18 +18,50 @@ pub use download::{
 #[cfg(feature = "espnow")]
 use static_cell::StaticCell;
 
+#[derive(Clone, Copy)]
+pub struct ReceivedCommand {
+    pub frame: CommandFrame,
+    pub source_peer: Option<[u8; 6]>,
+}
+
+#[cfg(feature = "espnow")]
+pub struct OutboundEspNowPacket {
+    pub peer: [u8; 6],
+    pub len: usize,
+    pub payload: [u8; ESPNOW_MAX_CHUNK_PAYLOAD],
+}
+
 /// Channel that carries individual image chunks to the main orchestration loop.
 /// Capacity 64 is large enough to buffer a full BLE transfer (≤46 chunks at
 /// 224 B each) during the initial flash-erase of the target slot.
 static CHUNK_CHANNEL: Channel<CriticalSectionRawMutex, NetworkChunk, 64> = Channel::new();
-static COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, CommandFrame, 4> = Channel::new();
+static COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, ReceivedCommand, 4> = Channel::new();
+#[cfg(feature = "espnow")]
+pub(super) static ESP_NOW_TX_CHANNEL: Channel<CriticalSectionRawMutex, OutboundEspNowPacket, 4> =
+    Channel::new();
 
 pub async fn receive_chunk() -> Option<NetworkChunk> {
     CHUNK_CHANNEL.receive().await.into()
 }
 
-pub async fn receive_command() -> Option<CommandFrame> {
+pub async fn receive_command() -> Option<ReceivedCommand> {
     COMMAND_CHANNEL.receiver().receive().await.into()
+}
+
+#[cfg(feature = "espnow")]
+pub async fn send_espnow_packet(peer: [u8; 6], payload: &[u8]) -> Result<(), ()> {
+    if payload.len() > ESPNOW_MAX_CHUNK_PAYLOAD {
+        return Err(());
+    }
+
+    let mut packet = OutboundEspNowPacket {
+        peer,
+        len: payload.len(),
+        payload: [0u8; ESPNOW_MAX_CHUNK_PAYLOAD],
+    };
+    packet.payload[..payload.len()].copy_from_slice(payload);
+    ESP_NOW_TX_CHANNEL.sender().send(packet).await;
+    Ok(())
 }
 
 #[cfg(feature = "espnow")]
@@ -79,8 +111,8 @@ pub fn ingest_ble_payload(payload: &[u8]) -> Result<(), IngestError> {
 }
 
 #[cfg(feature = "espnow")]
-pub fn ingest_espnow_payload(payload: &[u8]) -> Result<(), IngestError> {
-    route_ingested_packet(download::ingest_espnow_payload(payload)?)
+pub fn ingest_espnow_payload(payload: &[u8], source_peer: [u8; 6]) -> Result<(), IngestError> {
+    route_ingested_packet(download::ingest_espnow_payload(payload, source_peer)?)
 }
 
 fn route_ingested_packet(packet: Option<download::IngestedPacket>) -> Result<(), IngestError> {
@@ -103,16 +135,17 @@ fn route_ingested_packet(packet: Option<download::IngestedPacket>) -> Result<(),
                     );
                 }
             }
-            download::IngestedPacket::Command(frame) => {
+            download::IngestedPacket::Command { frame, source_peer } => {
                 let transfer_id = frame.transfer_id;
-                let command = frame.command;
+                let command_kind = frame.command;
+                let received_command = ReceivedCommand { frame, source_peer };
 
-                if COMMAND_CHANNEL.sender().try_send(frame).is_err() {
+                if COMMAND_CHANNEL.sender().try_send(received_command).is_err() {
                     warn!("dropping command packet: channel full");
                 } else {
                     info!(
                         "queued command packet: transfer_id={=usize} command={:?}",
-                        transfer_id, command
+                        transfer_id, command_kind
                     );
                 }
             }

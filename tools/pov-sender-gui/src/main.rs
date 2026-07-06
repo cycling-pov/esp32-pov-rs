@@ -6,8 +6,8 @@ use iced::{
 };
 use pov_sender_core::{
     DownloadKind, DownloadRequest, EspNowDelivery, PolarEncodeOptions, SensorOffsets,
-    SerialLinkConfig, SpokeCommand, Transport, list_esp_now_peers, list_serial_ports, send_command,
-    send_download, send_image, send_sensor_offsets,
+    SerialLinkConfig, SpokeCommand, Transport, list_esp_now_peers, list_serial_ports,
+    request_storage_stats, send_command, send_download, send_image, send_sensor_offsets,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -98,14 +98,16 @@ enum CommandTab {
     SendDownload,
     SetOffsets,
     InputLessCommands,
+    StorageStats,
 }
 
 impl CommandTab {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
         Self::SendImage,
         Self::SendDownload,
         Self::SetOffsets,
         Self::InputLessCommands,
+        Self::StorageStats,
     ];
 
     fn label(self) -> &'static str {
@@ -114,6 +116,7 @@ impl CommandTab {
             Self::SendDownload => "Send Download",
             Self::SetOffsets => "Set Offsets",
             Self::InputLessCommands => "Input-Less Commands",
+            Self::StorageStats => "Storage Stats",
         }
     }
 }
@@ -167,10 +170,12 @@ enum Message {
     DisplayOff,
     NextImage,
     RandomizeDisplay,
+    RequestStorageStats,
     HallOffset0Changed(String),
     HallOffset1Changed(String),
     ImuOffsetChanged(String),
     SetSensorOffsets,
+    StorageStatsDone(Result<String, String>),
     ActionDone(Result<String, String>),
 }
 
@@ -194,6 +199,7 @@ struct SenderGui {
     hall_offset_0_degrees: String,
     hall_offset_1_degrees: String,
     imu_offset_degrees: String,
+    storage_stats_text: String,
     status: String,
     busy: bool,
 }
@@ -220,6 +226,7 @@ impl Default for SenderGui {
             hall_offset_0_degrees: String::new(),
             hall_offset_1_degrees: String::new(),
             imu_offset_degrees: String::new(),
+            storage_stats_text: "No storage stats requested yet.".to_string(),
             status: "Ready".to_string(),
             busy: false,
         }
@@ -380,6 +387,7 @@ impl Application for SenderGui {
             Message::DisplayOff => self.run_command(SpokeCommand::DisplayOff),
             Message::NextImage => self.run_command(SpokeCommand::NextImage),
             Message::RandomizeDisplay => self.run_command(SpokeCommand::RandomizeDisplay),
+            Message::RequestStorageStats => self.run_request_storage_stats(),
             Message::HallOffset0Changed(value) => {
                 self.hall_offset_0_degrees = value;
                 Command::none()
@@ -393,6 +401,17 @@ impl Application for SenderGui {
                 Command::none()
             }
             Message::SetSensorOffsets => self.run_set_sensor_offsets(),
+            Message::StorageStatsDone(result) => {
+                self.busy = false;
+                self.status = match result {
+                    Ok(stats_text) => {
+                        self.storage_stats_text = stats_text;
+                        "Storage stats received".to_string()
+                    }
+                    Err(err) => err,
+                };
+                Command::none()
+            }
             Message::ActionDone(result) => {
                 self.busy = false;
                 self.status = match result {
@@ -506,6 +525,7 @@ impl SenderGui {
             CommandTab::SendDownload => self.send_download_tab(),
             CommandTab::SetOffsets => self.set_offsets_tab(),
             CommandTab::InputLessCommands => self.input_less_commands_tab(),
+            CommandTab::StorageStats => self.storage_stats_tab(),
         }
     }
 
@@ -580,6 +600,19 @@ impl SenderGui {
             button("Next Image").on_press_maybe((!self.busy).then_some(Message::NextImage)),
             button("Randomize Display")
                 .on_press_maybe((!self.busy).then_some(Message::RandomizeDisplay)),
+        ]
+        .spacing(10);
+
+        container(content).into()
+    }
+
+    fn storage_stats_tab(&self) -> Element<'_, Message> {
+        let note = "Requires espnow transport + stateful mode + selected peer.";
+        let content = column![
+            button("Request Storage Stats")
+                .on_press_maybe((!self.busy).then_some(Message::RequestStorageStats)),
+            text(note),
+            text(self.storage_stats_text.clone()),
         ]
         .spacing(10);
 
@@ -805,6 +838,52 @@ impl SenderGui {
                 ))
             },
             Message::ActionDone,
+        )
+    }
+
+    fn run_request_storage_stats(&mut self) -> Command<Message> {
+        if self.transport != TransportUi::Espnow {
+            self.status = "Storage stats requires espnow transport".to_string();
+            return Command::none();
+        }
+
+        if self.esp_now_mode != EspNowModeUi::Stateful {
+            self.status = "Storage stats requires stateful espnow mode".to_string();
+            return Command::none();
+        }
+
+        if self.selected_peer.is_none() {
+            self.status = "Select a target peer first".to_string();
+            return Command::none();
+        }
+
+        let config = match self.parse_link_config() {
+            Ok(config) => config,
+            Err(err) => {
+                self.status = err;
+                return Command::none();
+            }
+        };
+
+        self.busy = true;
+        self.status = "Requesting storage stats...".to_string();
+
+        Command::perform(
+            async move {
+                let stats = request_storage_stats(&config).map_err(|e| e.to_string())?;
+                Ok(format!(
+                    "total_bytes={}\nused_bytes={}\nfree_bytes={}\nimage_count={}\nactive_image_id={}",
+                    stats.total_bytes,
+                    stats.used_bytes,
+                    stats.free_bytes,
+                    stats.image_count,
+                    stats
+                        .active_image_id
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "none".to_string())
+                ))
+            },
+            Message::StorageStatsDone,
         )
     }
 }

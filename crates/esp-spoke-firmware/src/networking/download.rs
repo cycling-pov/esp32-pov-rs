@@ -39,7 +39,10 @@ pub struct NetworkChunk {
 
 pub enum IngestedPacket {
     Chunk(NetworkChunk),
-    Command(CommandFrame),
+    Command {
+        frame: CommandFrame,
+        source_peer: Option<[u8; 6]>,
+    },
 }
 
 #[cfg(feature = "ble")]
@@ -56,17 +59,21 @@ static ESPNOW_ASSEMBLY: Mutex<RefCell<EspNowAssembly>> =
 
 #[cfg(feature = "ble")]
 pub fn ingest_ble_payload(payload: &[u8]) -> Result<Option<IngestedPacket>, IngestError> {
-    ingest_packet(payload, &BLE_ASSEMBLY)
+    ingest_packet(payload, None, &BLE_ASSEMBLY)
 }
 
 #[cfg(feature = "espnow")]
-pub fn ingest_espnow_payload(payload: &[u8]) -> Result<Option<IngestedPacket>, IngestError> {
-    ingest_packet(payload, &ESPNOW_ASSEMBLY)
+pub fn ingest_espnow_payload(
+    payload: &[u8],
+    source_peer: [u8; 6],
+) -> Result<Option<IngestedPacket>, IngestError> {
+    ingest_packet(payload, Some(source_peer), &ESPNOW_ASSEMBLY)
 }
 
 #[cfg(any(feature = "ble", feature = "espnow"))]
 fn ingest_packet<const MCP: usize, const MC: usize>(
     payload: &[u8],
+    source_peer: Option<[u8; 6]>,
     assembly: &Mutex<RefCell<TransferAssembly<MCP, MAX_TRANSFER_BYTES, MC>>>,
 ) -> Result<Option<IngestedPacket>, IngestError> {
     let packet = match parse_packet(payload) {
@@ -79,7 +86,10 @@ fn ingest_packet<const MCP: usize, const MC: usize>(
 
     let chunk = match packet {
         Packet::Download(chunk) => chunk,
-        Packet::Command(frame) => return Ok(Some(IngestedPacket::Command(frame))),
+        Packet::Command(frame) => {
+            return Ok(Some(IngestedPacket::Command { frame, source_peer }));
+        }
+        Packet::Response(_) => return Ok(None),
     };
 
     ingest_chunk(chunk, assembly)

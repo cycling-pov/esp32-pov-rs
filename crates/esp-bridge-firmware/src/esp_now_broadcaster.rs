@@ -7,7 +7,10 @@ use core::cell::RefCell;
 
 use defmt::{debug, info, warn};
 use embassy_futures::select::{Either, select};
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Receiver};
+use embassy_sync::{
+    blocking_mutex::raw::CriticalSectionRawMutex,
+    channel::{Receiver, Sender},
+};
 use esp_radio::esp_now::{BROADCAST_ADDRESS, EspNow, EspNowWifiInterface, PeerInfo};
 use pov_proto::bridge::{ESPNOW_DISCOVERY_BEACON, EspNowPeerList, EspNowTarget, MAX_ESP_NOW_PEERS};
 
@@ -56,6 +59,13 @@ impl PeerTable {
 static PEER_TABLE: critical_section::Mutex<RefCell<PeerTable>> =
     critical_section::Mutex::new(RefCell::new(PeerTable::new()));
 
+#[derive(Clone, Copy)]
+pub struct InboundMsg {
+    pub src: [u8; 6],
+    pub len: usize,
+    pub buf: [u8; 1470],
+}
+
 pub fn snapshot_peers() -> EspNowPeerList {
     critical_section::with(|cs| PEER_TABLE.borrow_ref(cs).snapshot())
 }
@@ -70,6 +80,7 @@ fn record_peer(peer: [u8; 6]) {
 pub async fn esp_now_task(
     mut esp_now: EspNow<'static>,
     receiver: Receiver<'static, CriticalSectionRawMutex, ChunkMsg, 4>,
+    inbound_tx: Sender<'static, CriticalSectionRawMutex, InboundMsg, 4>,
 ) {
     info!("ESP-NOW task started");
 
@@ -114,14 +125,24 @@ pub async fn esp_now_task(
             }
             Either::Second(received) => {
                 let src = received.info.src_address;
+                let payload = received.data();
                 record_peer(src);
 
-                if received.data() == ESPNOW_DISCOVERY_BEACON {
+                if payload == ESPNOW_DISCOVERY_BEACON {
                     debug!(
                         "ESP-NOW discovery beacon from {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
                         src[0], src[1], src[2], src[3], src[4], src[5]
                     );
+                    continue;
                 }
+
+                let mut msg = InboundMsg {
+                    src,
+                    len: payload.len().min(1470),
+                    buf: [0u8; 1470],
+                };
+                msg.buf[..msg.len].copy_from_slice(&payload[..msg.len]);
+                inbound_tx.send(msg).await;
             }
         }
     }

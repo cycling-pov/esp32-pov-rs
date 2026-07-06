@@ -288,6 +288,12 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
                             frame.transfer_id
                         );
                     }
+                    SpokeCommand::RequestStorageStats => {
+                        info!(
+                            "ignoring RequestStorageStats in LED task for transfer {}",
+                            frame.transfer_id
+                        );
+                    }
                 }
             }
             LedCommand::LoadSlot(slot) => {

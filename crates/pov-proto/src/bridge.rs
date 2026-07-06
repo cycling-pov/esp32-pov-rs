@@ -53,8 +53,13 @@ impl EspNowPeerList {
 /// Bridge responses delivered back to host over USB serial.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum BridgeControlResponse {
+pub enum BridgeControlResponse<'a> {
     EspNowPeers(EspNowPeerList),
+    EspNowInboundPacket {
+        src: [u8; 6],
+        #[serde(borrow)]
+        payload: &'a [u8],
+    },
 }
 
 /// Framing type sent from workstation CLI to wireless bridge over USB Serial JTAG.

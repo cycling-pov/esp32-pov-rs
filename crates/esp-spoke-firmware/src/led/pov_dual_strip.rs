@@ -424,6 +424,9 @@ pub async fn pov_command_task(bitmap: &'static SharedBitmapMutex) -> ! {
                     SpokeCommand::SetSensorOffsets { .. } => {
                         info!("pov:cmd ignoring SetSensorOffsets in render task");
                     }
+                    SpokeCommand::RequestStorageStats => {
+                        info!("pov:cmd ignoring RequestStorageStats in render task");
+                    }
                 }
             }
 

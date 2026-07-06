@@ -40,10 +40,12 @@ pub async fn usb_serial_task(mut usb: UsbSerialJtag<'static, esp_hal::Async>) {
             if head > 0 {
                 // postcard::from_bytes_cobs mutates the slice in-place.
                 match postcard::from_bytes_cobs::<BridgeFrame<'_>>(&mut buf[..head]) {
-                    Ok(frame) => match frame.transport {
+                    Ok(BridgeFrame::Data {
+                        transport, payload, ..
+                    }) => match transport {
                         #[cfg(feature = "espnow")]
                         TransportSelector::EspNow => {
-                            if super::ingest_espnow_payload(frame.payload).is_err() {
+                            if super::ingest_espnow_payload(payload, [0u8; 6]).is_err() {
                                 warn!("usb_serial: ingest_espnow_payload failed");
                             }
                         }
@@ -52,6 +54,7 @@ pub async fn usb_serial_task(mut usb: UsbSerialJtag<'static, esp_hal::Async>) {
                             warn!("usb_serial: dropping frame for unsupported transport");
                         }
                     },
+                    Ok(BridgeFrame::ControlRequest(_)) => {}
                     Err(_) => {
                         // Malformed frame — discard silently.
                         warn!("usb_serial: malformed COBS frame, discarding");

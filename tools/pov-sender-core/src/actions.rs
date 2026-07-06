@@ -1,10 +1,4 @@
-use std::{
-    fs,
-    io::{Read, Write},
-    path::Path,
-    thread,
-    time::Duration,
-};
+use std::{fs, io::Write, path::Path, thread, time::Duration};
 
 use anyhow::Context;
 use image::AnimationDecoder;
@@ -13,7 +7,10 @@ use pov_proto::{
         BridgeControlRequest, BridgeControlResponse, BridgeFrame, EspNowTarget, TransportSelector,
     },
     image::{LedCount, RadialCount, encode_polar_rgb888_to_wire, encode_rgb888_to_wire},
-    transfer::{ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand, encode_packet},
+    transfer::{
+        ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand, SpokeResponse, encode_packet,
+        parse_packet,
+    },
     video,
 };
 use rand::seq::SliceRandom;
@@ -102,37 +99,23 @@ pub fn list_esp_now_peers(port_name: &str, baud: u32) -> anyhow::Result<Vec<EspN
     port.write_all(&cobs_bytes)
         .context("Failed to write peer-list request to serial port")?;
 
-    let mut response_buf = [0u8; RX_BUF];
-    let mut head = 0usize;
     loop {
-        let mut byte = [0u8; 1];
-        port.read_exact(&mut byte)
-            .context("Timed out waiting for bridge peer-list response")?;
-
-        if byte[0] == 0 {
-            if head == 0 {
-                continue;
+        let mut frame = read_bridge_control_response(&mut *port, "list peers")?;
+        let response = postcard::from_bytes_cobs::<BridgeControlResponse<'_>>(&mut frame)
+            .context("Failed to decode bridge peer-list response")?;
+        match response {
+            BridgeControlResponse::EspNowPeers(list) => {
+                let count = usize::from(list.count).min(list.peers.len());
+                let peers = list.peers[..count]
+                    .iter()
+                    .copied()
+                    .map(|mac| EspNowPeer { mac })
+                    .collect();
+                return Ok(peers);
             }
-
-            let response =
-                postcard::from_bytes_cobs::<BridgeControlResponse>(&mut response_buf[..head])
-                    .context("Failed to decode bridge peer-list response")?;
-            match response {
-                BridgeControlResponse::EspNowPeers(list) => {
-                    let count = usize::from(list.count).min(list.peers.len());
-                    let peers = list.peers[..count]
-                        .iter()
-                        .copied()
-                        .map(|mac| EspNowPeer { mac })
-                        .collect();
-                    return Ok(peers);
-                }
+            BridgeControlResponse::EspNowInboundPacket { .. } => {
+                // Ignore async inbound packets while waiting for peer-list reply.
             }
-        } else if head < response_buf.len() {
-            response_buf[head] = byte[0];
-            head += 1;
-        } else {
-            anyhow::bail!("Bridge peer-list response exceeded buffer size");
         }
     }
 }
@@ -160,6 +143,44 @@ pub struct SensorOffsets {
     pub hall_offset_0_degrees: f32,
     pub hall_offset_1_degrees: f32,
     pub imu_offset_degrees: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DeviceStorageStats {
+    pub total_bytes: u32,
+    pub used_bytes: u32,
+    pub free_bytes: u32,
+    pub image_count: u32,
+    pub active_image_id: Option<u32>,
+}
+
+fn read_bridge_control_response(
+    port: &mut dyn SerialPort,
+    context: &str,
+) -> anyhow::Result<Vec<u8>> {
+    let mut response_buf = [0u8; RX_BUF];
+    let mut head = 0usize;
+
+    loop {
+        let mut byte = [0u8; 1];
+        port.read_exact(&mut byte)
+            .with_context(|| format!("Timed out waiting for bridge response ({context})"))?;
+
+        if byte[0] == 0 {
+            if head == 0 {
+                continue;
+            }
+
+            return Ok(response_buf[..head].to_vec());
+        }
+
+        if head < response_buf.len() {
+            response_buf[head] = byte[0];
+            head += 1;
+        } else {
+            anyhow::bail!("Bridge response exceeded buffer size ({context})");
+        }
+    }
 }
 
 pub fn send_image(
@@ -238,6 +259,70 @@ pub fn send_sensor_offsets(
             imu_offset_degrees: offsets.imu_offset_degrees,
         },
     )
+}
+
+pub fn request_storage_stats(config: &SerialLinkConfig) -> anyhow::Result<DeviceStorageStats> {
+    if config.transport != Transport::Espnow {
+        anyhow::bail!("Storage stats request requires espnow transport");
+    }
+
+    let target_peer = match config.esp_now_delivery {
+        EspNowDelivery::Peer(peer) => peer,
+        EspNowDelivery::Broadcast => {
+            anyhow::bail!("Storage stats request requires stateful peer target")
+        }
+    };
+
+    let mut chunk_buf = [0u8; SERIAL_TX_BUF_BYTES];
+    let transfer_id = 0x53544154usize; // 'STAT'
+    let n = encode_packet(
+        Packet::Command(CommandFrame {
+            transfer_id,
+            command: SpokeCommand::RequestStorageStats,
+        }),
+        &mut chunk_buf,
+    )
+    .map_err(|e| anyhow::anyhow!("Failed to encode stats command: {:?}", e))?;
+
+    let mut port = open_serial_port(&config.port, config.baud)?;
+    send_bridge_frame(
+        &mut *port,
+        TransportSelector::EspNow,
+        EspNowTarget::Peer(target_peer),
+        config.esp_now_retries,
+        &chunk_buf[..n],
+        config.inter_packet_delay_ms,
+    )?;
+
+    loop {
+        let mut frame = read_bridge_control_response(&mut *port, "storage stats")?;
+        let response = postcard::from_bytes_cobs::<BridgeControlResponse<'_>>(&mut frame)
+            .context("Failed to decode bridge storage-stats response")?;
+        match response {
+            BridgeControlResponse::EspNowPeers(_) => {}
+            BridgeControlResponse::EspNowInboundPacket { src, payload } => {
+                if src != target_peer {
+                    continue;
+                }
+
+                let packet = parse_packet(payload)
+                    .map_err(|e| anyhow::anyhow!("Failed to parse inbound packet: {:?}", e))?;
+                match packet {
+                    Packet::Response(frame) if frame.transfer_id == transfer_id => {
+                        let SpokeResponse::StorageStats(stats) = frame.response;
+                        return Ok(DeviceStorageStats {
+                            total_bytes: stats.total_bytes,
+                            used_bytes: stats.used_bytes,
+                            free_bytes: stats.free_bytes,
+                            image_count: stats.image_count,
+                            active_image_id: stats.active_image_id,
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
 }
 
 fn send_packets(config: &SerialLinkConfig, packets: &[Vec<u8>]) -> anyhow::Result<SendStats> {

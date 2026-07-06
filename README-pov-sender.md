@@ -64,6 +64,24 @@ Stateful mode retries failed ESP-NOW transmissions at the bridge layer to
 improve reliability for commands like image/download sends and future response
 flows (for example, storage stats queries).
 
+### Storage stats command (GUI)
+
+The Commands section includes a `Storage Stats` tab.
+
+`Request Storage Stats` is only valid when all of the following are true:
+
+- transport is `espnow`
+- mode is `stateful`
+- a target peer is selected
+
+The spoke returns stats over ESP-NOW to the bridge, and the GUI displays:
+
+- total bytes
+- used bytes
+- free bytes
+- image count
+- active image id
+
 ## 4. Reliability options
 
 `--repeat` resends each generated packet multiple times in randomized order.

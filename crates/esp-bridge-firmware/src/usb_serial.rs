@@ -4,7 +4,11 @@
 //! workstation and forwards each chunk payload to the appropriate channel
 //! depending on the requested transport.
 
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Sender};
+use embassy_futures::select::{Either, select};
+use embassy_sync::{
+    blocking_mutex::raw::CriticalSectionRawMutex,
+    channel::{Receiver, Sender},
+};
 use embedded_io_async::Read;
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
 
@@ -12,7 +16,7 @@ use pov_proto::bridge::{
     BridgeControlRequest, BridgeControlResponse, BridgeFrame, EspNowTarget, TransportSelector,
 };
 
-use crate::esp_now_broadcaster::snapshot_peers;
+use crate::esp_now_broadcaster::{InboundMsg, snapshot_peers};
 
 /// Maximum on-wire COBS frame size we are willing to buffer.
 ///
@@ -34,9 +38,9 @@ pub struct ChunkMsg {
 
 async fn reply_control(
     usb: &mut UsbSerialJtag<'static, esp_hal::Async>,
-    response: BridgeControlResponse,
+    response: BridgeControlResponse<'_>,
 ) {
-    let mut out = [0u8; 320];
+    let mut out = [0u8; 1800];
     if let Ok(cobs) = postcard::to_slice_cobs(&response, &mut out) {
         let _ = usb.write(cobs);
     }
@@ -50,17 +54,29 @@ pub async fn usb_serial_task(
     mut usb: UsbSerialJtag<'static, esp_hal::Async>,
     ble_tx: Sender<'static, CriticalSectionRawMutex, ChunkMsg, 4>,
     esp_now_tx: Sender<'static, CriticalSectionRawMutex, ChunkMsg, 4>,
+    esp_now_inbound_rx: Receiver<'static, CriticalSectionRawMutex, InboundMsg, 4>,
 ) {
     let mut buf = [0u8; RX_BUF];
     let mut head = 0usize;
 
     loop {
-        // Read one byte at a time to keep the logic simple.
         let mut byte = [0u8; 1];
-        if usb.read(&mut byte).await.is_err() {
-            continue;
-        }
-        let b = byte[0];
+        let b = match select(esp_now_inbound_rx.receive(), usb.read(&mut byte)).await {
+            Either::First(inbound) => {
+                let len = inbound.len.min(inbound.buf.len());
+                reply_control(
+                    &mut usb,
+                    BridgeControlResponse::EspNowInboundPacket {
+                        src: inbound.src,
+                        payload: &inbound.buf[..len],
+                    },
+                )
+                .await;
+                continue;
+            }
+            Either::Second(Ok(n)) if n == 1 => byte[0],
+            _ => continue,
+        };
 
         if b == 0 {
             // Zero byte = COBS frame delimiter.  Decode the accumulated slice.

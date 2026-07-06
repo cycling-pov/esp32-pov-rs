@@ -2,8 +2,27 @@ use defmt::{debug, info, warn};
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either, select};
 use embassy_time::{Duration, Ticker};
-use esp_radio::esp_now::{BROADCAST_ADDRESS, EspNow};
+use esp_radio::esp_now::{BROADCAST_ADDRESS, EspNow, EspNowWifiInterface, PeerInfo};
 use pov_proto::bridge::ESPNOW_DISCOVERY_BEACON;
+
+fn ensure_peer(esp_now: &EspNow<'_>, peer: [u8; 6]) {
+    if esp_now.peer_exists(&peer) {
+        return;
+    }
+
+    if let Err(err) = esp_now.add_peer(PeerInfo {
+        interface: EspNowWifiInterface::Station,
+        peer_address: peer,
+        lmk: None,
+        channel: None,
+        encrypt: false,
+    }) {
+        warn!(
+            "ESP-NOW add_peer failed for {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}: {:?}",
+            peer[0], peer[1], peer[2], peer[3], peer[4], peer[5], err
+        );
+    }
+}
 
 pub fn start_esp_now_backend(spawner: Spawner, esp_now: EspNow<'static>) {
     spawner.spawn(esp_now_backend_task(esp_now).unwrap());
@@ -35,8 +54,18 @@ pub async fn esp_now_backend_task(mut esp_now: EspNow<'static>) {
     let mut beacon_tick = Ticker::every(Duration::from_secs(2));
 
     loop {
-        match select(beacon_tick.next(), esp_now.receive_async()).await {
-            Either::First(_) => {
+        let beacon_or_rx = select(beacon_tick.next(), esp_now.receive_async());
+        match select(super::ESP_NOW_TX_CHANNEL.receiver().receive(), beacon_or_rx).await {
+            Either::First(outbound) => {
+                ensure_peer(&esp_now, outbound.peer);
+                if let Err(err) = esp_now
+                    .send_async(&outbound.peer, &outbound.payload[..outbound.len])
+                    .await
+                {
+                    warn!("ESP-NOW outbound send failed: {:?}", err);
+                }
+            }
+            Either::Second(Either::First(_)) => {
                 if let Err(err) = esp_now
                     .send_async(&BROADCAST_ADDRESS, ESPNOW_DISCOVERY_BEACON)
                     .await
@@ -44,9 +73,10 @@ pub async fn esp_now_backend_task(mut esp_now: EspNow<'static>) {
                     warn!("ESP-NOW discovery beacon send failed: {:?}", err);
                 }
             }
-            Either::Second(received) => {
+            Either::Second(Either::Second(received)) => {
                 let payload = received.data();
                 let src = received.info.src_address;
+                ensure_peer(&esp_now, src);
 
                 debug!(
                     "ESP-NOW packet received: src={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} bytes={=usize}",
@@ -72,7 +102,7 @@ pub async fn esp_now_backend_task(mut esp_now: EspNow<'static>) {
                     );
                 }
 
-                match super::ingest_espnow_payload(payload) {
+                match super::ingest_espnow_payload(payload, src) {
                     Ok(()) => {
                         debug!("ESP-NOW packet successfully ingested");
                     }
