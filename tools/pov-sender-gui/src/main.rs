@@ -8,6 +8,7 @@ use pov_sender_core::{
     DownloadKind, DownloadRequest, EspNowDelivery, PolarEncodeOptions, SensorOffsets,
     SerialLinkConfig, SpokeCommand, Transport, list_esp_now_peers, list_serial_ports,
     request_storage_stats, send_command, send_download, send_image, send_sensor_offsets,
+    send_video,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -693,16 +694,37 @@ impl SenderGui {
             None
         };
 
+        let is_gif = image_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("gif"));
+
         self.busy = true;
-        self.status = "Sending image...".to_string();
+        self.status = if is_gif {
+            "GIF detected; encoding and sending video...".to_string()
+        } else {
+            "Sending image...".to_string()
+        };
 
         Command::perform(
             async move {
-                let stats = send_image(&config, &image_path, polar).map_err(|e| e.to_string())?;
-                Ok(format!(
-                    "Image sent: {} packet(s), {} transmission(s)",
-                    stats.packet_count, stats.total_transmissions
-                ))
+                let stats = if is_gif {
+                    send_video(&config, &image_path, polar).map_err(|e| e.to_string())?
+                } else {
+                    send_image(&config, &image_path, polar).map_err(|e| e.to_string())?
+                };
+
+                if is_gif {
+                    Ok(format!(
+                        "Video sent from GIF: {} packet(s), {} transmission(s)",
+                        stats.packet_count, stats.total_transmissions
+                    ))
+                } else {
+                    Ok(format!(
+                        "Image sent: {} packet(s), {} transmission(s)",
+                        stats.packet_count, stats.total_transmissions
+                    ))
+                }
             },
             Message::ActionDone,
         )
