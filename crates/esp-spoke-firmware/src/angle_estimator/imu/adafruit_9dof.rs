@@ -131,7 +131,7 @@ fn check_sample_rate(monitor: &mut SampleRateMonitor, dt: f32) {
         if hz < 100.0 {
             defmt::warn!("spin:imu low sample rate hz={=f32}", hz);
         } else {
-            info!("spin:imu sample rate hz={=f32}", hz);
+            defmt::debug!("spin:imu sample rate hz={=f32}", hz);
         }
         monitor.sample_counter = 0;
         monitor.sample_time_accum_s = 0.0;
