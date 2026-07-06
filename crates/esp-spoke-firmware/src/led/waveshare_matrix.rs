@@ -294,6 +294,12 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
                             frame.transfer_id
                         );
                     }
+                    SpokeCommand::ClearAllImages => {
+                        info!(
+                            "ignoring ClearAllImages in LED task for transfer {}",
+                            frame.transfer_id
+                        );
+                    }
                 }
             }
             LedCommand::LoadSlot(slot) => {

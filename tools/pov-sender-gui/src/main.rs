@@ -170,6 +170,7 @@ enum Message {
     DisplayOff,
     NextImage,
     RandomizeDisplay,
+    ClearAllImages,
     RequestStorageStats,
     HallOffset0Changed(String),
     HallOffset1Changed(String),
@@ -387,6 +388,7 @@ impl Application for SenderGui {
             Message::DisplayOff => self.run_command(SpokeCommand::DisplayOff),
             Message::NextImage => self.run_command(SpokeCommand::NextImage),
             Message::RandomizeDisplay => self.run_command(SpokeCommand::RandomizeDisplay),
+            Message::ClearAllImages => self.run_command(SpokeCommand::ClearAllImages),
             Message::RequestStorageStats => self.run_request_storage_stats(),
             Message::HallOffset0Changed(value) => {
                 self.hall_offset_0_degrees = value;
@@ -600,6 +602,8 @@ impl SenderGui {
             button("Next Image").on_press_maybe((!self.busy).then_some(Message::NextImage)),
             button("Randomize Display")
                 .on_press_maybe((!self.busy).then_some(Message::RandomizeDisplay)),
+            button("Clear All Images")
+                .on_press_maybe((!self.busy).then_some(Message::ClearAllImages)),
         ]
         .spacing(10);
 

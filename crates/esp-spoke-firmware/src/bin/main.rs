@@ -339,6 +339,54 @@ async fn main(spawner: Spawner) -> ! {
                     let transfer_id = command.frame.transfer_id;
                     let command_kind = command.frame.command;
                     match command.frame.command {
+                        SpokeCommand::ClearAllImages => {
+                            if let Some(old) = active.take() {
+                                info!(
+                                    "main:clear-all aborts active transfer {} in slot {}",
+                                    old.transfer_id, old.slot
+                                );
+                                storage::abort_slot(old.slot, old.chunk_count).await.ok();
+                            }
+
+                            if !render_pause_held {
+                                // Keep the same pause contract as transfer writes: once
+                                // requested, always resume afterward even on timeout.
+                                render_pause_held = true;
+                                if !led::pause_render_for_flash(Duration::from_millis(500)).await {
+                                    warn!(
+                                        "main:render pause ack timeout before clear-all transfer_id={}",
+                                        transfer_id
+                                    );
+                                }
+                            }
+
+                            if storage::clear_all_images().await.is_err() {
+                                warn!(
+                                    "main:failed to clear all images transfer_id={}",
+                                    transfer_id
+                                );
+                            } else {
+                                info!("main:cleared all images transfer_id={}", transfer_id);
+                            }
+
+                            if render_pause_held {
+                                led::resume_render_after_flash();
+                                render_pause_held = false;
+                            }
+
+                            // Force display off after clearing storage.
+                            if !led::try_send_led_command(LedCommand::Frame(
+                                pov_proto::transfer::CommandFrame {
+                                    transfer_id,
+                                    command: SpokeCommand::DisplayOff,
+                                },
+                            )) {
+                                warn!(
+                                    "main:failed to enqueue DisplayOff after clear transfer_id={}",
+                                    transfer_id
+                                );
+                            }
+                        }
                         SpokeCommand::SetSensorOffsets {
                             hall_offset_0_degrees,
                             hall_offset_1_degrees,

@@ -37,6 +37,7 @@ pub enum SpokeCommand {
     DisplayOff,
     NextImage,
     RandomizeDisplay,
+    ClearAllImages,
     RequestStorageStats,
     SetSensorOffsets {
         hall_offset_0_degrees: f32,

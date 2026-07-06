@@ -56,6 +56,7 @@ enum StorageRequest {
     ReadSlotData(usize),
     ListImageIds,
     GetStorageStats,
+    ClearAllImages,
     BeginSlotWrite {
         expected_bytes: u32,
     },
@@ -87,6 +88,7 @@ enum StorageResponse {
     ReadSlotData(Result<Vec<u8>, ()>),
     ListImageIds(Vec<usize>),
     StorageStats(StorageStats),
+    ClearAllImages(Result<(), ()>),
     BeginSlotWrite(Result<usize, ()>),
     WriteSlotChunk(Result<(), ()>),
     CommitSlot(Result<(), ()>),
@@ -188,6 +190,16 @@ pub async fn get_storage_stats() -> Result<StorageStats, ()> {
         StorageResponse::StorageStats(stats) => Ok(stats),
         _ => {
             warn!("storage:rpc get_storage_stats unexpected response");
+            Err(())
+        }
+    }
+}
+
+pub async fn clear_all_images() -> Result<(), ()> {
+    match rpc(StorageRequest::ClearAllImages).await {
+        StorageResponse::ClearAllImages(result) => result,
+        _ => {
+            warn!("storage:rpc clear_all_images unexpected response");
             Err(())
         }
     }
@@ -483,6 +495,24 @@ pub async fn storage_task(flash: esp_hal::peripherals::FLASH<'static>) -> ! {
                     .send(StorageResponse::StorageStats(stats))
                     .await;
             }
+            StorageRequest::ClearAllImages => {
+                let result = if let Some(slot) = write_slot.take() {
+                    // Abort any in-progress write before global erase.
+                    let _ = image_file::purge_image(&db, slot as u32, write.chunk_count).await;
+                    write = WriteState {
+                        crc: None,
+                        chunk_count: 0,
+                        header: None,
+                    };
+                    clear_all_images_ekv(&db).await
+                } else {
+                    clear_all_images_ekv(&db).await
+                };
+
+                STORAGE_RESPONSE_CHANNEL
+                    .send(StorageResponse::ClearAllImages(result))
+                    .await;
+            }
             StorageRequest::BeginSlotWrite { expected_bytes } => {
                 if let Some(prev_slot) = write_slot.take() {
                     image_file::purge_image(&db, prev_slot as u32, write.chunk_count)
@@ -730,6 +760,28 @@ async fn commit_slot_ekv(
         "storage:commit_slot committed image_id={} total_bytes={} crc32={=u32:#010x} encoding={:?}",
         slot, total_bytes, expected_crc32, encoding
     );
+    Ok(())
+}
+
+async fn clear_all_images_ekv(db: &ekv_flash::EkvDatabase) -> Result<(), ()> {
+    let mut index = config::get_storage_index(db).await;
+
+    for image_id in index.image_ids_slice().iter().copied() {
+        if let Some(meta) = config::get_slot_metadata(db, image_id as usize).await {
+            image_file::purge_image(db, image_id, meta.chunk_count).await?;
+        }
+    }
+
+    index.image_ids = [0; config::MAX_TRACKED_IMAGES];
+    index.image_count = 0;
+    index.used_bytes = 0;
+    index.active_image_id = None;
+    index.next_image_id = 0;
+
+    config::set_storage_index(db, &index).await?;
+    config::clear_active_slot(db).await?;
+
+    info!("storage:clear_all_images completed");
     Ok(())
 }
 
