@@ -6,10 +6,10 @@ use pov_proto::{
     bridge::{
         BridgeControlRequest, BridgeControlResponse, BridgeFrame, EspNowTarget, TransportSelector,
     },
-    image::{LedCount, RadialCount, encode_polar_rgb888_to_wire, encode_rgb888_to_wire},
+    image::{encode_polar_rgb888_to_wire, encode_rgb888_to_wire, LedCount, RadialCount},
     transfer::{
-        ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand, SpokeResponse, encode_packet,
-        parse_packet,
+        encode_packet, parse_packet, ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand,
+        SpokeResponse,
     },
     video,
 };
@@ -18,7 +18,9 @@ use serialport::SerialPort;
 
 use crate::serial_link::open_serial_port;
 
-const ESPNOW_CHUNK_PAYLOAD_BYTES: usize = 1450;
+// Keep this in lock-step with esp-spoke-firmware networking/download.rs
+// ESPNOW_MAX_CHUNK_PAYLOAD to satisfy transfer payload-shape validation.
+const ESPNOW_CHUNK_PAYLOAD_BYTES: usize = 1448;
 const BLE_CHUNK_PAYLOAD_BYTES: usize = 224;
 const SERIAL_TX_BUF_BYTES: usize = 1600;
 const RX_BUF: usize = 2048;
