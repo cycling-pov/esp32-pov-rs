@@ -97,15 +97,17 @@ enum CommandTab {
     SendImage,
     SendDownload,
     SetOffsets,
+    SetActiveSlot,
     InputLessCommands,
     StorageStats,
 }
 
 impl CommandTab {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::SendImage,
         Self::SendDownload,
         Self::SetOffsets,
+        Self::SetActiveSlot,
         Self::InputLessCommands,
         Self::StorageStats,
     ];
@@ -115,6 +117,7 @@ impl CommandTab {
             Self::SendImage => "Send Image",
             Self::SendDownload => "Send Download",
             Self::SetOffsets => "Set Offsets",
+            Self::SetActiveSlot => "Set Active Slot",
             Self::InputLessCommands => "Input-Less Commands",
             Self::StorageStats => "Storage Stats",
         }
@@ -171,6 +174,8 @@ enum Message {
     NextImage,
     RandomizeDisplay,
     ClearAllImages,
+    ActiveSlotInputChanged(String),
+    SetActiveSlot,
     RequestStorageStats,
     HallOffset0Changed(String),
     HallOffset1Changed(String),
@@ -200,6 +205,7 @@ struct SenderGui {
     hall_offset_0_degrees: String,
     hall_offset_1_degrees: String,
     imu_offset_degrees: String,
+    active_slot_input: String,
     storage_stats_text: String,
     status: String,
     busy: bool,
@@ -227,6 +233,7 @@ impl Default for SenderGui {
             hall_offset_0_degrees: String::new(),
             hall_offset_1_degrees: String::new(),
             imu_offset_degrees: String::new(),
+            active_slot_input: String::new(),
             storage_stats_text: "No storage stats requested yet.".to_string(),
             status: "Ready".to_string(),
             busy: false,
@@ -389,6 +396,11 @@ impl Application for SenderGui {
             Message::NextImage => self.run_command(SpokeCommand::NextImage),
             Message::RandomizeDisplay => self.run_command(SpokeCommand::RandomizeDisplay),
             Message::ClearAllImages => self.run_command(SpokeCommand::ClearAllImages),
+            Message::ActiveSlotInputChanged(value) => {
+                self.active_slot_input = value;
+                Command::none()
+            }
+            Message::SetActiveSlot => self.run_set_active_slot(),
             Message::RequestStorageStats => self.run_request_storage_stats(),
             Message::HallOffset0Changed(value) => {
                 self.hall_offset_0_degrees = value;
@@ -526,6 +538,7 @@ impl SenderGui {
             CommandTab::SendImage => self.send_image_tab(),
             CommandTab::SendDownload => self.send_download_tab(),
             CommandTab::SetOffsets => self.set_offsets_tab(),
+            CommandTab::SetActiveSlot => self.set_active_slot_tab(),
             CommandTab::InputLessCommands => self.input_less_commands_tab(),
             CommandTab::StorageStats => self.storage_stats_tab(),
         }
@@ -604,6 +617,18 @@ impl SenderGui {
                 .on_press_maybe((!self.busy).then_some(Message::RandomizeDisplay)),
             button("Clear All Images")
                 .on_press_maybe((!self.busy).then_some(Message::ClearAllImages)),
+        ]
+        .spacing(10);
+
+        container(content).into()
+    }
+
+    fn set_active_slot_tab(&self) -> Element<'_, Message> {
+        let content = row![
+            text_input("active slot", &self.active_slot_input)
+                .on_input(Message::ActiveSlotInputChanged),
+            button("Set Active Slot")
+                .on_press_maybe((!self.busy).then_some(Message::SetActiveSlot)),
         ]
         .spacing(10);
 
@@ -838,6 +863,39 @@ impl SenderGui {
                 .map_err(|e| e.to_string())?;
                 Ok(format!(
                     "Sensor offsets sent: {} packet(s), {} transmission(s). Reboot firmware to apply.",
+                    stats.packet_count, stats.total_transmissions
+                ))
+            },
+            Message::ActionDone,
+        )
+    }
+
+    fn run_set_active_slot(&mut self) -> Command<Message> {
+        let config = match self.parse_link_config() {
+            Ok(config) => config,
+            Err(err) => {
+                self.status = err;
+                return Command::none();
+            }
+        };
+
+        let slot = match self.active_slot_input.trim().parse::<u32>() {
+            Ok(slot) => slot,
+            Err(_) => {
+                self.status = "Invalid active slot".to_string();
+                return Command::none();
+            }
+        };
+
+        self.busy = true;
+        self.status = format!("Setting active slot to {}...", slot);
+
+        Command::perform(
+            async move {
+                let stats = send_command(&config, SpokeCommand::SetActiveSlot { slot })
+                    .map_err(|e| e.to_string())?;
+                Ok(format!(
+                    "SetActiveSlot sent: {} packet(s), {} transmission(s)",
                     stats.packet_count, stats.total_transmissions
                 ))
             },

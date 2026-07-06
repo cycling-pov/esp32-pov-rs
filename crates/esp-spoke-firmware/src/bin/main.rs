@@ -339,6 +339,70 @@ async fn main(spawner: Spawner) -> ! {
                     let transfer_id = command.frame.transfer_id;
                     let command_kind = command.frame.command;
                     match command.frame.command {
+                        SpokeCommand::SetActiveSlot { slot } => {
+                            let slot_usize = match usize::try_from(slot) {
+                                Ok(slot) => slot,
+                                Err(_) => {
+                                    warn!(
+                                        "main:reject SetActiveSlot transfer_id={} slot={} reason=out_of_range",
+                                        transfer_id, slot
+                                    );
+                                    continue;
+                                }
+                            };
+                            let image_ids = storage::list_image_ids().await.unwrap_or_default();
+
+                            if !image_ids.contains(&slot_usize) {
+                                warn!(
+                                    "main:reject SetActiveSlot transfer_id={} slot={} reason=out_of_range",
+                                    transfer_id, slot_usize
+                                );
+                                continue;
+                            }
+
+                            let mut set_slot_pause_held = false;
+                            if !render_pause_held {
+                                // Active-slot updates touch flash metadata and need the same
+                                // render pause contract as other flash writes.
+                                render_pause_held = true;
+                                set_slot_pause_held = true;
+                                if !led::pause_render_for_flash(Duration::from_millis(500)).await {
+                                    warn!(
+                                        "main:render pause ack timeout before SetActiveSlot transfer_id={} slot={}",
+                                        transfer_id, slot_usize
+                                    );
+                                }
+                            }
+
+                            if storage::set_active_slot(slot_usize).await.is_err() {
+                                warn!(
+                                    "main:failed SetActiveSlot transfer_id={} slot={}",
+                                    transfer_id, slot_usize
+                                );
+                                if set_slot_pause_held {
+                                    led::resume_render_after_flash();
+                                    render_pause_held = false;
+                                }
+                                continue;
+                            }
+
+                            if !led::try_send_led_command(LedCommand::LoadSlot(slot_usize)) {
+                                warn!(
+                                    "main:failed to enqueue LoadSlot after SetActiveSlot transfer_id={} slot={}",
+                                    transfer_id, slot_usize
+                                );
+                            } else {
+                                info!(
+                                    "main:applied SetActiveSlot transfer_id={} slot={}",
+                                    transfer_id, slot_usize
+                                );
+                            }
+
+                            if set_slot_pause_held {
+                                led::resume_render_after_flash();
+                                render_pause_held = false;
+                            }
+                        }
                         SpokeCommand::ClearAllImages => {
                             if let Some(old) = active.take() {
                                 info!(

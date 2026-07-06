@@ -427,6 +427,9 @@ pub async fn pov_command_task(bitmap: &'static SharedBitmapMutex) -> ! {
                     SpokeCommand::RequestStorageStats => {
                         info!("pov:cmd ignoring RequestStorageStats in render task");
                     }
+                    SpokeCommand::SetActiveSlot { .. } => {
+                        info!("pov:cmd ignoring SetActiveSlot in render task");
+                    }
                     SpokeCommand::ClearAllImages => {
                         info!("pov:cmd ignoring ClearAllImages in render task");
                     }

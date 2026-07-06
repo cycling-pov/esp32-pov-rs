@@ -37,6 +37,9 @@ pub enum SpokeCommand {
     DisplayOff,
     NextImage,
     RandomizeDisplay,
+    SetActiveSlot {
+        slot: u32,
+    },
     ClearAllImages,
     RequestStorageStats,
     SetSensorOffsets {
