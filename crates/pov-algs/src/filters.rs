@@ -170,3 +170,76 @@ impl<const SPOKES: usize> Default for PositionEstimator<SPOKES> {
         }
     }
 }
+
+/// Implements a simple position estimator
+#[derive(Debug, Clone, Copy)]
+pub struct PositionEstimatorGyro<const SPOKES: usize> {
+    /// Defines the sum of the current period
+    current_period: Duration,
+    /// Defines the current rate
+    rate: LowPassFilter,
+    /// Defines the current position
+    pos: Angle,
+    /// Defines spoke positions
+    spoke_pos: [Angle; SPOKES],
+    /// Define the last spoke position hit
+    last_spoke: usize,
+    /// The LPF Tau
+    rate_filter_tau: Duration,
+}
+
+impl<const SPOKES: usize> PositionEstimatorGyro<SPOKES> {
+    const SPOKE_OFFSET: Angle = Angle::from_radians(Angle::CIRCLE.radians() / (SPOKES as f32));
+
+    pub fn new(rate_tau: Duration) -> Self {
+        // Assume that marker spokes are equidistant
+        let mut pos_vals = [Angle::default(); SPOKES];
+        for (i, x) in pos_vals.iter_mut().enumerate() {
+            *x = Angle::from_radians(Self::SPOKE_OFFSET.radians() * (i as f32));
+        }
+
+        Self {
+            rate: LowPassFilter::new(rate_tau),
+            rate_filter_tau: rate_tau,
+            current_period: Duration::ZERO,
+            pos: Angle::default(),
+            spoke_pos: pos_vals,
+            last_spoke: 0,
+        }
+    }
+
+    /// Resets the estimator to 0.0
+    pub fn reset(&mut self) {
+        self.current_period = Duration::ZERO;
+        self.rate = LowPassFilter::new(self.rate_filter_tau);
+        self.pos = Angle::default();
+    }
+
+    /// Provides the current position
+    pub fn get_current_pos(&self) -> Angle {
+        self.pos
+    }
+
+    /// Provides the current rate
+    pub fn get_current_rate(&self) -> AngularVelocity {
+        AngularVelocity(self.rate.get_value())
+    }
+
+    /// Steps the estimator
+    pub fn step(&mut self, dt: Duration, rate: AngularVelocity, triggered: Option<usize>) {
+        // Update the spoke index for the last read position
+        if let Some(ind) = triggered {
+            self.last_spoke = ind;
+            self.current_period = Duration::ZERO;
+        }
+
+        // Update the period
+        self.current_period += dt;
+
+        // Update the rate based on the period filter
+        let r = AngularVelocity(self.rate.step(rate.0, dt));
+
+        // Update the position as a rate with the period and base position from the last spoke provided
+        self.pos = (self.spoke_pos[self.last_spoke] + r * self.current_period).constrain_circle();
+    }
+}
