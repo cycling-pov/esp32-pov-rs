@@ -24,6 +24,7 @@ const SERIAL_TX_BUF_BYTES: usize = 1600;
 const RX_BUF: usize = 2048;
 const POLAR_LEDS: usize = 26;
 const POLAR_RADIALS: usize = 360;
+const LIST_PEERS_RETRY_DELAY_MS: u64 = 250;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EspNowDelivery {
@@ -93,6 +94,21 @@ pub struct EspNowPeer {
 }
 
 pub fn list_esp_now_peers(port_name: &str, baud: u32) -> anyhow::Result<Vec<EspNowPeer>> {
+    match list_esp_now_peers_once(port_name, baud) {
+        Ok(peers) => Ok(peers),
+        Err(first_err) => {
+            thread::sleep(Duration::from_millis(LIST_PEERS_RETRY_DELAY_MS));
+            list_esp_now_peers_once(port_name, baud).map_err(|retry_err| {
+                anyhow::anyhow!(
+                    "Failed to list ESP-NOW peers after retry (delay {} ms). First error: {first_err}. Retry error: {retry_err}",
+                    LIST_PEERS_RETRY_DELAY_MS
+                )
+            })
+        }
+    }
+}
+
+fn list_esp_now_peers_once(port_name: &str, baud: u32) -> anyhow::Result<Vec<EspNowPeer>> {
     let mut port = open_serial_port(port_name, baud)?;
     let request = BridgeFrame::ControlRequest(BridgeControlRequest::ListEspNowPeers);
     let cobs_bytes = postcard::to_stdvec_cobs(&request).context("postcard serialization failed")?;
