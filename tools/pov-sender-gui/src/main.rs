@@ -436,7 +436,7 @@ impl Application for SenderGui {
         ]
         .spacing(10);
 
-        let esp_now_panel = row![
+        let mut esp_now_panel = row![
             text("ESP-NOW Mode"),
             pick_list(
                 EspNowModeUi::ALL.to_vec(),
@@ -444,18 +444,24 @@ impl Application for SenderGui {
                 Message::SelectEspNowMode,
             )
             .width(Length::Shrink),
-            button("Refresh Peers").on_press(Message::RefreshPeers),
-            pick_list(
-                self.peers.clone(),
-                self.selected_peer.clone(),
-                Message::SelectPeer
-            )
-            .placeholder("Select target peer")
-            .width(Length::Fill),
             text("Retries"),
             text_input("3", &self.esp_now_retries).on_input(Message::EspNowRetriesChanged),
         ]
         .spacing(10);
+
+        if self.esp_now_mode == EspNowModeUi::Stateful {
+            esp_now_panel = esp_now_panel
+                .push(button("Refresh Peers").on_press(Message::RefreshPeers))
+                .push(
+                    pick_list(
+                        self.peers.clone(),
+                        self.selected_peer.clone(),
+                        Message::SelectPeer,
+                    )
+                    .placeholder("Select target peer")
+                    .width(Length::Fill),
+                );
+        }
 
         let tabs_row = CommandTab::ALL
             .iter()
@@ -476,17 +482,18 @@ impl Application for SenderGui {
         ]
         .spacing(10);
 
-        let content = column![
-            text("POV Sender").size(30),
-            port_panel,
-            transport_panel,
-            esp_now_panel,
-            actions_panel,
-            text(format!("Status: {}", self.status)),
-        ]
-        .spacing(16)
-        .padding(16)
-        .width(Length::Fill);
+        let mut content = column![text("POV Sender").size(30), port_panel, transport_panel]
+            .spacing(16)
+            .padding(16)
+            .width(Length::Fill);
+
+        if self.transport == TransportUi::Espnow {
+            content = content.push(esp_now_panel);
+        }
+
+        content = content
+            .push(actions_panel)
+            .push(text(format!("Status: {}", self.status)));
 
         container(content).into()
     }
