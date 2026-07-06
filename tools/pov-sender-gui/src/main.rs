@@ -92,6 +92,32 @@ enum DownloadKindUi {
     Video,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CommandTab {
+    SendImage,
+    SendDownload,
+    SetOffsets,
+    InputLessCommands,
+}
+
+impl CommandTab {
+    const ALL: [Self; 4] = [
+        Self::SendImage,
+        Self::SendDownload,
+        Self::SetOffsets,
+        Self::InputLessCommands,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::SendImage => "Send Image",
+            Self::SendDownload => "Send Download",
+            Self::SetOffsets => "Set Offsets",
+            Self::InputLessCommands => "Input-Less Commands",
+        }
+    }
+}
+
 impl DownloadKindUi {
     const ALL: [Self; 3] = [Self::DisplayImage, Self::OtaImage, Self::Video];
 }
@@ -135,6 +161,7 @@ enum Message {
     PickImage,
     PickDownload,
     SelectDownloadKind(DownloadKindUi),
+    SelectTab(CommandTab),
     SendImage,
     SendDownload,
     DisplayOff,
@@ -163,6 +190,7 @@ struct SenderGui {
     image_path: Option<PathBuf>,
     download_path: Option<PathBuf>,
     download_kind: DownloadKindUi,
+    active_tab: CommandTab,
     hall_offset_0_degrees: String,
     hall_offset_1_degrees: String,
     imu_offset_degrees: String,
@@ -188,6 +216,7 @@ impl Default for SenderGui {
             image_path: None,
             download_path: None,
             download_kind: DownloadKindUi::DisplayImage,
+            active_tab: CommandTab::SendImage,
             hall_offset_0_degrees: String::new(),
             hall_offset_1_degrees: String::new(),
             imu_offset_degrees: String::new(),
@@ -342,6 +371,10 @@ impl Application for SenderGui {
                 self.download_kind = kind;
                 Command::none()
             }
+            Message::SelectTab(tab) => {
+                self.active_tab = tab;
+                Command::none()
+            }
             Message::SendImage => self.run_send_image(),
             Message::SendDownload => self.run_send_download(),
             Message::DisplayOff => self.run_command(SpokeCommand::DisplayOff),
@@ -424,66 +457,22 @@ impl Application for SenderGui {
         ]
         .spacing(10);
 
-        let image_path_text = self
-            .image_path
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "No image selected".to_string());
-
-        let download_path_text = self
-            .download_path
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "No payload selected".to_string());
-
-        let polar_row = row![
-            checkbox("Polar mode", self.polar_enabled).on_toggle(Message::PolarToggled),
-            text_input("first LED distance", &self.first_led_distance)
-                .on_input(Message::FirstDistanceChanged),
-            text_input("last LED distance", &self.last_led_distance)
-                .on_input(Message::LastDistanceChanged),
-        ]
-        .spacing(10);
+        let tabs_row = CommandTab::ALL
+            .iter()
+            .copied()
+            .fold(row![].spacing(10), |row, tab| {
+                let label = if tab == self.active_tab {
+                    format!("> {}", tab.label())
+                } else {
+                    tab.label().to_string()
+                };
+                row.push(button(text(label)).on_press(Message::SelectTab(tab)))
+            });
 
         let actions_panel = column![
-            text("Actions").size(24),
-            row![
-                button("Pick Image").on_press(Message::PickImage),
-                button("Send Image").on_press_maybe((!self.busy).then_some(Message::SendImage)),
-                text(image_path_text).width(Length::Fill),
-            ]
-            .spacing(10),
-            polar_row,
-            row![
-                pick_list(
-                    DownloadKindUi::ALL.to_vec(),
-                    Some(self.download_kind),
-                    Message::SelectDownloadKind,
-                )
-                .width(Length::Shrink),
-                button("Pick Download").on_press(Message::PickDownload),
-                button("Send Download")
-                    .on_press_maybe((!self.busy).then_some(Message::SendDownload)),
-                text(download_path_text).width(Length::Fill),
-            ]
-            .spacing(10),
-            row![
-                button("Display Off").on_press_maybe((!self.busy).then_some(Message::DisplayOff)),
-                button("Next Image").on_press_maybe((!self.busy).then_some(Message::NextImage)),
-                button("Randomize Display")
-                    .on_press_maybe((!self.busy).then_some(Message::RandomizeDisplay)),
-            ]
-            .spacing(10),
-            row![
-                text_input("hall 0 deg", &self.hall_offset_0_degrees)
-                    .on_input(Message::HallOffset0Changed),
-                text_input("hall 1 deg", &self.hall_offset_1_degrees)
-                    .on_input(Message::HallOffset1Changed),
-                text_input("imu deg", &self.imu_offset_degrees).on_input(Message::ImuOffsetChanged),
-                button("Set Offsets")
-                    .on_press_maybe((!self.busy).then_some(Message::SetSensorOffsets)),
-            ]
-            .spacing(10),
+            text("Commands").size(24),
+            tabs_row,
+            self.active_tab_content(),
         ]
         .spacing(10);
 
@@ -504,6 +493,92 @@ impl Application for SenderGui {
 }
 
 impl SenderGui {
+    fn active_tab_content(&self) -> Element<'_, Message> {
+        match self.active_tab {
+            CommandTab::SendImage => self.send_image_tab(),
+            CommandTab::SendDownload => self.send_download_tab(),
+            CommandTab::SetOffsets => self.set_offsets_tab(),
+            CommandTab::InputLessCommands => self.input_less_commands_tab(),
+        }
+    }
+
+    fn send_image_tab(&self) -> Element<'_, Message> {
+        let image_path_text = self
+            .image_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "No image selected".to_string());
+
+        let content = column![
+            row![
+                button("Pick Image").on_press(Message::PickImage),
+                button("Send Image").on_press_maybe((!self.busy).then_some(Message::SendImage)),
+                text(image_path_text).width(Length::Fill),
+            ]
+            .spacing(10),
+            row![
+                checkbox("Polar mode", self.polar_enabled).on_toggle(Message::PolarToggled),
+                text_input("first LED distance", &self.first_led_distance)
+                    .on_input(Message::FirstDistanceChanged),
+                text_input("last LED distance", &self.last_led_distance)
+                    .on_input(Message::LastDistanceChanged),
+            ]
+            .spacing(10),
+        ]
+        .spacing(10);
+
+        container(content).into()
+    }
+
+    fn send_download_tab(&self) -> Element<'_, Message> {
+        let download_path_text = self
+            .download_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "No payload selected".to_string());
+
+        let content = row![
+            pick_list(
+                DownloadKindUi::ALL.to_vec(),
+                Some(self.download_kind),
+                Message::SelectDownloadKind,
+            )
+            .width(Length::Shrink),
+            button("Pick Download").on_press(Message::PickDownload),
+            button("Send Download").on_press_maybe((!self.busy).then_some(Message::SendDownload)),
+            text(download_path_text).width(Length::Fill),
+        ]
+        .spacing(10);
+
+        container(content).into()
+    }
+
+    fn set_offsets_tab(&self) -> Element<'_, Message> {
+        let content = row![
+            text_input("hall 0 deg", &self.hall_offset_0_degrees)
+                .on_input(Message::HallOffset0Changed),
+            text_input("hall 1 deg", &self.hall_offset_1_degrees)
+                .on_input(Message::HallOffset1Changed),
+            text_input("imu deg", &self.imu_offset_degrees).on_input(Message::ImuOffsetChanged),
+            button("Set Offsets").on_press_maybe((!self.busy).then_some(Message::SetSensorOffsets)),
+        ]
+        .spacing(10);
+
+        container(content).into()
+    }
+
+    fn input_less_commands_tab(&self) -> Element<'_, Message> {
+        let content = row![
+            button("Display Off").on_press_maybe((!self.busy).then_some(Message::DisplayOff)),
+            button("Next Image").on_press_maybe((!self.busy).then_some(Message::NextImage)),
+            button("Randomize Display")
+                .on_press_maybe((!self.busy).then_some(Message::RandomizeDisplay)),
+        ]
+        .spacing(10);
+
+        container(content).into()
+    }
+
     fn parse_link_config(&self) -> Result<SerialLinkConfig, String> {
         let port = self
             .selected_port
