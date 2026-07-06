@@ -86,16 +86,9 @@ fn format_mac(mac: [u8; 6]) -> String {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DownloadKindUi {
-    DisplayImage,
-    OtaImage,
-    Video,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CommandTab {
     SendImage,
-    SendDownload,
+    SendOta,
     SetOffsets,
     SetActiveSlot,
     InputLessCommands,
@@ -105,7 +98,7 @@ enum CommandTab {
 impl CommandTab {
     const ALL: [Self; 6] = [
         Self::SendImage,
-        Self::SendDownload,
+        Self::SendOta,
         Self::SetOffsets,
         Self::SetActiveSlot,
         Self::InputLessCommands,
@@ -115,35 +108,11 @@ impl CommandTab {
     fn label(self) -> &'static str {
         match self {
             Self::SendImage => "Send Image",
-            Self::SendDownload => "Send Download",
+            Self::SendOta => "Send OTA",
             Self::SetOffsets => "Set Offsets",
             Self::SetActiveSlot => "Set Active Slot",
             Self::InputLessCommands => "Input-Less Commands",
             Self::StorageStats => "Storage Stats",
-        }
-    }
-}
-
-impl DownloadKindUi {
-    const ALL: [Self; 3] = [Self::DisplayImage, Self::OtaImage, Self::Video];
-}
-
-impl std::fmt::Display for DownloadKindUi {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::DisplayImage => write!(f, "display-image"),
-            Self::OtaImage => write!(f, "ota-image"),
-            Self::Video => write!(f, "video"),
-        }
-    }
-}
-
-impl From<DownloadKindUi> for DownloadKind {
-    fn from(value: DownloadKindUi) -> Self {
-        match value {
-            DownloadKindUi::DisplayImage => DownloadKind::DisplayImage,
-            DownloadKindUi::OtaImage => DownloadKind::OtaImage,
-            DownloadKindUi::Video => DownloadKind::Video,
         }
     }
 }
@@ -166,10 +135,9 @@ enum Message {
     LastDistanceChanged(String),
     PickImage,
     PickDownload,
-    SelectDownloadKind(DownloadKindUi),
     SelectTab(CommandTab),
     SendImage,
-    SendDownload,
+    SendOta,
     DisplayOff,
     NextImage,
     RandomizeDisplay,
@@ -200,7 +168,6 @@ struct SenderGui {
     last_led_distance: String,
     image_path: Option<PathBuf>,
     download_path: Option<PathBuf>,
-    download_kind: DownloadKindUi,
     active_tab: CommandTab,
     hall_offset_0_degrees: String,
     hall_offset_1_degrees: String,
@@ -228,7 +195,6 @@ impl Default for SenderGui {
             last_led_distance: "72".to_string(),
             image_path: None,
             download_path: None,
-            download_kind: DownloadKindUi::DisplayImage,
             active_tab: CommandTab::SendImage,
             hall_offset_0_degrees: String::new(),
             hall_offset_1_degrees: String::new(),
@@ -382,16 +348,12 @@ impl Application for SenderGui {
                 self.download_path = rfd::FileDialog::new().pick_file();
                 Command::none()
             }
-            Message::SelectDownloadKind(kind) => {
-                self.download_kind = kind;
-                Command::none()
-            }
             Message::SelectTab(tab) => {
                 self.active_tab = tab;
                 Command::none()
             }
             Message::SendImage => self.run_send_image(),
-            Message::SendDownload => self.run_send_download(),
+            Message::SendOta => self.run_send_ota(),
             Message::DisplayOff => self.run_command(SpokeCommand::DisplayOff),
             Message::NextImage => self.run_command(SpokeCommand::NextImage),
             Message::RandomizeDisplay => self.run_command(SpokeCommand::RandomizeDisplay),
@@ -536,7 +498,7 @@ impl SenderGui {
     fn active_tab_content(&self) -> Element<'_, Message> {
         match self.active_tab {
             CommandTab::SendImage => self.send_image_tab(),
-            CommandTab::SendDownload => self.send_download_tab(),
+            CommandTab::SendOta => self.send_ota_tab(),
             CommandTab::SetOffsets => self.set_offsets_tab(),
             CommandTab::SetActiveSlot => self.set_active_slot_tab(),
             CommandTab::InputLessCommands => self.input_less_commands_tab(),
@@ -572,7 +534,7 @@ impl SenderGui {
         container(content).into()
     }
 
-    fn send_download_tab(&self) -> Element<'_, Message> {
+    fn send_ota_tab(&self) -> Element<'_, Message> {
         let download_path_text = self
             .download_path
             .as_ref()
@@ -580,14 +542,8 @@ impl SenderGui {
             .unwrap_or_else(|| "No payload selected".to_string());
 
         let content = row![
-            pick_list(
-                DownloadKindUi::ALL.to_vec(),
-                Some(self.download_kind),
-                Message::SelectDownloadKind,
-            )
-            .width(Length::Shrink),
-            button("Pick Download").on_press(Message::PickDownload),
-            button("Send Download").on_press_maybe((!self.busy).then_some(Message::SendDownload)),
+            button("Pick OTA").on_press(Message::PickDownload),
+            button("Send OTA").on_press_maybe((!self.busy).then_some(Message::SendOta)),
             text(download_path_text).width(Length::Fill),
         ]
         .spacing(10);
@@ -752,11 +708,11 @@ impl SenderGui {
         )
     }
 
-    fn run_send_download(&mut self) -> Command<Message> {
+    fn run_send_ota(&mut self) -> Command<Message> {
         let file_path = match self.download_path.clone() {
             Some(path) => path,
             None => {
-                self.status = "Pick a download file first".to_string();
+                self.status = "Pick an OTA file first".to_string();
                 return Command::none();
             }
         };
@@ -769,20 +725,18 @@ impl SenderGui {
             }
         };
 
-        let kind = DownloadKind::from(self.download_kind);
-
         self.busy = true;
-        self.status = "Sending download...".to_string();
+        self.status = "Sending OTA...".to_string();
 
         Command::perform(
             async move {
                 let request = DownloadRequest {
                     file_path: file_path.as_path(),
-                    kind,
+                    kind: DownloadKind::OtaImage,
                 };
                 let stats = send_download(&config, request).map_err(|e| e.to_string())?;
                 Ok(format!(
-                    "Download sent: {} packet(s), {} transmission(s)",
+                    "OTA sent: {} packet(s), {} transmission(s)",
                     stats.packet_count, stats.total_transmissions
                 ))
             },
