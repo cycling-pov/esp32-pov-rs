@@ -1,9 +1,17 @@
-use std::{fs, path::Path, thread, time::Duration};
+use std::{
+    fs,
+    io::{Read, Write},
+    path::Path,
+    thread,
+    time::Duration,
+};
 
 use anyhow::Context;
 use image::AnimationDecoder;
 use pov_proto::{
-    bridge::{BridgeFrame, TransportSelector},
+    bridge::{
+        BridgeControlRequest, BridgeControlResponse, BridgeFrame, EspNowTarget, TransportSelector,
+    },
     image::{LedCount, RadialCount, encode_polar_rgb888_to_wire, encode_rgb888_to_wire},
     transfer::{ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand, encode_packet},
     video,
@@ -16,8 +24,24 @@ use crate::serial_link::open_serial_port;
 const ESPNOW_CHUNK_PAYLOAD_BYTES: usize = 1450;
 const BLE_CHUNK_PAYLOAD_BYTES: usize = 224;
 const SERIAL_TX_BUF_BYTES: usize = 1600;
+const RX_BUF: usize = 2048;
 const POLAR_LEDS: usize = 26;
 const POLAR_RADIALS: usize = 360;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EspNowDelivery {
+    Broadcast,
+    Peer([u8; 6]),
+}
+
+impl EspNowDelivery {
+    fn target(self) -> EspNowTarget {
+        match self {
+            Self::Broadcast => EspNowTarget::Broadcast,
+            Self::Peer(mac) => EspNowTarget::Peer(mac),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Transport {
@@ -46,6 +70,8 @@ pub struct SerialLinkConfig {
     pub port: String,
     pub baud: u32,
     pub transport: Transport,
+    pub esp_now_delivery: EspNowDelivery,
+    pub esp_now_retries: u8,
     pub repeat: usize,
     pub inter_packet_delay_ms: u64,
 }
@@ -56,8 +82,57 @@ impl Default for SerialLinkConfig {
             port: String::new(),
             baud: 115_200,
             transport: Transport::Espnow,
+            esp_now_delivery: EspNowDelivery::Broadcast,
+            esp_now_retries: 0,
             repeat: 1,
             inter_packet_delay_ms: 1_000,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EspNowPeer {
+    pub mac: [u8; 6],
+}
+
+pub fn list_esp_now_peers(port_name: &str, baud: u32) -> anyhow::Result<Vec<EspNowPeer>> {
+    let mut port = open_serial_port(port_name, baud)?;
+    let request = BridgeFrame::ControlRequest(BridgeControlRequest::ListEspNowPeers);
+    let cobs_bytes = postcard::to_stdvec_cobs(&request).context("postcard serialization failed")?;
+    port.write_all(&cobs_bytes)
+        .context("Failed to write peer-list request to serial port")?;
+
+    let mut response_buf = [0u8; RX_BUF];
+    let mut head = 0usize;
+    loop {
+        let mut byte = [0u8; 1];
+        port.read_exact(&mut byte)
+            .context("Timed out waiting for bridge peer-list response")?;
+
+        if byte[0] == 0 {
+            if head == 0 {
+                continue;
+            }
+
+            let response =
+                postcard::from_bytes_cobs::<BridgeControlResponse>(&mut response_buf[..head])
+                    .context("Failed to decode bridge peer-list response")?;
+            match response {
+                BridgeControlResponse::EspNowPeers(list) => {
+                    let count = usize::from(list.count).min(list.peers.len());
+                    let peers = list.peers[..count]
+                        .iter()
+                        .copied()
+                        .map(|mac| EspNowPeer { mac })
+                        .collect();
+                    return Ok(peers);
+                }
+            }
+        } else if head < response_buf.len() {
+            response_buf[head] = byte[0];
+            head += 1;
+        } else {
+            anyhow::bail!("Bridge peer-list response exceeded buffer size");
         }
     }
 }
@@ -169,6 +244,7 @@ fn send_packets(config: &SerialLinkConfig, packets: &[Vec<u8>]) -> anyhow::Resul
     let repeat = config.repeat.max(1);
     let mut port = open_serial_port(&config.port, config.baud)?;
     let transport_selector = config.transport.transport_selector();
+    let esp_now_target = config.esp_now_delivery.target();
     let mut rng = rand::rng();
 
     for _ in 0..repeat {
@@ -179,6 +255,8 @@ fn send_packets(config: &SerialLinkConfig, packets: &[Vec<u8>]) -> anyhow::Resul
             send_bridge_frame(
                 &mut *port,
                 transport_selector,
+                esp_now_target,
+                config.esp_now_retries,
                 &packets[idx],
                 config.inter_packet_delay_ms,
             )?;
@@ -194,13 +272,12 @@ fn send_packets(config: &SerialLinkConfig, packets: &[Vec<u8>]) -> anyhow::Resul
 fn send_bridge_frame(
     port: &mut dyn SerialPort,
     transport_selector: TransportSelector,
+    esp_now_target: EspNowTarget,
+    esp_now_retries: u8,
     payload: &[u8],
     inter_packet_delay_ms: u64,
 ) -> anyhow::Result<()> {
-    let frame = BridgeFrame {
-        transport: transport_selector,
-        payload,
-    };
+    let frame = BridgeFrame::data(transport_selector, esp_now_target, esp_now_retries, payload);
 
     let cobs_bytes = postcard::to_stdvec_cobs(&frame).context("postcard serialization failed")?;
 

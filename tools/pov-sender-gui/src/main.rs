@@ -5,9 +5,9 @@ use iced::{
     widget::{button, checkbox, column, container, pick_list, row, text, text_input},
 };
 use pov_sender_core::{
-    DownloadKind, DownloadRequest, PolarEncodeOptions, SensorOffsets, SerialLinkConfig,
-    SpokeCommand, Transport, list_serial_ports, send_command, send_download, send_image,
-    send_sensor_offsets,
+    DownloadKind, DownloadRequest, EspNowDelivery, PolarEncodeOptions, SensorOffsets,
+    SerialLinkConfig, SpokeCommand, Transport, list_esp_now_peers, list_serial_ports, send_command,
+    send_download, send_image, send_sensor_offsets,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,6 +36,53 @@ impl From<TransportUi> for Transport {
             TransportUi::Espnow => Transport::Espnow,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EspNowModeUi {
+    Broadcast,
+    Stateful,
+}
+
+impl EspNowModeUi {
+    const ALL: [Self; 2] = [Self::Broadcast, Self::Stateful];
+}
+
+impl std::fmt::Display for EspNowModeUi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Broadcast => write!(f, "broadcast"),
+            Self::Stateful => write!(f, "stateful"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct EspNowPeerUi {
+    mac: [u8; 6],
+    label: String,
+}
+
+impl EspNowPeerUi {
+    fn new(mac: [u8; 6]) -> Self {
+        Self {
+            mac,
+            label: format_mac(mac),
+        }
+    }
+}
+
+impl std::fmt::Display for EspNowPeerUi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.label)
+    }
+}
+
+fn format_mac(mac: [u8; 6]) -> String {
+    format!(
+        "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -73,8 +120,13 @@ impl From<DownloadKindUi> for DownloadKind {
 enum Message {
     RefreshPorts,
     PortsLoaded(Result<Vec<String>, String>),
+    RefreshPeers,
+    PeersLoaded(Result<Vec<EspNowPeerUi>, String>),
     SelectPort(String),
     SelectTransport(TransportUi),
+    SelectEspNowMode(EspNowModeUi),
+    SelectPeer(EspNowPeerUi),
+    EspNowRetriesChanged(String),
     BaudChanged(String),
     RepeatChanged(String),
     PolarToggled(bool),
@@ -98,7 +150,11 @@ enum Message {
 struct SenderGui {
     ports: Vec<String>,
     selected_port: Option<String>,
+    peers: Vec<EspNowPeerUi>,
+    selected_peer: Option<EspNowPeerUi>,
     transport: TransportUi,
+    esp_now_mode: EspNowModeUi,
+    esp_now_retries: String,
     baud: String,
     repeat: String,
     polar_enabled: bool,
@@ -119,7 +175,11 @@ impl Default for SenderGui {
         Self {
             ports: Vec::new(),
             selected_port: None,
+            peers: Vec::new(),
+            selected_peer: None,
             transport: TransportUi::Espnow,
+            esp_now_mode: EspNowModeUi::Broadcast,
+            esp_now_retries: "3".to_string(),
             baud: "115200".to_string(),
             repeat: "1".to_string(),
             polar_enabled: false,
@@ -183,12 +243,71 @@ impl Application for SenderGui {
                 }
                 Command::none()
             }
+            Message::RefreshPeers => {
+                let port = match self.selected_port.clone() {
+                    Some(port) => port,
+                    None => {
+                        self.status = "Select a serial port first".to_string();
+                        return Command::none();
+                    }
+                };
+
+                let baud = match self.baud.parse::<u32>() {
+                    Ok(baud) => baud,
+                    Err(_) => {
+                        self.status = "Invalid baud rate".to_string();
+                        return Command::none();
+                    }
+                };
+
+                self.status = "Refreshing ESP-NOW peers...".to_string();
+                Command::perform(
+                    async move {
+                        let peers = list_esp_now_peers(&port, baud)
+                            .map_err(|e| e.to_string())?
+                            .into_iter()
+                            .map(|p| EspNowPeerUi::new(p.mac))
+                            .collect();
+                        Ok(peers)
+                    },
+                    Message::PeersLoaded,
+                )
+            }
+            Message::PeersLoaded(result) => {
+                match result {
+                    Ok(peers) => {
+                        if let Some(selected) = &self.selected_peer
+                            && !peers.iter().any(|p| p == selected)
+                        {
+                            self.selected_peer = None;
+                        }
+                        self.peers = peers;
+                        self.status = format!("Found {} ESP-NOW peer(s)", self.peers.len());
+                    }
+                    Err(err) => {
+                        self.status = format!("Peer refresh failed: {err}");
+                    }
+                }
+                Command::none()
+            }
             Message::SelectPort(port) => {
                 self.selected_port = Some(port);
                 Command::none()
             }
             Message::SelectTransport(transport) => {
                 self.transport = transport;
+                Command::none()
+            }
+            Message::SelectEspNowMode(mode) => {
+                self.esp_now_mode = mode;
+                Command::none()
+            }
+            Message::SelectPeer(peer) => {
+                self.selected_peer = Some(peer);
+                Command::none()
+            }
+            Message::EspNowRetriesChanged(value) => {
+                self.esp_now_retries = value;
                 Command::none()
             }
             Message::BaudChanged(value) => {
@@ -284,6 +403,27 @@ impl Application for SenderGui {
         ]
         .spacing(10);
 
+        let esp_now_panel = row![
+            text("ESP-NOW Mode"),
+            pick_list(
+                EspNowModeUi::ALL.to_vec(),
+                Some(self.esp_now_mode),
+                Message::SelectEspNowMode,
+            )
+            .width(Length::Shrink),
+            button("Refresh Peers").on_press(Message::RefreshPeers),
+            pick_list(
+                self.peers.clone(),
+                self.selected_peer.clone(),
+                Message::SelectPeer
+            )
+            .placeholder("Select target peer")
+            .width(Length::Fill),
+            text("Retries"),
+            text_input("3", &self.esp_now_retries).on_input(Message::EspNowRetriesChanged),
+        ]
+        .spacing(10);
+
         let image_path_text = self
             .image_path
             .as_ref()
@@ -351,6 +491,7 @@ impl Application for SenderGui {
             text("POV Sender").size(30),
             port_panel,
             transport_panel,
+            esp_now_panel,
             actions_panel,
             text(format!("Status: {}", self.status)),
         ]
@@ -379,10 +520,32 @@ impl SenderGui {
             .parse::<usize>()
             .map_err(|_| "Invalid repeat count".to_string())?;
 
+        let esp_now_retries = self
+            .esp_now_retries
+            .parse::<u8>()
+            .map_err(|_| "Invalid ESP-NOW retries".to_string())?;
+
+        let esp_now_delivery = if self.transport == TransportUi::Espnow {
+            match self.esp_now_mode {
+                EspNowModeUi::Broadcast => EspNowDelivery::Broadcast,
+                EspNowModeUi::Stateful => {
+                    let peer = self
+                        .selected_peer
+                        .as_ref()
+                        .ok_or_else(|| "Select an ESP-NOW peer for stateful mode".to_string())?;
+                    EspNowDelivery::Peer(peer.mac)
+                }
+            }
+        } else {
+            EspNowDelivery::Broadcast
+        };
+
         Ok(SerialLinkConfig {
             port,
             baud,
             transport: self.transport.into(),
+            esp_now_delivery,
+            esp_now_retries,
             repeat,
             inter_packet_delay_ms: 1_000,
         })

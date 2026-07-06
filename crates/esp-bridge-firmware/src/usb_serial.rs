@@ -8,7 +8,11 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Sender
 use embedded_io_async::Read;
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
 
-use pov_proto::bridge::{BridgeFrame, TransportSelector};
+use pov_proto::bridge::{
+    BridgeControlRequest, BridgeControlResponse, BridgeFrame, EspNowTarget, TransportSelector,
+};
+
+use crate::esp_now_broadcaster::snapshot_peers;
 
 /// Maximum on-wire COBS frame size we are willing to buffer.
 ///
@@ -24,6 +28,18 @@ const RX_BUF: usize = 2048;
 pub struct ChunkMsg {
     pub buf: [u8; 1470],
     pub len: usize,
+    pub esp_now_target: EspNowTarget,
+    pub esp_now_retries: u8,
+}
+
+async fn reply_control(
+    usb: &mut UsbSerialJtag<'static, esp_hal::Async>,
+    response: BridgeControlResponse,
+) {
+    let mut out = [0u8; 320];
+    if let Ok(cobs) = postcard::to_slice_cobs(&response, &mut out) {
+        let _ = usb.write(cobs);
+    }
 }
 
 /// Embassy task: drain `usb` byte-by-byte, reassemble COBS frames (zero-byte
@@ -51,17 +67,24 @@ pub async fn usb_serial_task(
             if head > 0 {
                 // postcard::from_bytes_cobs mutates the slice in-place.
                 match postcard::from_bytes_cobs::<BridgeFrame<'_>>(&mut buf[..head]) {
-                    Ok(frame) => {
+                    Ok(BridgeFrame::Data {
+                        transport,
+                        esp_now_target,
+                        esp_now_retries,
+                        payload,
+                    }) => {
                         // Copy the borrowed payload before we release `buf`.
                         let mut msg = ChunkMsg {
                             buf: [0u8; 1470],
                             len: 0,
+                            esp_now_target,
+                            esp_now_retries,
                         };
-                        let copy_len = frame.payload.len().min(msg.buf.len());
-                        msg.buf[..copy_len].copy_from_slice(&frame.payload[..copy_len]);
+                        let copy_len = payload.len().min(msg.buf.len());
+                        msg.buf[..copy_len].copy_from_slice(&payload[..copy_len]);
                         msg.len = copy_len;
 
-                        match frame.transport {
+                        match transport {
                             TransportSelector::BleExtAdv => {
                                 ble_tx.send(msg).await;
                             }
@@ -70,6 +93,13 @@ pub async fn usb_serial_task(
                             }
                         }
                     }
+                    Ok(BridgeFrame::ControlRequest(req)) => match req {
+                        BridgeControlRequest::ListEspNowPeers => {
+                            let peers = snapshot_peers();
+                            reply_control(&mut usb, BridgeControlResponse::EspNowPeers(peers))
+                                .await;
+                        }
+                    },
                     Err(_) => {
                         // Malformed frame — discard silently.
                     }

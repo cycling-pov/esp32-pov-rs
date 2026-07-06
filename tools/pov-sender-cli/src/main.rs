@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
 use pov_sender_core::{
-    DownloadKind, DownloadRequest, PolarEncodeOptions, SensorOffsets, SerialLinkConfig,
-    SpokeCommand, Transport as CoreTransport, send_command, send_download, send_image,
-    send_sensor_offsets, send_video,
+    DownloadKind, DownloadRequest, EspNowDelivery, PolarEncodeOptions, SensorOffsets,
+    SerialLinkConfig, SpokeCommand, Transport as CoreTransport, send_command, send_download,
+    send_image, send_sensor_offsets, send_video,
 };
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -137,6 +137,8 @@ fn main() -> anyhow::Result<()> {
         port: args.port,
         baud: args.baud,
         transport: args.transport.into(),
+        esp_now_delivery: EspNowDelivery::Broadcast,
+        esp_now_retries: 0,
         repeat: args.repeat,
         inter_packet_delay_ms: 1_000,
     };

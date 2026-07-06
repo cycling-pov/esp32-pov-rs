@@ -50,7 +50,21 @@ Supported transports:
 - `ble`
 - `espnow`
 
-## 3. Reliability options
+## 3. ESP-NOW broadcast vs stateful target mode (GUI)
+
+In the sender GUI, ESP-NOW sends can now run in either:
+
+- `broadcast` mode (legacy behavior, FF:FF:FF:FF:FF:FF)
+- `stateful` mode (target a selected discovered peer MAC)
+
+Use `Refresh Peers` to request the bridge's current discovered peer list, then
+select a peer and set `Retries`.
+
+Stateful mode retries failed ESP-NOW transmissions at the bridge layer to
+improve reliability for commands like image/download sends and future response
+flows (for example, storage stats queries).
+
+## 4. Reliability options
 
 `--repeat` resends each generated packet multiple times in randomized order.
 
@@ -60,7 +74,7 @@ cargo run -- --port <serial-port> --repeat 3 send-image --image kirby.png
 
 This improves delivery over lossy links or when BLE/ESP-NOW coexistence causes intermittent packet loss.
 
-## 4. Serial port examples
+## 5. Serial port examples
 
 - Windows: `COM5`
 - Linux: `/dev/ttyUSB0`

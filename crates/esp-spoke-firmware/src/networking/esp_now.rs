@@ -1,6 +1,9 @@
 use defmt::{debug, info, warn};
 use embassy_executor::Spawner;
-use esp_radio::esp_now::EspNow;
+use embassy_futures::select::{Either, select};
+use embassy_time::{Duration, Ticker};
+use esp_radio::esp_now::{BROADCAST_ADDRESS, EspNow};
+use pov_proto::bridge::ESPNOW_DISCOVERY_BEACON;
 
 pub fn start_esp_now_backend(spawner: Spawner, esp_now: EspNow<'static>) {
     spawner.spawn(esp_now_backend_task(esp_now).unwrap());
@@ -29,48 +32,64 @@ pub async fn esp_now_backend_task(mut esp_now: EspNow<'static>) {
     info!("Waiting for ESP-NOW packets...");
 
     let mut consecutive_packets = 0u32;
+    let mut beacon_tick = Ticker::every(Duration::from_secs(2));
 
     loop {
-        let received = esp_now.receive_async().await;
-        let payload = received.data();
-        let src = received.info.src_address;
-
-        debug!(
-            "ESP-NOW packet received: src={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} bytes={=usize}",
-            src[0],
-            src[1],
-            src[2],
-            src[3],
-            src[4],
-            src[5],
-            payload.len()
-        );
-
-        // Track burst traffic for diagnostics
-        consecutive_packets += 1;
-        if consecutive_packets.is_multiple_of(10) {
-            info!(
-                "ESP-NOW: received {} packets in active session",
-                consecutive_packets
-            );
-        }
-
-        match super::ingest_espnow_payload(payload) {
-            Ok(()) => {
-                debug!("ESP-NOW packet successfully ingested");
+        match select(beacon_tick.next(), esp_now.receive_async()).await {
+            Either::First(_) => {
+                if let Err(err) = esp_now
+                    .send_async(&BROADCAST_ADDRESS, ESPNOW_DISCOVERY_BEACON)
+                    .await
+                {
+                    warn!("ESP-NOW discovery beacon send failed: {:?}", err);
+                }
             }
-            Err(err) => {
-                warn!(
-                    "ESP-NOW packet ingest failed: src={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} bytes={=usize} err={:?}",
+            Either::Second(received) => {
+                let payload = received.data();
+                let src = received.info.src_address;
+
+                debug!(
+                    "ESP-NOW packet received: src={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} bytes={=usize}",
                     src[0],
                     src[1],
                     src[2],
                     src[3],
                     src[4],
                     src[5],
-                    payload.len(),
-                    err
+                    payload.len()
                 );
+
+                if payload == ESPNOW_DISCOVERY_BEACON {
+                    continue;
+                }
+
+                // Track burst traffic for diagnostics
+                consecutive_packets += 1;
+                if consecutive_packets.is_multiple_of(10) {
+                    info!(
+                        "ESP-NOW: received {} packets in active session",
+                        consecutive_packets
+                    );
+                }
+
+                match super::ingest_espnow_payload(payload) {
+                    Ok(()) => {
+                        debug!("ESP-NOW packet successfully ingested");
+                    }
+                    Err(err) => {
+                        warn!(
+                            "ESP-NOW packet ingest failed: src={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} bytes={=usize} err={:?}",
+                            src[0],
+                            src[1],
+                            src[2],
+                            src[3],
+                            src[4],
+                            src[5],
+                            payload.len(),
+                            err
+                        );
+                    }
+                }
             }
         }
     }
