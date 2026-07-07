@@ -2,3 +2,6 @@
 # Override workspace default target (xtensa) with the current host target.
 # This keeps the GUI portable across Windows/macOS/Linux.
 target = "host-tuple"
+
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg=web_sys_unstable_apis"]

@@ -33,6 +33,9 @@ target
 # Build-script partition selection stamp
 crates/esp-spoke-firmware/.partitions-selected
 
+# GUI
+dist/
+
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore

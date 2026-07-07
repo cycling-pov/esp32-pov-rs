@@ -5,6 +5,47 @@ edition = "2024"
 
 [dependencies]
 pov-sender-core = { path = "../pov-sender-core" }
-iced = "0.12"
-rfd = "0.15"
 anyhow = "1"
+pov-proto = { path = "../../crates/pov-proto", features = [
+    "bridge",
+    "image-encode",
+] }
+postcard = { version = "1", features = ["use-std"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+iced = "0.14.0"
+rfd = "0.15"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+iced = { version = "0.14.0", default-features = false, features = [
+    "fira-sans",
+    "wgpu-bare",
+    "webgl",
+] }
+wasm-bindgen-futures = "0.4"
+gloo-timers = { version = "0.3", features = ["futures"] }
+js-sys = "0.3"
+futures-channel = "0.3"
+image = { version = "0.25", default-features = false, features = [
+    "gif",
+    "png",
+    "jpeg",
+    "bmp",
+] }
+pov-images = { path = "../../crates/pov-images" }
+web-sys = { version = "=0.3.78", features = [
+    "Window",
+    "Document",
+    "HtmlInputElement",
+    "Event",
+    "File",
+    "FileList",
+    "Blob",
+    "Navigator",
+    "Serial",
+    "SerialPort",
+    "SerialOptions",
+    "ReadableStream",
+    "WritableStream",
+    "WritableStreamDefaultWriter",
+] }

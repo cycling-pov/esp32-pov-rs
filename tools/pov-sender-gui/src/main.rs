@@ -1,15 +1,20 @@
 use std::path::PathBuf;
 
 use iced::{
-    Application, Command, Element, Length, Settings, Theme,
+    Element, Length, Task,
     widget::{button, checkbox, column, container, pick_list, row, text, text_input},
 };
 use pov_sender_core::{
     DownloadKind, DownloadRequest, EspNowDelivery, PolarEncodeOptions, SensorOffsets,
-    SerialLinkConfig, SpokeCommand, Transport, list_esp_now_peers, list_serial_ports,
-    request_storage_stats, send_command, send_download, send_image, send_sensor_offsets,
+    SerialLinkConfig, SpokeCommand, Transport, list_esp_now_peers, request_storage_stats,
+    send_command, send_download, send_image, send_sensor_offsets,
     send_video_with_max_fps,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use pov_sender_core::list_serial_ports;
+
+#[cfg(target_arch = "wasm32")]
+mod web_serial;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TransportUi {
@@ -122,6 +127,10 @@ impl CommandTab {
 enum Message {
     RefreshPorts,
     PortsLoaded(Result<Vec<String>, String>),
+    #[cfg(target_arch = "wasm32")]
+    RequestPort,
+    #[cfg(target_arch = "wasm32")]
+    PortRequested(Result<Vec<String>, String>),
     RefreshPeers,
     PeersLoaded(Result<Vec<EspNowPeerUi>, String>),
     SelectPort(String),
@@ -136,7 +145,11 @@ enum Message {
     LastDistanceChanged(String),
     GifMaxFpsChanged(String),
     PickImage,
+    #[cfg(target_arch = "wasm32")]
+    ImagePicked(Result<web_serial::SelectedWebFile, String>),
     PickDownload,
+    #[cfg(target_arch = "wasm32")]
+    DownloadPicked(Result<web_serial::SelectedWebFile, String>),
     SelectTab(CommandTab),
     SendImage,
     SendOta,
@@ -157,6 +170,10 @@ enum Message {
 
 struct SenderGui {
     ports: Vec<String>,
+    #[cfg(target_arch = "wasm32")]
+    web_ports: Vec<web_serial::WebSerialPort>,
+    #[cfg(target_arch = "wasm32")]
+    web_serial_error_banner: Option<String>,
     selected_port: Option<String>,
     peers: Vec<EspNowPeerUi>,
     selected_peer: Option<EspNowPeerUi>,
@@ -169,7 +186,11 @@ struct SenderGui {
     first_led_distance: String,
     last_led_distance: String,
     gif_max_fps: String,
+    #[cfg(target_arch = "wasm32")]
+    image_file: Option<web_serial::SelectedWebFile>,
     image_path: Option<PathBuf>,
+    #[cfg(target_arch = "wasm32")]
+    download_file: Option<web_serial::SelectedWebFile>,
     download_path: Option<PathBuf>,
     active_tab: CommandTab,
     hall_offset_0_degrees: String,
@@ -185,6 +206,10 @@ impl Default for SenderGui {
     fn default() -> Self {
         Self {
             ports: Vec::new(),
+            #[cfg(target_arch = "wasm32")]
+            web_ports: Vec::new(),
+            #[cfg(target_arch = "wasm32")]
+            web_serial_error_banner: None,
             selected_port: None,
             peers: Vec::new(),
             selected_peer: None,
@@ -197,7 +222,11 @@ impl Default for SenderGui {
             first_led_distance: "18".to_string(),
             last_led_distance: "72".to_string(),
             gif_max_fps: String::new(),
+            #[cfg(target_arch = "wasm32")]
+            image_file: None,
             image_path: None,
+            #[cfg(target_arch = "wasm32")]
+            download_file: None,
             download_path: None,
             active_tab: CommandTab::SendImage,
             hall_offset_0_degrees: String::new(),
@@ -211,38 +240,62 @@ impl Default for SenderGui {
     }
 }
 
-impl Application for SenderGui {
-    type Executor = iced::executor::Default;
-    type Message = Message;
-    type Theme = Theme;
-    type Flags = ();
-
-    fn new(_flags: Self::Flags) -> (Self, Command<Self::Message>) {
-        (
-            Self::default(),
-            Command::perform(
-                async { list_serial_ports().map_err(|e| e.to_string()) },
-                Message::PortsLoaded,
-            ),
-        )
+fn init_task() -> Task<Message> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        return Task::perform(
+            async { list_serial_ports().map_err(|e| e.to_string()) },
+            Message::PortsLoaded,
+        );
     }
 
-    fn title(&self) -> String {
-        "POV Sender GUI".to_string()
+    #[cfg(target_arch = "wasm32")]
+    {
+        Task::perform(web_serial::list_port_labels(), Message::PortsLoaded)
     }
+}
 
-    fn update(&mut self, message: Self::Message) -> Command<Self::Message> {
+fn boot() -> (SenderGui, Task<Message>) {
+    (SenderGui::default(), init_task())
+}
+
+fn update(state: &mut SenderGui, message: Message) -> Task<Message> {
+    state.update(message)
+}
+
+fn view(state: &SenderGui) -> Element<'_, Message> {
+    state.view()
+}
+
+impl SenderGui {
+
+    #[cfg_attr(target_arch = "wasm32", allow(unreachable_code))]
+    fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::RefreshPorts => {
                 self.status = "Refreshing serial ports...".to_string();
-                Command::perform(
-                    async { list_serial_ports().map_err(|e| e.to_string()) },
-                    Message::PortsLoaded,
-                )
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    return Task::perform(
+                        async { list_serial_ports().map_err(|e| e.to_string()) },
+                        Message::PortsLoaded,
+                    );
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                {
+                    return Task::perform(web_serial::list_port_labels(), Message::PortsLoaded);
+                }
             }
             Message::PortsLoaded(result) => {
                 match result {
                     Ok(ports) => {
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            self.web_ports = web_serial::cached_ports();
+                            self.web_serial_error_banner = None;
+                        }
+
                         if let Some(selected) = &self.selected_port
                             && !ports.iter().any(|p| p == selected)
                         {
@@ -252,17 +305,52 @@ impl Application for SenderGui {
                         self.status = format!("Found {} serial port(s)", self.ports.len());
                     }
                     Err(err) => {
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            self.web_serial_error_banner = Some(err.clone());
+                        }
                         self.status = format!("Port refresh failed: {err}");
                     }
                 }
-                Command::none()
+                Task::none()
+            }
+            #[cfg(target_arch = "wasm32")]
+            Message::RequestPort => {
+                self.status = "Requesting browser serial device permission...".to_string();
+                Task::perform(
+                    web_serial::request_port_and_list_labels(),
+                    Message::PortRequested,
+                )
+            }
+            #[cfg(target_arch = "wasm32")]
+            Message::PortRequested(result) => {
+                match result {
+                    Ok(ports) => {
+                        self.web_ports = web_serial::cached_ports();
+                        self.web_serial_error_banner = None;
+                        self.ports = ports;
+                        self.status = format!("Browser serial device added. {} available.", self.ports.len());
+                    }
+                    Err(err) => {
+                        self.web_serial_error_banner = Some(err.clone());
+                        self.status = format!("Serial permission request failed: {err}");
+                    }
+                }
+                Task::none()
             }
             Message::RefreshPeers => {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    self.status =
+                        "ESP-NOW peer refresh is not supported in the web build yet".to_string();
+                    return Task::none();
+                }
+
                 let port = match self.selected_port.clone() {
                     Some(port) => port,
                     None => {
                         self.status = "Select a serial port first".to_string();
-                        return Command::none();
+                        return Task::none();
                     }
                 };
 
@@ -270,12 +358,12 @@ impl Application for SenderGui {
                     Ok(baud) => baud,
                     Err(_) => {
                         self.status = "Invalid baud rate".to_string();
-                        return Command::none();
+                        return Task::none();
                     }
                 };
 
                 self.status = "Refreshing ESP-NOW peers...".to_string();
-                Command::perform(
+                Task::perform(
                     async move {
                         let peers = list_esp_now_peers(&port, baud)
                             .map_err(|e| e.to_string())?
@@ -302,63 +390,113 @@ impl Application for SenderGui {
                         self.status = format!("Peer refresh failed: {err}");
                     }
                 }
-                Command::none()
+                Task::none()
             }
             Message::SelectPort(port) => {
                 self.selected_port = Some(port);
-                Command::none()
+                Task::none()
             }
             Message::SelectTransport(transport) => {
                 self.transport = transport;
-                Command::none()
+                Task::none()
             }
             Message::SelectEspNowMode(mode) => {
                 self.esp_now_mode = mode;
-                Command::none()
+                Task::none()
             }
             Message::SelectPeer(peer) => {
                 self.selected_peer = Some(peer);
-                Command::none()
+                Task::none()
             }
             Message::EspNowRetriesChanged(value) => {
                 self.esp_now_retries = value;
-                Command::none()
+                Task::none()
             }
             Message::BaudChanged(value) => {
                 self.baud = value;
-                Command::none()
+                Task::none()
             }
             Message::RepeatChanged(value) => {
                 self.repeat = value;
-                Command::none()
+                Task::none()
             }
             Message::PolarToggled(enabled) => {
                 self.polar_enabled = enabled;
-                Command::none()
+                Task::none()
             }
             Message::FirstDistanceChanged(value) => {
                 self.first_led_distance = value;
-                Command::none()
+                Task::none()
             }
             Message::LastDistanceChanged(value) => {
                 self.last_led_distance = value;
-                Command::none()
+                Task::none()
             }
             Message::GifMaxFpsChanged(value) => {
                 self.gif_max_fps = value;
-                Command::none()
+                Task::none()
             }
             Message::PickImage => {
-                self.image_path = rfd::FileDialog::new().pick_file();
-                Command::none()
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.image_path = rfd::FileDialog::new().pick_file();
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                {
+                    self.status = "Opening browser image picker...".to_string();
+                    return Task::perform(
+                        web_serial::pick_file("image/*,.gif"),
+                        Message::ImagePicked,
+                    );
+                }
+                Task::none()
+            }
+            #[cfg(target_arch = "wasm32")]
+            Message::ImagePicked(result) => {
+                match result {
+                    Ok(file) => {
+                        self.image_file = Some(file);
+                        self.status = "Image selected".to_string();
+                    }
+                    Err(err) => {
+                        self.status = format!("Image selection failed: {err}");
+                    }
+                }
+                Task::none()
             }
             Message::PickDownload => {
-                self.download_path = rfd::FileDialog::new().pick_file();
-                Command::none()
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.download_path = rfd::FileDialog::new().pick_file();
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                {
+                    self.status = "Opening browser OTA picker...".to_string();
+                    return Task::perform(
+                        web_serial::pick_file(".bin,.ota,application/octet-stream"),
+                        Message::DownloadPicked,
+                    );
+                }
+                Task::none()
+            }
+            #[cfg(target_arch = "wasm32")]
+            Message::DownloadPicked(result) => {
+                match result {
+                    Ok(file) => {
+                        self.download_file = Some(file);
+                        self.status = "OTA payload selected".to_string();
+                    }
+                    Err(err) => {
+                        self.status = format!("OTA selection failed: {err}");
+                    }
+                }
+                Task::none()
             }
             Message::SelectTab(tab) => {
                 self.active_tab = tab;
-                Command::none()
+                Task::none()
             }
             Message::SendImage => self.run_send_image(),
             Message::SendOta => self.run_send_ota(),
@@ -368,21 +506,21 @@ impl Application for SenderGui {
             Message::ClearAllImages => self.run_command(SpokeCommand::ClearAllImages),
             Message::ActiveSlotInputChanged(value) => {
                 self.active_slot_input = value;
-                Command::none()
+                Task::none()
             }
             Message::SetActiveSlot => self.run_set_active_slot(),
             Message::RequestStorageStats => self.run_request_storage_stats(),
             Message::HallOffset0Changed(value) => {
                 self.hall_offset_0_degrees = value;
-                Command::none()
+                Task::none()
             }
             Message::HallOffset1Changed(value) => {
                 self.hall_offset_1_degrees = value;
-                Command::none()
+                Task::none()
             }
             Message::ImuOffsetChanged(value) => {
                 self.imu_offset_degrees = value;
-                Command::none()
+                Task::none()
             }
             Message::SetSensorOffsets => self.run_set_sensor_offsets(),
             Message::StorageStatsDone(result) => {
@@ -394,7 +532,7 @@ impl Application for SenderGui {
                     }
                     Err(err) => err,
                 };
-                Command::none()
+                Task::none()
             }
             Message::ActionDone(result) => {
                 self.busy = false;
@@ -402,27 +540,33 @@ impl Application for SenderGui {
                     Ok(msg) => msg,
                     Err(err) => err,
                 };
-                Command::none()
+                Task::none()
             }
         }
     }
 
-    fn view(&self) -> Element<'_, Self::Message> {
-        let port_panel = column![
-            text("Serial Ports").size(24),
-            row![
-                pick_list(
-                    self.ports.clone(),
-                    self.selected_port.clone(),
-                    Message::SelectPort
-                )
-                .placeholder("Select serial port")
-                .width(Length::Fill),
-                button("Refresh").on_press(Message::RefreshPorts),
-            ]
-            .spacing(10),
+    fn view(&self) -> Element<'_, Message> {
+        let ports_row = row![
+            pick_list(
+                self.ports.clone(),
+                self.selected_port.clone(),
+                Message::SelectPort
+            )
+            .placeholder("Select serial port")
+            .width(Length::Fill),
+            button("Refresh").on_press(Message::RefreshPorts),
         ]
         .spacing(10);
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = &ports_row;
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        let ports_row = ports_row.push(button("Connect").on_press(Message::RequestPort));
+
+        let port_panel = column![text("Serial Ports").size(24), ports_row].spacing(10);
 
         let transport_panel = row![
             text("Transport"),
@@ -490,6 +634,18 @@ impl Application for SenderGui {
             .padding(16)
             .width(Length::Fill);
 
+        #[cfg(target_arch = "wasm32")]
+        if let Some(message) = &self.web_serial_error_banner {
+            let banner = container(
+                text(format!(
+                    "Web Serial unavailable: {message}"
+                )),
+            )
+            .padding(10)
+            .width(Length::Fill);
+            content = content.push(banner);
+        }
+
         if self.transport == TransportUi::Espnow {
             content = content.push(esp_now_panel);
         }
@@ -515,6 +671,14 @@ impl SenderGui {
     }
 
     fn send_image_tab(&self) -> Element<'_, Message> {
+        #[cfg(target_arch = "wasm32")]
+        let image_path_text = self
+            .image_file
+            .as_ref()
+            .map(|f| f.name.clone())
+            .unwrap_or_else(|| "No image selected".to_string());
+
+        #[cfg(not(target_arch = "wasm32"))]
         let image_path_text = self
             .image_path
             .as_ref()
@@ -529,7 +693,9 @@ impl SenderGui {
             ]
             .spacing(10),
             row![
-                checkbox("Polar mode", self.polar_enabled).on_toggle(Message::PolarToggled),
+                checkbox(self.polar_enabled)
+                    .label("Polar mode")
+                    .on_toggle(Message::PolarToggled),
                 text_input("first LED distance", &self.first_led_distance)
                     .on_input(Message::FirstDistanceChanged),
                 text_input("last LED distance", &self.last_led_distance)
@@ -545,6 +711,14 @@ impl SenderGui {
     }
 
     fn send_ota_tab(&self) -> Element<'_, Message> {
+        #[cfg(target_arch = "wasm32")]
+        let download_path_text = self
+            .download_file
+            .as_ref()
+            .map(|f| f.name.clone())
+            .unwrap_or_else(|| "No payload selected".to_string());
+
+        #[cfg(not(target_arch = "wasm32"))]
         let download_path_text = self
             .download_path
             .as_ref()
@@ -661,12 +835,92 @@ impl SenderGui {
         })
     }
 
-    fn run_send_image(&mut self) -> Command<Message> {
+    #[cfg_attr(target_arch = "wasm32", allow(unreachable_code))]
+    fn run_send_image(&mut self) -> Task<Message> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let file = match self.image_file.clone() {
+                Some(file) => file,
+                None => {
+                    self.status = "Pick an image file first".to_string();
+                    return Task::none();
+                }
+            };
+
+            let config = match self.parse_link_config() {
+                Ok(config) => config,
+                Err(err) => {
+                    self.status = err;
+                    return Task::none();
+                }
+            };
+
+            let selected_label = config.port.clone();
+            let Some(index) = self.ports.iter().position(|p| p == &selected_label) else {
+                self.status = "Selected browser serial port is no longer available".to_string();
+                return Task::none();
+            };
+
+            let Some(port) = self.web_ports.get(index).cloned() else {
+                self.status = "Missing browser serial port handle. Reconnect the device.".to_string();
+                return Task::none();
+            };
+
+            let polar = if self.polar_enabled {
+                let first_led_distance = match self.first_led_distance.parse::<f32>() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        self.status = "Invalid first LED distance".to_string();
+                        return Task::none();
+                    }
+                };
+
+                let last_led_distance = match self.last_led_distance.parse::<f32>() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        self.status = "Invalid last LED distance".to_string();
+                        return Task::none();
+                    }
+                };
+
+                Some(PolarEncodeOptions {
+                    first_led_distance,
+                    last_led_distance,
+                })
+            } else {
+                None
+            };
+
+            let gif_max_fps = if self.gif_max_fps.trim().is_empty() {
+                None
+            } else {
+                match self.gif_max_fps.trim().parse::<u16>() {
+                    Ok(value) if value > 0 => Some(value),
+                    _ => {
+                        self.status = "GIF max FPS must be a positive integer".to_string();
+                        return Task::none();
+                    }
+                }
+            };
+
+            self.busy = true;
+            self.status = if file.name.to_ascii_lowercase().ends_with(".gif") {
+                "GIF detected; encoding and sending video...".to_string()
+            } else {
+                "Sending image...".to_string()
+            };
+
+            return Task::perform(
+                web_serial::send_image_file_over_web_serial(port, config, file, polar, gif_max_fps),
+                Message::ActionDone,
+            );
+        }
+
         let image_path = match self.image_path.clone() {
             Some(path) => path,
             None => {
                 self.status = "Pick an image file first".to_string();
-                return Command::none();
+                return Task::none();
             }
         };
 
@@ -674,7 +928,7 @@ impl SenderGui {
             Ok(config) => config,
             Err(err) => {
                 self.status = err;
-                return Command::none();
+                return Task::none();
             }
         };
 
@@ -683,7 +937,7 @@ impl SenderGui {
                 Ok(value) => value,
                 Err(_) => {
                     self.status = "Invalid first LED distance".to_string();
-                    return Command::none();
+                    return Task::none();
                 }
             };
 
@@ -691,7 +945,7 @@ impl SenderGui {
                 Ok(value) => value,
                 Err(_) => {
                     self.status = "Invalid last LED distance".to_string();
-                    return Command::none();
+                    return Task::none();
                 }
             };
 
@@ -715,7 +969,7 @@ impl SenderGui {
                 Ok(value) if value > 0 => Some(value),
                 _ => {
                     self.status = "GIF max FPS must be a positive integer".to_string();
-                    return Command::none();
+                    return Task::none();
                 }
             }
         };
@@ -727,7 +981,7 @@ impl SenderGui {
             "Sending image...".to_string()
         };
 
-        Command::perform(
+        Task::perform(
             async move {
                 let stats = if is_gif {
                     send_video_with_max_fps(&config, &image_path, polar, gif_max_fps)
@@ -752,12 +1006,51 @@ impl SenderGui {
         )
     }
 
-    fn run_send_ota(&mut self) -> Command<Message> {
+    #[cfg_attr(target_arch = "wasm32", allow(unreachable_code))]
+    fn run_send_ota(&mut self) -> Task<Message> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let file = match self.download_file.clone() {
+                Some(file) => file,
+                None => {
+                    self.status = "Pick an OTA file first".to_string();
+                    return Task::none();
+                }
+            };
+
+            let config = match self.parse_link_config() {
+                Ok(config) => config,
+                Err(err) => {
+                    self.status = err;
+                    return Task::none();
+                }
+            };
+
+            let selected_label = config.port.clone();
+            let Some(index) = self.ports.iter().position(|p| p == &selected_label) else {
+                self.status = "Selected browser serial port is no longer available".to_string();
+                return Task::none();
+            };
+
+            let Some(port) = self.web_ports.get(index).cloned() else {
+                self.status = "Missing browser serial port handle. Reconnect the device.".to_string();
+                return Task::none();
+            };
+
+            self.busy = true;
+            self.status = "Sending OTA...".to_string();
+
+            return Task::perform(
+                web_serial::send_ota_file_over_web_serial(port, config, file),
+                Message::ActionDone,
+            );
+        }
+
         let file_path = match self.download_path.clone() {
             Some(path) => path,
             None => {
                 self.status = "Pick an OTA file first".to_string();
-                return Command::none();
+                return Task::none();
             }
         };
 
@@ -765,14 +1058,14 @@ impl SenderGui {
             Ok(config) => config,
             Err(err) => {
                 self.status = err;
-                return Command::none();
+                return Task::none();
             }
         };
 
         self.busy = true;
         self.status = "Sending OTA...".to_string();
 
-        Command::perform(
+        Task::perform(
             async move {
                 let request = DownloadRequest {
                     file_path: file_path.as_path(),
@@ -788,19 +1081,42 @@ impl SenderGui {
         )
     }
 
-    fn run_command(&mut self, command: SpokeCommand) -> Command<Message> {
+    #[cfg_attr(target_arch = "wasm32", allow(unreachable_code))]
+    fn run_command(&mut self, command: SpokeCommand) -> Task<Message> {
         let config = match self.parse_link_config() {
             Ok(config) => config,
             Err(err) => {
                 self.status = err;
-                return Command::none();
+                return Task::none();
             }
         };
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let selected_label = config.port.clone();
+            let Some(index) = self.ports.iter().position(|p| p == &selected_label) else {
+                self.status = "Selected browser serial port is no longer available".to_string();
+                return Task::none();
+            };
+
+            let Some(port) = self.web_ports.get(index).cloned() else {
+                self.status = "Missing browser serial port handle. Reconnect the device.".to_string();
+                return Task::none();
+            };
+
+            self.busy = true;
+            self.status = "Sending command over Web Serial...".to_string();
+
+            return Task::perform(
+                web_serial::send_command_over_web_serial(port, config, command),
+                Message::ActionDone,
+            );
+        }
 
         self.busy = true;
         self.status = "Sending command...".to_string();
 
-        Command::perform(
+        Task::perform(
             async move {
                 let stats = send_command(&config, command).map_err(|e| e.to_string())?;
                 Ok(format!(
@@ -812,20 +1128,13 @@ impl SenderGui {
         )
     }
 
-    fn run_set_sensor_offsets(&mut self) -> Command<Message> {
-        let config = match self.parse_link_config() {
-            Ok(config) => config,
-            Err(err) => {
-                self.status = err;
-                return Command::none();
-            }
-        };
-
+    #[cfg_attr(target_arch = "wasm32", allow(unreachable_code))]
+    fn run_set_sensor_offsets(&mut self) -> Task<Message> {
         let hall_offset_0_degrees = match self.hall_offset_0_degrees.parse::<f32>() {
             Ok(value) => value,
             Err(_) => {
                 self.status = "Invalid hall offset 0".to_string();
-                return Command::none();
+                return Task::none();
             }
         };
 
@@ -833,7 +1142,7 @@ impl SenderGui {
             Ok(value) => value,
             Err(_) => {
                 self.status = "Invalid hall offset 1".to_string();
-                return Command::none();
+                return Task::none();
             }
         };
 
@@ -841,14 +1150,31 @@ impl SenderGui {
             Ok(value) => value,
             Err(_) => {
                 self.status = "Invalid IMU offset".to_string();
-                return Command::none();
+                return Task::none();
+            }
+        };
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            return self.run_command(SpokeCommand::SetSensorOffsets {
+                hall_offset_0_degrees,
+                hall_offset_1_degrees,
+                imu_offset_degrees,
+            });
+        }
+
+        let config = match self.parse_link_config() {
+            Ok(config) => config,
+            Err(err) => {
+                self.status = err;
+                return Task::none();
             }
         };
 
         self.busy = true;
         self.status = "Persisting sensor offsets...".to_string();
 
-        Command::perform(
+        Task::perform(
             async move {
                 let stats = send_sensor_offsets(
                     &config,
@@ -868,27 +1194,33 @@ impl SenderGui {
         )
     }
 
-    fn run_set_active_slot(&mut self) -> Command<Message> {
-        let config = match self.parse_link_config() {
-            Ok(config) => config,
-            Err(err) => {
-                self.status = err;
-                return Command::none();
-            }
-        };
-
+    #[cfg_attr(target_arch = "wasm32", allow(unreachable_code))]
+    fn run_set_active_slot(&mut self) -> Task<Message> {
         let slot = match self.active_slot_input.trim().parse::<u32>() {
             Ok(slot) => slot,
             Err(_) => {
                 self.status = "Invalid active slot".to_string();
-                return Command::none();
+                return Task::none();
+            }
+        };
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            return self.run_command(SpokeCommand::SetActiveSlot { slot });
+        }
+
+        let config = match self.parse_link_config() {
+            Ok(config) => config,
+            Err(err) => {
+                self.status = err;
+                return Task::none();
             }
         };
 
         self.busy = true;
         self.status = format!("Setting active slot to {}...", slot);
 
-        Command::perform(
+        Task::perform(
             async move {
                 let stats = send_command(&config, SpokeCommand::SetActiveSlot { slot })
                     .map_err(|e| e.to_string())?;
@@ -901,34 +1233,43 @@ impl SenderGui {
         )
     }
 
-    fn run_request_storage_stats(&mut self) -> Command<Message> {
+    #[cfg_attr(target_arch = "wasm32", allow(unreachable_code))]
+    fn run_request_storage_stats(&mut self) -> Task<Message> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.status =
+                "Storage stats is not available in the web build yet (response reads pending)"
+                    .to_string();
+            return Task::none();
+        }
+
         if self.transport != TransportUi::Espnow {
             self.status = "Storage stats requires espnow transport".to_string();
-            return Command::none();
+            return Task::none();
         }
 
         if self.esp_now_mode != EspNowModeUi::Stateful {
             self.status = "Storage stats requires stateful espnow mode".to_string();
-            return Command::none();
+            return Task::none();
         }
 
         if self.selected_peer.is_none() {
             self.status = "Select a target peer first".to_string();
-            return Command::none();
+            return Task::none();
         }
 
         let config = match self.parse_link_config() {
             Ok(config) => config,
             Err(err) => {
                 self.status = err;
-                return Command::none();
+                return Task::none();
             }
         };
 
         self.busy = true;
         self.status = "Requesting storage stats...".to_string();
 
-        Command::perform(
+        Task::perform(
             async move {
                 let stats = request_storage_stats(&config).map_err(|e| e.to_string())?;
                 Ok(format!(
@@ -949,5 +1290,8 @@ impl SenderGui {
 }
 
 fn main() -> iced::Result {
-    SenderGui::run(Settings::default())
+    iced::application(boot, update, view)
+        .title("POV Sender GUI")
+        .run()
 }
+
