@@ -13,7 +13,6 @@ use pov_proto::{
     },
     video,
 };
-use rand::seq::SliceRandom;
 use serialport::SerialPort;
 
 use crate::serial_link::open_serial_port;
@@ -237,10 +236,23 @@ pub fn send_video(
     gif_path: &Path,
     polar: Option<PolarEncodeOptions>,
 ) -> anyhow::Result<SendStats> {
+    send_video_with_max_fps(config, gif_path, polar, None)
+}
+
+pub fn send_video_with_max_fps(
+    config: &SerialLinkConfig,
+    gif_path: &Path,
+    polar: Option<PolarEncodeOptions>,
+    max_fps: Option<u16>,
+) -> anyhow::Result<SendStats> {
     if let Some(opts) = polar {
         validate_polar_options(opts)?;
     }
-    let payload = encode_gif_video_payload(gif_path, polar)?;
+    if let Some(fps) = max_fps {
+        anyhow::ensure!(fps > 0, "GIF max FPS must be greater than 0");
+    }
+
+    let payload = encode_gif_video_payload(gif_path, polar, max_fps)?;
     let packets = chunk_download_payload(
         &payload,
         DownloadKind::Video,
@@ -348,19 +360,15 @@ fn send_packets(config: &SerialLinkConfig, packets: &[Vec<u8>]) -> anyhow::Resul
     let mut port = open_serial_port(&config.port, config.baud)?;
     let transport_selector = config.transport.transport_selector();
     let esp_now_target = config.esp_now_delivery.target();
-    let mut rng = rand::rng();
 
     for _ in 0..repeat {
-        let mut packet_indices: Vec<usize> = (0..packets.len()).collect();
-        packet_indices.shuffle(&mut rng);
-
-        for &idx in &packet_indices {
+        for packet in packets {
             send_bridge_frame(
                 &mut *port,
                 transport_selector,
                 esp_now_target,
                 config.esp_now_retries,
-                &packets[idx],
+                packet,
                 config.inter_packet_delay_ms,
             )?;
         }
@@ -481,6 +489,7 @@ fn validate_polar_options(options: PolarEncodeOptions) -> anyhow::Result<()> {
 fn encode_gif_video_payload(
     gif_path: &Path,
     polar: Option<PolarEncodeOptions>,
+    max_fps: Option<u16>,
 ) -> anyhow::Result<Vec<u8>> {
     let gif_file = std::fs::File::open(gif_path)
         .with_context(|| format!("Failed to open GIF {:?}", gif_path))?;
@@ -500,17 +509,28 @@ fn encode_gif_video_payload(
         frames.len()
     );
 
-    // GIF delays are in units of 10 ms. Use the first non-zero delay and keep
-    // a fixed cadence in the wire format.
-    let frame_delay_ms = frames
+    // GIF delays are in units of 10 ms. Use the first non-zero delay as the
+    // baseline cadence in the wire format.
+    let base_frame_delay_ms = frames
         .iter()
         .map(|f| f.delay().numer_denom_ms().0)
         .find(|ms| *ms > 0)
-        .unwrap_or(100)
-        .min(u16::MAX as u32) as u16;
+        .unwrap_or(100);
 
-    let mut encoded_frames: Vec<Vec<u8>> = Vec::with_capacity(frames.len());
-    for frame in &frames {
+    let (frame_stride, frame_delay_ms) = if let Some(max_fps) = max_fps {
+        let min_delay_ms = 1000u32.div_ceil(max_fps as u32);
+        let stride = min_delay_ms.div_ceil(base_frame_delay_ms).max(1) as usize;
+        let delay_ms = base_frame_delay_ms
+            .saturating_mul(stride as u32)
+            .min(u16::MAX as u32) as u16;
+        (stride, delay_ms)
+    } else {
+        (1usize, base_frame_delay_ms.min(u16::MAX as u32) as u16)
+    };
+
+    let selected_frames = frames.iter().step_by(frame_stride);
+    let mut encoded_frames: Vec<Vec<u8>> = Vec::with_capacity(frames.len().div_ceil(frame_stride));
+    for frame in selected_frames {
         let rgba = frame.buffer().clone();
         let encoded = match polar {
             Some(opts) => encode_polar_rgba(&rgba, opts)?,
@@ -518,6 +538,17 @@ fn encode_gif_video_payload(
         };
         encoded_frames.push(encoded);
     }
+
+    anyhow::ensure!(
+        !encoded_frames.is_empty(),
+        "GIF frame selection produced no frames: {:?}",
+        gif_path
+    );
+    anyhow::ensure!(
+        encoded_frames.len() <= u16::MAX as usize,
+        "GIF has too many selected frames ({})",
+        encoded_frames.len()
+    );
 
     let total_frame_bytes: usize = encoded_frames
         .iter()

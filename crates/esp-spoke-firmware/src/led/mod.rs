@@ -40,6 +40,8 @@ pub enum LedCommand {
     Frame(CommandFrame),
     /// Load the image stored in the given flash slot and begin displaying it.
     LoadSlot(usize),
+    /// Enable or disable rendered LED output while keeping display state.
+    SetDisplayEnabled(bool),
 }
 
 static LED_COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, LedCommand, 4> = Channel::new();
@@ -62,6 +64,9 @@ pub fn try_send_led_command(cmd: LedCommand) -> bool {
         }
         LedCommand::LoadSlot(slot) => {
             info!("led:enqueue load_slot slot={}", slot);
+        }
+        LedCommand::SetDisplayEnabled(enabled) => {
+            info!("led:enqueue set_display_enabled={}", enabled);
         }
     }
 

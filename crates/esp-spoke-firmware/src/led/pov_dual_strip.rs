@@ -21,8 +21,6 @@ use crate::led::sk9822_strip::{SK9822_LED_COUNT, Sk9822Strip};
 use crate::led::task_common;
 use crate::led::{CORE1_FLASH_PAUSE_REQUESTED, CORE1_FLASH_PAUSED_COUNT};
 use crate::led::{LedCommand, LedError, LedStrip, LedTimings};
-#[cfg(feature = "status-led")]
-use crate::status_led::{self, StatusLedRequest};
 use crate::storage;
 
 /// Scratch buffer size: large enough for a full polar image (30×360×3 bytes).
@@ -52,6 +50,9 @@ static RENDERING_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// `true` while the render task should output random-noise frames.
 /// Cleared when any other display command is received.
 static RANDOMIZING: AtomicBool = AtomicBool::new(false);
+
+/// `true` while render output is allowed. When false, the strip stays dark.
+static DISPLAY_ENABLED: AtomicBool = AtomicBool::new(true);
 
 /// Busy-spins in IRAM while flash is being written.
 ///
@@ -231,6 +232,23 @@ pub async fn pov_render_task(
             continue;
         }
 
+        if !DISPLAY_ENABLED.load(Ordering::Relaxed) {
+            strips.strip0.clear();
+            strips.strip1.clear();
+            strips
+                .strip0
+                .show()
+                .await
+                .expect("pov: strip0 clear failed while display disabled");
+            strips
+                .strip1
+                .show()
+                .await
+                .expect("pov: strip1 clear failed while display disabled");
+            Timer::after(Duration::from_millis(1)).await;
+            continue;
+        }
+
         if RANDOMIZING.load(Ordering::Relaxed) {
             strips.randomize(&rng);
             let (s0, s1) = (&mut strips.strip0, &mut strips.strip1);
@@ -298,10 +316,6 @@ pub async fn pov_command_task(bitmap: &'static SharedBitmapMutex) -> ! {
     if initial_slot.is_some() {
         RENDERING_ACTIVE.store(true, Ordering::Relaxed);
         info!("pov:boot active image is downloaded from flash");
-        #[cfg(feature = "status-led")]
-        {
-            let _ = status_led::try_send_request(StatusLedRequest::BLINK_SLOW);
-        }
     } else {
         info!("pov:boot no valid flash image; starting with built-in");
     }
@@ -344,28 +358,16 @@ pub async fn pov_command_task(bitmap: &'static SharedBitmapMutex) -> ! {
                         RANDOMIZING.store(false, Ordering::Relaxed);
                         RENDERING_ACTIVE.store(false, Ordering::Relaxed);
                         video_playback = None;
-                        #[cfg(feature = "status-led")]
-                        {
-                            let _ = status_led::try_send_request(StatusLedRequest::OFF);
-                        }
                         info!("pov:cmd DisplayOff");
                     }
 
                     SpokeCommand::RandomizeDisplay => {
                         RANDOMIZING.store(true, Ordering::Relaxed);
-                        #[cfg(feature = "status-led")]
-                        {
-                            let _ = status_led::try_send_request(StatusLedRequest::BLINK_FAST);
-                        }
                         info!("pov:cmd RandomizeDisplay");
                     }
 
                     SpokeCommand::NextImage => {
                         RANDOMIZING.store(false, Ordering::Relaxed);
-                        #[cfg(feature = "status-led")]
-                        {
-                            let _ = status_led::try_send_request(StatusLedRequest::BLINK_SLOW);
-                        }
                         let image_ids = storage::list_image_ids().await.unwrap_or_default();
                         let next_slot = if image_ids.is_empty() {
                             None
@@ -445,10 +447,6 @@ pub async fn pov_command_task(bitmap: &'static SharedBitmapMutex) -> ! {
                         current_display_slot = Some(slot);
                         video_playback = None;
                         RENDERING_ACTIVE.store(true, Ordering::Relaxed);
-                        #[cfg(feature = "status-led")]
-                        {
-                            let _ = status_led::try_send_request(StatusLedRequest::BLINK_SLOW);
-                        }
                         info!("pov:cmd loaded flash slot {}", slot);
                     }
                     Some(task_common::LoadedFlashContent::Video(playback)) => {
@@ -462,6 +460,11 @@ pub async fn pov_command_task(bitmap: &'static SharedBitmapMutex) -> ! {
                         // Keep the current rendering state — old image stays on screen.
                     }
                 }
+            }
+
+            LedCommand::SetDisplayEnabled(enabled) => {
+                DISPLAY_ENABLED.store(enabled, Ordering::Relaxed);
+                info!("pov:cmd set_display_enabled={}", enabled);
             }
         }
     }

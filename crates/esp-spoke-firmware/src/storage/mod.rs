@@ -14,7 +14,7 @@ use pov_proto::transfer::DownloadKind;
 use pov_proto::video;
 
 use self::config::{ImageKind, ImageSlotState, SensorConfig, SlotMetadata, StorageIndex};
-use self::ekv_flash::EkvFlash;
+use self::ekv_flash::{EkvFlash, chunk_key};
 
 pub mod config;
 pub mod ekv_flash;
@@ -43,7 +43,7 @@ struct WriteState {
 
 struct CommitContext<'a> {
     total_capacity_bytes: u32,
-    write: &'a mut WriteState,
+    _write: &'a mut WriteState,
 }
 
 enum StorageRequest {
@@ -280,6 +280,77 @@ fn estimate_image_footprint(total_bytes: u32, chunk_count: u16) -> u32 {
 
 fn free_bytes(total_capacity: u32, used_bytes: u32) -> u32 {
     total_capacity.saturating_sub(used_bytes)
+}
+
+async fn compute_slot_crc_and_header(
+    db: &ekv_flash::EkvDatabase,
+    slot: usize,
+    total_bytes: u32,
+    chunk_count: u16,
+) -> Result<(u32, [u8; 16]), ()> {
+    let image_id = slot as u32;
+    let mut hasher = Crc32Hasher::new();
+    let mut remaining = total_bytes as usize;
+    let mut header = [0u8; 16];
+    let mut header_filled = 0usize;
+
+    let rtx = db.read_transaction().await;
+    let mut chunk_buf: Vec<u8> = alloc::vec![0u8; CHUNK_SIZE];
+
+    for chunk_num in 0..chunk_count {
+        if remaining == 0 {
+            break;
+        }
+
+        let n = rtx
+            .read(&chunk_key(image_id, chunk_num), &mut chunk_buf)
+            .await
+            .map_err(|_| {
+                warn!(
+                    "storage:commit_slot chunk read error image_id={} chunk={}",
+                    image_id, chunk_num
+                );
+            })?;
+
+        if n == 0 {
+            warn!(
+                "storage:commit_slot zero-length chunk image_id={} chunk={}",
+                image_id, chunk_num
+            );
+            return Err(());
+        }
+
+        let to_take = n.min(remaining);
+        hasher.update(&chunk_buf[..to_take]);
+
+        if header_filled < header.len() {
+            let copy_len = (header.len() - header_filled).min(to_take);
+            header[header_filled..header_filled + copy_len].copy_from_slice(&chunk_buf[..copy_len]);
+            header_filled += copy_len;
+        }
+
+        remaining = remaining.saturating_sub(to_take);
+    }
+
+    if remaining != 0 {
+        warn!(
+            "storage:commit_slot incomplete data image_id={} remaining_bytes={}",
+            image_id, remaining
+        );
+        return Err(());
+    }
+
+    if header_filled < header.len() {
+        warn!(
+            "storage:commit_slot missing header bytes image_id={} have={} need={}",
+            image_id,
+            header_filled,
+            header.len()
+        );
+        return Err(());
+    }
+
+    Ok((hasher.finalize(), header))
 }
 
 async fn evict_until_capacity(
@@ -602,7 +673,7 @@ pub async fn storage_task(flash: esp_hal::peripherals::FLASH<'static>) -> ! {
                 } else {
                     let mut commit = CommitContext {
                         total_capacity_bytes,
-                        write: &mut write,
+                        _write: &mut write,
                     };
                     commit_slot_ekv(
                         &db,
@@ -662,7 +733,8 @@ async fn commit_slot_ekv(
     chunk_count: u16,
     context: &mut CommitContext<'_>,
 ) -> Result<(), ()> {
-    let actual_crc = context.write.crc.take().map(|h| h.finalize()).unwrap_or(0);
+    let (actual_crc, header) =
+        compute_slot_crc_and_header(db, slot, total_bytes, chunk_count).await?;
     if actual_crc != expected_crc32 {
         warn!(
             "storage:commit_slot CRC mismatch image_id={} expected={=u32:#010x} actual={=u32:#010x}",
@@ -671,32 +743,26 @@ async fn commit_slot_ekv(
         return Err(());
     }
 
-    let header = match context.write.header.take() {
-        Some(h) => h,
-        None => {
-            warn!("storage:commit_slot missing header image_id={}", slot);
-            return Err(());
-        }
-    };
-
-    if &header[..3] != b"POV" || header[3] != 1 {
-        warn!(
-            "storage:commit_slot invalid header image_id={} magic={=[u8]:?} version={}",
-            slot,
-            &header[..3],
-            header[3]
-        );
-        return Err(());
-    }
-
     let encoding = match kind {
-        DownloadKind::DisplayImage => match postcard::take_from_bytes::<Encoding>(&header[4..]) {
-            Ok((enc, _)) => enc,
-            Err(_) => {
-                warn!("storage:commit_slot unknown encoding image_id={}", slot);
+        DownloadKind::DisplayImage => {
+            if &header[..3] != b"POV" || header[3] != 1 {
+                warn!(
+                    "storage:commit_slot invalid image header image_id={} magic={=[u8]:?} version={}",
+                    slot,
+                    &header[..3],
+                    header[3]
+                );
                 return Err(());
             }
-        },
+
+            match postcard::take_from_bytes::<Encoding>(&header[4..]) {
+                Ok((enc, _)) => enc,
+                Err(_) => {
+                    warn!("storage:commit_slot unknown encoding image_id={}", slot);
+                    return Err(());
+                }
+            }
+        }
         DownloadKind::Video => {
             if video::parse_header(&header).is_err() {
                 warn!("storage:commit_slot invalid video header image_id={}", slot);

@@ -165,6 +165,7 @@ fn check_and_initialize_gyro_bias(
             let inv_n = 1.0 / calibration_data.calibration_samples as f32;
             calibration_data.gyro_bias_dps = calibration_data.calibration_accum_dps * inv_n;
             calibration_data.calibrating_gyro_bias = false;
+            super::super::publish_imu_boot_calibrating(false);
             info!(
                 "spin:imu gyro bias calibrated dps=({=f32}, {=f32}, {=f32})",
                 calibration_data.gyro_bias_dps.x,
@@ -245,6 +246,7 @@ pub async fn imu_dual_spin_estimator_impl(
         calibration_samples: 0,
         calibration_reset_log_divider: 0,
     };
+    super::super::publish_imu_boot_calibrating(true);
 
     // Body-frame reference direction captured once after AHRS convergence.
     // Equals world-up projected onto the spin plane in body frame, so the

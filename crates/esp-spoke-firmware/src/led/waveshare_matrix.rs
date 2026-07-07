@@ -258,6 +258,10 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
                                             led_strip.render_from_bitmap(&bitmap).await;
                                         }
                                     }
+                                    Some(_) => {
+                                        video_playback = None;
+                                        warn!("waveshare:unsupported flash content kind for slot {}", slot);
+                                    }
                                     None => {
                                         video_playback = None;
                                         led_strip.clear();
@@ -331,10 +335,16 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
                         }
                         info!("waveshare:loop loaded video slot {}", slot);
                     }
+                    Some(_) => {
+                        warn!("waveshare:loop unsupported content kind in slot {}", slot);
+                    }
                     None => {
                         warn!("waveshare:loop failed to load flash slot {}", slot);
                     }
                 }
+            }
+            LedCommand::SetDisplayEnabled(enabled) => {
+                info!("waveshare:loop ignoring set_display_enabled={}", enabled);
             }
         }
     }

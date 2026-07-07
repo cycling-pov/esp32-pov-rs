@@ -52,7 +52,9 @@ use esp_spoke_firmware::pushbutton;
 #[cfg(any(feature = "pushbutton-1", feature = "pushbutton-2"))]
 use esp_spoke_firmware::pushbutton::ButtonId;
 #[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
-use esp_spoke_firmware::status_led;
+use esp_spoke_firmware::status_led::{self, StatusLedRequest};
+#[cfg(feature = "imu-spin")]
+use esp_spoke_firmware::angle_estimator::ImuCalibrationState;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use esp_spoke_firmware::storage;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
@@ -328,14 +330,105 @@ async fn main(spawner: Spawner) -> ! {
     #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
     let mut render_pause_held = false;
 
+    #[cfg(all(feature = "status-led", feature = "sk9822-strip", not(feature = "waveshare-matrix")))]
+    let mut desired_status = StatusLedRequest::BLINK_SLOW;
+
+    #[cfg(feature = "imu-spin")]
+    let mut imu_calibrating = true;
+
+    #[cfg(feature = "imu-spin")]
+    {
+        if !led::try_send_led_command(LedCommand::SetDisplayEnabled(false)) {
+            warn!("main:failed to enqueue initial display disable for imu calibration");
+        }
+    }
+
+    #[cfg(all(
+        feature = "status-led",
+        feature = "sk9822-strip",
+        not(feature = "waveshare-matrix"),
+        feature = "imu-spin"
+    ))]
+    {
+        let _ = status_led::try_send_request(StatusLedRequest::BLINK_FAST);
+    }
+
+    #[cfg(all(
+        feature = "status-led",
+        feature = "sk9822-strip",
+        not(feature = "waveshare-matrix"),
+        not(feature = "imu-spin")
+    ))]
+    {
+        let _ = status_led::try_send_request(desired_status);
+    }
+
     loop {
         // Forward networking events to the active LED task or storage layer.
         #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
         {
             info!("Loop: waiting for network event");
 
+            let mut command = None;
+            let mut chunk = None;
+
+            #[cfg(feature = "imu-spin")]
+            match select(
+                select(networking::receive_command(), networking::receive_chunk()),
+                esp_spoke_firmware::angle_estimator::receive_imu_boot_calibration_state(),
+            )
+            .await
+            {
+                Either::First(Either::First(cmd)) => {
+                    command = cmd;
+                }
+                Either::First(Either::Second(ch)) => {
+                    chunk = ch;
+                }
+                Either::Second(state) => {
+                    match state {
+                        ImuCalibrationState::Calibrating => {
+                            imu_calibrating = true;
+                            if !led::try_send_led_command(LedCommand::SetDisplayEnabled(false)) {
+                                warn!(
+                                    "main:failed to enqueue display disable during imu calibration"
+                                );
+                            }
+                        }
+                        ImuCalibrationState::Ready => {
+                            imu_calibrating = false;
+                            if !led::try_send_led_command(LedCommand::SetDisplayEnabled(true)) {
+                                warn!(
+                                    "main:failed to enqueue display enable after imu calibration"
+                                );
+                            }
+                        }
+                    }
+
+                    #[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
+                    {
+                        let effective = if imu_calibrating {
+                            StatusLedRequest::BLINK_FAST
+                        } else {
+                            desired_status
+                        };
+                        let _ = status_led::try_send_request(effective);
+                    }
+                    continue;
+                }
+            }
+
+            #[cfg(not(feature = "imu-spin"))]
             match select(networking::receive_command(), networking::receive_chunk()).await {
-                Either::First(Some(command)) => {
+                Either::First(cmd) => {
+                    command = cmd;
+                }
+                Either::Second(ch) => {
+                    chunk = ch;
+                }
+            }
+
+            if let Some(command) = command {
                     let transfer_id = command.frame.transfer_id;
                     let command_kind = command.frame.command;
                     match command.frame.command {
@@ -396,6 +489,26 @@ async fn main(spawner: Spawner) -> ! {
                                     "main:applied SetActiveSlot transfer_id={} slot={}",
                                     transfer_id, slot_usize
                                 );
+
+                                #[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
+                                {
+                                    desired_status = StatusLedRequest::BLINK_SLOW;
+                                    let effective = {
+                                        #[cfg(feature = "imu-spin")]
+                                        {
+                                            if imu_calibrating {
+                                                StatusLedRequest::BLINK_FAST
+                                            } else {
+                                                desired_status
+                                            }
+                                        }
+                                        #[cfg(not(feature = "imu-spin"))]
+                                        {
+                                            desired_status
+                                        }
+                                    };
+                                    let _ = status_led::try_send_request(effective);
+                                }
                             }
 
                             if set_slot_pause_held {
@@ -449,6 +562,26 @@ async fn main(spawner: Spawner) -> ! {
                                     "main:failed to enqueue DisplayOff after clear transfer_id={}",
                                     transfer_id
                                 );
+                            }
+
+                            #[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
+                            {
+                                desired_status = StatusLedRequest::OFF;
+                                let effective = {
+                                    #[cfg(feature = "imu-spin")]
+                                    {
+                                        if imu_calibrating {
+                                            StatusLedRequest::BLINK_FAST
+                                        } else {
+                                            desired_status
+                                        }
+                                    }
+                                    #[cfg(not(feature = "imu-spin"))]
+                                    {
+                                        desired_status
+                                    }
+                                };
+                                let _ = status_led::try_send_request(effective);
                             }
                         }
                         SpokeCommand::SetSensorOffsets {
@@ -541,6 +674,38 @@ async fn main(spawner: Spawner) -> ! {
                             }
                         }
                         _ => {
+                            #[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
+                            {
+                                match command_kind {
+                                    SpokeCommand::DisplayOff => {
+                                        desired_status = StatusLedRequest::OFF;
+                                    }
+                                    SpokeCommand::RandomizeDisplay => {
+                                        desired_status = StatusLedRequest::BLINK_FAST;
+                                    }
+                                    SpokeCommand::NextImage => {
+                                        desired_status = StatusLedRequest::BLINK_SLOW;
+                                    }
+                                    _ => {}
+                                }
+
+                                let effective = {
+                                    #[cfg(feature = "imu-spin")]
+                                    {
+                                        if imu_calibrating {
+                                            StatusLedRequest::BLINK_FAST
+                                        } else {
+                                            desired_status
+                                        }
+                                    }
+                                    #[cfg(not(feature = "imu-spin"))]
+                                    {
+                                        desired_status
+                                    }
+                                };
+                                let _ = status_led::try_send_request(effective);
+                            }
+
                             if !led::try_send_led_command(LedCommand::Frame(command.frame)) {
                                 warn!(
                                     "main:dropped frame transfer_id={} command={:?}",
@@ -554,10 +719,10 @@ async fn main(spawner: Spawner) -> ! {
                             }
                         }
                     }
-                }
-                Either::Second(Some(chunk)) => {
-                    // Only handle DisplayImage downloads; silently drop others.
-                    if chunk.kind != DownloadKind::DisplayImage {
+            } else if let Some(chunk) = chunk {
+                    // Accept renderable payloads (static images and videos).
+                    // Keep ignoring non-renderable transfer kinds (e.g. OTA).
+                    if !matches!(chunk.kind, DownloadKind::DisplayImage | DownloadKind::Video) {
                         info!(
                             "main:ignoring non-display download kind={:?} transfer_id={}",
                             chunk.kind, chunk.transfer_id
@@ -625,8 +790,16 @@ async fn main(spawner: Spawner) -> ! {
                         && a.transfer_id == transfer_id
                     {
                         let slot = a.slot;
-                        let byte_offset = chunk.byte_offset;
-                        let chunk_num = (byte_offset / storage::CHUNK_SIZE as u32) as u16;
+                        let chunk_num = match u16::try_from(chunk.chunk_index) {
+                            Ok(v) => v,
+                            Err(_) => {
+                                warn!(
+                                    "main:chunk index out of range slot={} idx={} transfer_id={}",
+                                    slot, chunk.chunk_index, transfer_id
+                                );
+                                continue;
+                            }
+                        };
                         let is_final = chunk.is_final;
 
                         if storage::write_slot_chunk(slot, chunk_num, &chunk.data)
@@ -666,6 +839,26 @@ async fn main(spawner: Spawner) -> ! {
                                             "main:dropped load_slot slot={} led channel full",
                                             a.slot
                                         );
+                                    } else {
+                                        #[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
+                                        {
+                                            desired_status = StatusLedRequest::BLINK_SLOW;
+                                            let effective = {
+                                                #[cfg(feature = "imu-spin")]
+                                                {
+                                                    if imu_calibrating {
+                                                        StatusLedRequest::BLINK_FAST
+                                                    } else {
+                                                        desired_status
+                                                    }
+                                                }
+                                                #[cfg(not(feature = "imu-spin"))]
+                                                {
+                                                    desired_status
+                                                }
+                                            };
+                                            let _ = status_led::try_send_request(effective);
+                                        }
                                     }
                                 }
                                 Err(()) => {
@@ -682,8 +875,6 @@ async fn main(spawner: Spawner) -> ! {
                             }
                         }
                     }
-                }
-                _ => {}
             }
         }
     }

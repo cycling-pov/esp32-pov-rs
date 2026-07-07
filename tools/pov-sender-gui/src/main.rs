@@ -8,7 +8,7 @@ use pov_sender_core::{
     DownloadKind, DownloadRequest, EspNowDelivery, PolarEncodeOptions, SensorOffsets,
     SerialLinkConfig, SpokeCommand, Transport, list_esp_now_peers, list_serial_ports,
     request_storage_stats, send_command, send_download, send_image, send_sensor_offsets,
-    send_video,
+    send_video_with_max_fps,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -134,6 +134,7 @@ enum Message {
     PolarToggled(bool),
     FirstDistanceChanged(String),
     LastDistanceChanged(String),
+    GifMaxFpsChanged(String),
     PickImage,
     PickDownload,
     SelectTab(CommandTab),
@@ -167,6 +168,7 @@ struct SenderGui {
     polar_enabled: bool,
     first_led_distance: String,
     last_led_distance: String,
+    gif_max_fps: String,
     image_path: Option<PathBuf>,
     download_path: Option<PathBuf>,
     active_tab: CommandTab,
@@ -194,6 +196,7 @@ impl Default for SenderGui {
             polar_enabled: false,
             first_led_distance: "18".to_string(),
             last_led_distance: "72".to_string(),
+            gif_max_fps: String::new(),
             image_path: None,
             download_path: None,
             active_tab: CommandTab::SendImage,
@@ -339,6 +342,10 @@ impl Application for SenderGui {
             }
             Message::LastDistanceChanged(value) => {
                 self.last_led_distance = value;
+                Command::none()
+            }
+            Message::GifMaxFpsChanged(value) => {
+                self.gif_max_fps = value;
                 Command::none()
             }
             Message::PickImage => {
@@ -527,6 +534,8 @@ impl SenderGui {
                     .on_input(Message::FirstDistanceChanged),
                 text_input("last LED distance", &self.last_led_distance)
                     .on_input(Message::LastDistanceChanged),
+                text_input("GIF max FPS (optional)", &self.gif_max_fps)
+                    .on_input(Message::GifMaxFpsChanged),
             ]
             .spacing(10),
         ]
@@ -699,6 +708,18 @@ impl SenderGui {
             .and_then(|ext| ext.to_str())
             .is_some_and(|ext| ext.eq_ignore_ascii_case("gif"));
 
+        let gif_max_fps = if self.gif_max_fps.trim().is_empty() {
+            None
+        } else {
+            match self.gif_max_fps.trim().parse::<u16>() {
+                Ok(value) if value > 0 => Some(value),
+                _ => {
+                    self.status = "GIF max FPS must be a positive integer".to_string();
+                    return Command::none();
+                }
+            }
+        };
+
         self.busy = true;
         self.status = if is_gif {
             "GIF detected; encoding and sending video...".to_string()
@@ -709,7 +730,8 @@ impl SenderGui {
         Command::perform(
             async move {
                 let stats = if is_gif {
-                    send_video(&config, &image_path, polar).map_err(|e| e.to_string())?
+                    send_video_with_max_fps(&config, &image_path, polar, gif_max_fps)
+                        .map_err(|e| e.to_string())?
                 } else {
                     send_image(&config, &image_path, polar).map_err(|e| e.to_string())?
                 };

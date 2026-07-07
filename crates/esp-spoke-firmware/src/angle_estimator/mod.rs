@@ -3,10 +3,12 @@ pub mod imu;
 pub mod mock;
 
 use core::cell::RefCell;
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+#[cfg(feature = "imu-spin")]
+use embassy_sync::channel::Channel;
 use pov_algs::{Angle, AngularVelocity};
 
 use crate::led::{CORE1_FLASH_PAUSE_REQUESTED, CORE1_FLASH_PAUSED_COUNT};
@@ -15,6 +17,19 @@ use crate::led::{CORE1_FLASH_PAUSE_REQUESTED, CORE1_FLASH_PAUSED_COUNT};
 pub use imu::imu_dual_spin_estimator_task;
 #[cfg(feature = "mock-spin")]
 pub use mock::mock_dual_spin_estimator_task;
+
+#[cfg(feature = "imu-spin")]
+static IMU_BOOT_CALIBRATING: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "imu-spin")]
+static IMU_CALIBRATION_STATE_CHANNEL: Channel<CriticalSectionRawMutex, ImuCalibrationState, 4> =
+    Channel::new();
+
+#[cfg(feature = "imu-spin")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImuCalibrationState {
+    Calibrating,
+    Ready,
+}
 
 /// Current rotational state of the spoke wheel.
 #[derive(Clone, Copy)]
@@ -47,6 +62,26 @@ pub const fn new_shared_spin_state() -> SharedSpinState {
 
 pub trait SpinEstimator {
     fn spin_state(&self) -> SpinState;
+}
+
+#[cfg(feature = "imu-spin")]
+pub fn publish_imu_boot_calibrating(calibrating: bool) {
+    let previous = IMU_BOOT_CALIBRATING.swap(calibrating, Ordering::AcqRel);
+    if previous == calibrating {
+        return;
+    }
+
+    let state = if calibrating {
+        ImuCalibrationState::Calibrating
+    } else {
+        ImuCalibrationState::Ready
+    };
+    let _ = IMU_CALIBRATION_STATE_CHANNEL.try_send(state);
+}
+
+#[cfg(feature = "imu-spin")]
+pub async fn receive_imu_boot_calibration_state() -> ImuCalibrationState {
+    IMU_CALIBRATION_STATE_CHANNEL.receive().await
 }
 
 /// Busy-spins in IRAM while flash is being written.

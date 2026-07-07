@@ -29,6 +29,7 @@ pub type IngestError = ParseError;
 /// after persisting this chunk.
 pub struct NetworkChunk {
     pub transfer_id: usize,
+    pub chunk_index: usize,
     pub byte_offset: u32,
     pub kind: DownloadKind,
     pub total_len: u32,
@@ -118,6 +119,7 @@ fn ingest_chunk<const MCP: usize, const MC: usize>(
 
     // Capture fields from chunk before it is moved into push_download.
     let transfer_id = chunk.transfer_id;
+    let chunk_index = chunk.chunk_index;
     let byte_offset = (chunk.chunk_index * MCP) as u32;
     let kind = chunk.kind;
     let total_len = chunk.total_len as u32;
@@ -139,6 +141,7 @@ fn ingest_chunk<const MCP: usize, const MC: usize>(
             );
             Ok(Some(IngestedPacket::Chunk(NetworkChunk {
                 transfer_id,
+                chunk_index,
                 byte_offset,
                 kind,
                 total_len,
@@ -154,6 +157,7 @@ fn ingest_chunk<const MCP: usize, const MC: usize>(
             );
             Ok(Some(IngestedPacket::Chunk(NetworkChunk {
                 transfer_id,
+                chunk_index,
                 byte_offset,
                 kind,
                 total_len,
