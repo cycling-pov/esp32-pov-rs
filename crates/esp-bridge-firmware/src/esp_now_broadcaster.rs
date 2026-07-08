@@ -92,18 +92,17 @@ pub async fn esp_now_task(
                     EspNowTarget::Peer(peer) => peer,
                 };
 
-                if let EspNowTarget::Peer(peer) = msg.esp_now_target {
-                    if !esp_now.peer_exists(&peer) {
-                        if let Err(err) = esp_now.add_peer(PeerInfo {
-                            interface: EspNowWifiInterface::Station,
-                            peer_address: peer,
-                            lmk: None,
-                            channel: None,
-                            encrypt: false,
-                        }) {
-                            warn!("Failed to add ESP-NOW peer before send: {:?}", err);
-                        }
-                    }
+                if let EspNowTarget::Peer(peer) = msg.esp_now_target
+                    && !esp_now.peer_exists(&peer)
+                    && let Err(err) = esp_now.add_peer(PeerInfo {
+                        interface: EspNowWifiInterface::Station,
+                        peer_address: peer,
+                        lmk: None,
+                        channel: None,
+                        encrypt: false,
+                    })
+                {
+                    warn!("Failed to add ESP-NOW peer before send: {:?}", err);
                 }
 
                 let attempts = usize::from(msg.esp_now_retries).saturating_add(1);

@@ -260,7 +260,10 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
                                     }
                                     Some(_) => {
                                         video_playback = None;
-                                        warn!("waveshare:unsupported flash content kind for slot {}", slot);
+                                        warn!(
+                                            "waveshare:unsupported flash content kind for slot {}",
+                                            slot
+                                        );
                                     }
                                     None => {
                                         video_playback = None;

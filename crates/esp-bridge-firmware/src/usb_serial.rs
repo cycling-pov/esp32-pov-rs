@@ -74,7 +74,7 @@ pub async fn usb_serial_task(
                 .await;
                 continue;
             }
-            Either::Second(Ok(n)) if n == 1 => byte[0],
+            Either::Second(Ok(1)) => byte[0],
             _ => continue,
         };
 

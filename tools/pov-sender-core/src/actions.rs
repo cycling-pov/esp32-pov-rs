@@ -6,10 +6,10 @@ use pov_proto::{
     bridge::{
         BridgeControlRequest, BridgeControlResponse, BridgeFrame, EspNowTarget, TransportSelector,
     },
-    image::{encode_polar_rgb888_to_wire, encode_rgb888_to_wire, LedCount, RadialCount},
+    image::{LedCount, RadialCount, encode_polar_rgb888_to_wire, encode_rgb888_to_wire},
     transfer::{
-        encode_packet, parse_packet, ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand,
-        SpokeResponse,
+        ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand, SpokeResponse, encode_packet,
+        parse_packet,
     },
     video,
 };

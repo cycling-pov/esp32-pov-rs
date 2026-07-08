@@ -44,6 +44,8 @@ use esp_hal::timer::timg::TimerGroup;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use esp_spoke_firmware::led;
 
+#[cfg(feature = "imu-spin")]
+use esp_spoke_firmware::angle_estimator::ImuCalibrationState;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use esp_spoke_firmware::led::LedCommand;
 use esp_spoke_firmware::networking;
@@ -53,8 +55,6 @@ use esp_spoke_firmware::pushbutton;
 use esp_spoke_firmware::pushbutton::ButtonId;
 #[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
 use esp_spoke_firmware::status_led::{self, StatusLedRequest};
-#[cfg(feature = "imu-spin")]
-use esp_spoke_firmware::angle_estimator::ImuCalibrationState;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use esp_spoke_firmware::storage;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
@@ -330,7 +330,11 @@ async fn main(spawner: Spawner) -> ! {
     #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
     let mut render_pause_held = false;
 
-    #[cfg(all(feature = "status-led", feature = "sk9822-strip", not(feature = "waveshare-matrix")))]
+    #[cfg(all(
+        feature = "status-led",
+        feature = "sk9822-strip",
+        not(feature = "waveshare-matrix")
+    ))]
     let mut desired_status = StatusLedRequest::BLINK_SLOW;
 
     #[cfg(feature = "imu-spin")]
@@ -429,452 +433,455 @@ async fn main(spawner: Spawner) -> ! {
             }
 
             if let Some(command) = command {
-                    let transfer_id = command.frame.transfer_id;
-                    let command_kind = command.frame.command;
-                    match command.frame.command {
-                        SpokeCommand::SetActiveSlot { slot } => {
-                            let slot_usize = match usize::try_from(slot) {
-                                Ok(slot) => slot,
-                                Err(_) => {
-                                    warn!(
-                                        "main:reject SetActiveSlot transfer_id={} slot={} reason=out_of_range",
-                                        transfer_id, slot
-                                    );
-                                    continue;
-                                }
-                            };
-                            let image_ids = storage::list_image_ids().await.unwrap_or_default();
-
-                            if !image_ids.contains(&slot_usize) {
-                                warn!(
-                                    "main:reject SetActiveSlot transfer_id={} slot={} reason=out_of_range",
-                                    transfer_id, slot_usize
-                                );
-                                continue;
-                            }
-
-                            let mut set_slot_pause_held = false;
-                            if !render_pause_held {
-                                // Active-slot updates touch flash metadata and need the same
-                                // render pause contract as other flash writes.
-                                render_pause_held = true;
-                                set_slot_pause_held = true;
-                                if !led::pause_render_for_flash(Duration::from_millis(500)).await {
-                                    warn!(
-                                        "main:render pause ack timeout before SetActiveSlot transfer_id={} slot={}",
-                                        transfer_id, slot_usize
-                                    );
-                                }
-                            }
-
-                            if storage::set_active_slot(slot_usize).await.is_err() {
-                                warn!(
-                                    "main:failed SetActiveSlot transfer_id={} slot={}",
-                                    transfer_id, slot_usize
-                                );
-                                if set_slot_pause_held {
-                                    led::resume_render_after_flash();
-                                    render_pause_held = false;
-                                }
-                                continue;
-                            }
-
-                            if !led::try_send_led_command(LedCommand::LoadSlot(slot_usize)) {
-                                warn!(
-                                    "main:failed to enqueue LoadSlot after SetActiveSlot transfer_id={} slot={}",
-                                    transfer_id, slot_usize
-                                );
-                            } else {
-                                info!(
-                                    "main:applied SetActiveSlot transfer_id={} slot={}",
-                                    transfer_id, slot_usize
-                                );
-
-                                #[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
-                                {
-                                    desired_status = StatusLedRequest::BLINK_SLOW;
-                                    let effective = {
-                                        #[cfg(feature = "imu-spin")]
-                                        {
-                                            if imu_calibrating {
-                                                StatusLedRequest::BLINK_FAST
-                                            } else {
-                                                desired_status
-                                            }
-                                        }
-                                        #[cfg(not(feature = "imu-spin"))]
-                                        {
-                                            desired_status
-                                        }
-                                    };
-                                    let _ = status_led::try_send_request(effective);
-                                }
-                            }
-
-                            if set_slot_pause_held {
-                                led::resume_render_after_flash();
-                                render_pause_held = false;
-                            }
-                        }
-                        SpokeCommand::ClearAllImages => {
-                            if let Some(old) = active.take() {
-                                info!(
-                                    "main:clear-all aborts active transfer {} in slot {}",
-                                    old.transfer_id, old.slot
-                                );
-                                storage::abort_slot(old.slot, old.chunk_count).await.ok();
-                            }
-
-                            if !render_pause_held {
-                                // Keep the same pause contract as transfer writes: once
-                                // requested, always resume afterward even on timeout.
-                                render_pause_held = true;
-                                if !led::pause_render_for_flash(Duration::from_millis(500)).await {
-                                    warn!(
-                                        "main:render pause ack timeout before clear-all transfer_id={}",
-                                        transfer_id
-                                    );
-                                }
-                            }
-
-                            if storage::clear_all_images().await.is_err() {
-                                warn!(
-                                    "main:failed to clear all images transfer_id={}",
-                                    transfer_id
-                                );
-                            } else {
-                                info!("main:cleared all images transfer_id={}", transfer_id);
-                            }
-
-                            if render_pause_held {
-                                led::resume_render_after_flash();
-                                render_pause_held = false;
-                            }
-
-                            // Force display off after clearing storage.
-                            if !led::try_send_led_command(LedCommand::Frame(
-                                pov_proto::transfer::CommandFrame {
-                                    transfer_id,
-                                    command: SpokeCommand::DisplayOff,
-                                },
-                            )) {
-                                warn!(
-                                    "main:failed to enqueue DisplayOff after clear transfer_id={}",
-                                    transfer_id
-                                );
-                            }
-
-                            #[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
-                            {
-                                desired_status = StatusLedRequest::OFF;
-                                let effective = {
-                                    #[cfg(feature = "imu-spin")]
-                                    {
-                                        if imu_calibrating {
-                                            StatusLedRequest::BLINK_FAST
-                                        } else {
-                                            desired_status
-                                        }
-                                    }
-                                    #[cfg(not(feature = "imu-spin"))]
-                                    {
-                                        desired_status
-                                    }
-                                };
-                                let _ = status_led::try_send_request(effective);
-                            }
-                        }
-                        SpokeCommand::SetSensorOffsets {
-                            hall_offset_0_degrees,
-                            hall_offset_1_degrees,
-                            imu_offset_degrees,
-                        } => {
-                            let result = storage::set_sensor_config(SensorConfig {
-                                hall_offset_0_degrees,
-                                hall_offset_1_degrees,
-                                imu_offset_degrees,
-                            })
-                            .await;
-
-                            if result.is_err() {
-                                warn!(
-                                    "main:failed to persist sensor offsets transfer_id={}",
-                                    transfer_id
-                                );
-                            } else {
-                                info!(
-                                    "main:persisted sensor offsets transfer_id={} reboot_required=true",
-                                    transfer_id
-                                );
-                            }
-                        }
-                        SpokeCommand::RequestStorageStats => {
-                            let Some(source_peer) = command.source_peer else {
-                                warn!(
-                                    "main:RequestStorageStats missing source peer transfer_id={}",
-                                    transfer_id
-                                );
-                                continue;
-                            };
-
-                            let stats = match storage::get_storage_stats().await {
-                                Ok(stats) => stats,
-                                Err(()) => {
-                                    warn!(
-                                        "main:failed to get storage stats transfer_id={}",
-                                        transfer_id
-                                    );
-                                    continue;
-                                }
-                            };
-
-                            let mut out = [0u8; 256];
-                            let encoded = match encode_packet(
-                                Packet::Response(ResponseFrame {
-                                    transfer_id,
-                                    response: SpokeResponse::StorageStats(WireStorageStats {
-                                        total_bytes: stats.total_bytes,
-                                        used_bytes: stats.used_bytes,
-                                        free_bytes: stats.free_bytes,
-                                        image_count: stats.image_count as u32,
-                                        active_image_id: stats.active_image_id.map(|v| v as u32),
-                                    }),
-                                }),
-                                &mut out,
-                            ) {
-                                Ok(n) => n,
-                                Err(_) => {
-                                    warn!(
-                                        "main:failed to encode storage stats response transfer_id={}",
-                                        transfer_id
-                                    );
-                                    continue;
-                                }
-                            };
-
-                            if networking::send_espnow_packet(source_peer, &out[..encoded])
-                                .await
-                                .is_err()
-                            {
-                                warn!(
-                                    "main:failed to send storage stats response transfer_id={}",
-                                    transfer_id
-                                );
-                            } else {
-                                info!(
-                                    "main:sent storage stats response transfer_id={} to {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                                    transfer_id,
-                                    source_peer[0],
-                                    source_peer[1],
-                                    source_peer[2],
-                                    source_peer[3],
-                                    source_peer[4],
-                                    source_peer[5]
-                                );
-                            }
-                        }
-                        _ => {
-                            #[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
-                            {
-                                match command_kind {
-                                    SpokeCommand::DisplayOff => {
-                                        desired_status = StatusLedRequest::OFF;
-                                    }
-                                    SpokeCommand::RandomizeDisplay => {
-                                        desired_status = StatusLedRequest::BLINK_FAST;
-                                    }
-                                    SpokeCommand::NextImage => {
-                                        desired_status = StatusLedRequest::BLINK_SLOW;
-                                    }
-                                    _ => {}
-                                }
-
-                                let effective = {
-                                    #[cfg(feature = "imu-spin")]
-                                    {
-                                        if imu_calibrating {
-                                            StatusLedRequest::BLINK_FAST
-                                        } else {
-                                            desired_status
-                                        }
-                                    }
-                                    #[cfg(not(feature = "imu-spin"))]
-                                    {
-                                        desired_status
-                                    }
-                                };
-                                let _ = status_led::try_send_request(effective);
-                            }
-
-                            if !led::try_send_led_command(LedCommand::Frame(command.frame)) {
-                                warn!(
-                                    "main:dropped frame transfer_id={} command={:?}",
-                                    transfer_id, command_kind
-                                );
-                            } else {
-                                info!(
-                                    "main:forwarded frame transfer_id={} command={:?}",
-                                    transfer_id, command_kind
-                                );
-                            }
-                        }
-                    }
-            } else if let Some(chunk) = chunk {
-                    // Accept renderable payloads (static images and videos).
-                    // Keep ignoring non-renderable transfer kinds (e.g. OTA).
-                    if !matches!(chunk.kind, DownloadKind::DisplayImage | DownloadKind::Video) {
-                        info!(
-                            "main:ignoring non-display download kind={:?} transfer_id={}",
-                            chunk.kind, chunk.transfer_id
-                        );
-                        continue;
-                    }
-
-                    let transfer_id = chunk.transfer_id;
-
-                    // If a new transfer has started, abort the previous one and
-                    // allocate a fresh flash slot.
-                    if active.as_ref().is_none_or(|a| a.transfer_id != transfer_id) {
-                        if !render_pause_held {
-                            // Mark as held unconditionally: pause_render_for_flash always
-                            // sets RENDER_PAUSE_REQUESTED, so resume_render_after_flash must
-                            // always be called afterward — even if the ack times out — to
-                            // avoid leaving the render task stuck in its IRAM spin loop.
-                            render_pause_held = true;
-                            if !led::pause_render_for_flash(Duration::from_millis(500)).await {
-                                warn!(
-                                    "main:render pause ack timeout before transfer {}",
-                                    transfer_id
-                                );
-                            }
-                        }
-
-                        if let Some(old) = active.take() {
-                            info!(
-                                "main:new transfer {} aborts previous transfer {} in slot {}",
-                                transfer_id, old.transfer_id, old.slot
-                            );
-                            storage::abort_slot(old.slot, old.chunk_count).await.ok();
-                        }
-                        match storage::begin_slot_write(chunk.total_len).await {
-                            Ok(slot) => {
-                                info!(
-                                    "main:began slot write slot={} transfer_id={}",
-                                    slot, transfer_id
-                                );
-                                active = Some(ActiveTransfer {
-                                    transfer_id,
-                                    slot,
-                                    kind: chunk.kind,
-                                    expected_crc32: chunk.expected_crc32,
-                                    total_len: chunk.total_len,
-                                    chunk_count: 0,
-                                });
-                            }
-                            Err(()) => {
-                                warn!(
-                                    "main:begin_slot_write failed for transfer_id={}",
-                                    transfer_id
-                                );
-                                if render_pause_held {
-                                    led::resume_render_after_flash();
-                                    render_pause_held = false;
-                                }
-                                // Drop this chunk; the next one will retry begin_slot_write.
-                                continue;
-                            }
-                        }
-                    }
-
-                    if let Some(ref mut a) = active
-                        && a.transfer_id == transfer_id
-                    {
-                        let slot = a.slot;
-                        let chunk_num = match u16::try_from(chunk.chunk_index) {
-                            Ok(v) => v,
+                let transfer_id = command.frame.transfer_id;
+                let command_kind = command.frame.command;
+                match command.frame.command {
+                    SpokeCommand::SetActiveSlot { slot } => {
+                        let slot_usize = match usize::try_from(slot) {
+                            Ok(slot) => slot,
                             Err(_) => {
                                 warn!(
-                                    "main:chunk index out of range slot={} idx={} transfer_id={}",
-                                    slot, chunk.chunk_index, transfer_id
+                                    "main:reject SetActiveSlot transfer_id={} slot={} reason=out_of_range",
+                                    transfer_id, slot
                                 );
                                 continue;
                             }
                         };
-                        let is_final = chunk.is_final;
+                        let image_ids = storage::list_image_ids().await.unwrap_or_default();
 
-                        if storage::write_slot_chunk(slot, chunk_num, &chunk.data)
+                        if !image_ids.contains(&slot_usize) {
+                            warn!(
+                                "main:reject SetActiveSlot transfer_id={} slot={} reason=out_of_range",
+                                transfer_id, slot_usize
+                            );
+                            continue;
+                        }
+
+                        let mut set_slot_pause_held = false;
+                        if !render_pause_held {
+                            // Active-slot updates touch flash metadata and need the same
+                            // render pause contract as other flash writes.
+                            render_pause_held = true;
+                            set_slot_pause_held = true;
+                            if !led::pause_render_for_flash(Duration::from_millis(500)).await {
+                                warn!(
+                                    "main:render pause ack timeout before SetActiveSlot transfer_id={} slot={}",
+                                    transfer_id, slot_usize
+                                );
+                            }
+                        }
+
+                        if storage::set_active_slot(slot_usize).await.is_err() {
+                            warn!(
+                                "main:failed SetActiveSlot transfer_id={} slot={}",
+                                transfer_id, slot_usize
+                            );
+                            if set_slot_pause_held {
+                                led::resume_render_after_flash();
+                                render_pause_held = false;
+                            }
+                            continue;
+                        }
+
+                        if !led::try_send_led_command(LedCommand::LoadSlot(slot_usize)) {
+                            warn!(
+                                "main:failed to enqueue LoadSlot after SetActiveSlot transfer_id={} slot={}",
+                                transfer_id, slot_usize
+                            );
+                        } else {
+                            info!(
+                                "main:applied SetActiveSlot transfer_id={} slot={}",
+                                transfer_id, slot_usize
+                            );
+
+                            #[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
+                            {
+                                desired_status = StatusLedRequest::BLINK_SLOW;
+                                let effective = {
+                                    #[cfg(feature = "imu-spin")]
+                                    {
+                                        if imu_calibrating {
+                                            StatusLedRequest::BLINK_FAST
+                                        } else {
+                                            desired_status
+                                        }
+                                    }
+                                    #[cfg(not(feature = "imu-spin"))]
+                                    {
+                                        desired_status
+                                    }
+                                };
+                                let _ = status_led::try_send_request(effective);
+                            }
+                        }
+
+                        if set_slot_pause_held {
+                            led::resume_render_after_flash();
+                            render_pause_held = false;
+                        }
+                    }
+                    SpokeCommand::ClearAllImages => {
+                        if let Some(old) = active.take() {
+                            info!(
+                                "main:clear-all aborts active transfer {} in slot {}",
+                                old.transfer_id, old.slot
+                            );
+                            storage::abort_slot(old.slot, old.chunk_count).await.ok();
+                        }
+
+                        if !render_pause_held {
+                            // Keep the same pause contract as transfer writes: once
+                            // requested, always resume afterward even on timeout.
+                            render_pause_held = true;
+                            if !led::pause_render_for_flash(Duration::from_millis(500)).await {
+                                warn!(
+                                    "main:render pause ack timeout before clear-all transfer_id={}",
+                                    transfer_id
+                                );
+                            }
+                        }
+
+                        if storage::clear_all_images().await.is_err() {
+                            warn!(
+                                "main:failed to clear all images transfer_id={}",
+                                transfer_id
+                            );
+                        } else {
+                            info!("main:cleared all images transfer_id={}", transfer_id);
+                        }
+
+                        if render_pause_held {
+                            led::resume_render_after_flash();
+                            render_pause_held = false;
+                        }
+
+                        // Force display off after clearing storage.
+                        if !led::try_send_led_command(LedCommand::Frame(
+                            pov_proto::transfer::CommandFrame {
+                                transfer_id,
+                                command: SpokeCommand::DisplayOff,
+                            },
+                        )) {
+                            warn!(
+                                "main:failed to enqueue DisplayOff after clear transfer_id={}",
+                                transfer_id
+                            );
+                        }
+
+                        #[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
+                        {
+                            desired_status = StatusLedRequest::OFF;
+                            let effective = {
+                                #[cfg(feature = "imu-spin")]
+                                {
+                                    if imu_calibrating {
+                                        StatusLedRequest::BLINK_FAST
+                                    } else {
+                                        desired_status
+                                    }
+                                }
+                                #[cfg(not(feature = "imu-spin"))]
+                                {
+                                    desired_status
+                                }
+                            };
+                            let _ = status_led::try_send_request(effective);
+                        }
+                    }
+                    SpokeCommand::SetSensorOffsets {
+                        hall_offset_0_degrees,
+                        hall_offset_1_degrees,
+                        imu_offset_degrees,
+                    } => {
+                        let result = storage::set_sensor_config(SensorConfig {
+                            hall_offset_0_degrees,
+                            hall_offset_1_degrees,
+                            imu_offset_degrees,
+                        })
+                        .await;
+
+                        if result.is_err() {
+                            warn!(
+                                "main:failed to persist sensor offsets transfer_id={}",
+                                transfer_id
+                            );
+                        } else {
+                            info!(
+                                "main:persisted sensor offsets transfer_id={} reboot_required=true",
+                                transfer_id
+                            );
+                        }
+                    }
+                    SpokeCommand::RequestStorageStats => {
+                        let Some(source_peer) = command.source_peer else {
+                            warn!(
+                                "main:RequestStorageStats missing source peer transfer_id={}",
+                                transfer_id
+                            );
+                            continue;
+                        };
+
+                        let stats = match storage::get_storage_stats().await {
+                            Ok(stats) => stats,
+                            Err(()) => {
+                                warn!(
+                                    "main:failed to get storage stats transfer_id={}",
+                                    transfer_id
+                                );
+                                continue;
+                            }
+                        };
+
+                        let mut out = [0u8; 256];
+                        let encoded = match encode_packet(
+                            Packet::Response(ResponseFrame {
+                                transfer_id,
+                                response: SpokeResponse::StorageStats(WireStorageStats {
+                                    total_bytes: stats.total_bytes,
+                                    used_bytes: stats.used_bytes,
+                                    free_bytes: stats.free_bytes,
+                                    image_count: stats.image_count as u32,
+                                    active_image_id: stats.active_image_id.map(|v| v as u32),
+                                }),
+                            }),
+                            &mut out,
+                        ) {
+                            Ok(n) => n,
+                            Err(_) => {
+                                warn!(
+                                    "main:failed to encode storage stats response transfer_id={}",
+                                    transfer_id
+                                );
+                                continue;
+                            }
+                        };
+
+                        if networking::send_espnow_packet(source_peer, &out[..encoded])
                             .await
                             .is_err()
                         {
                             warn!(
-                                "main:write_slot_chunk failed slot={} chunk={} transfer_id={}",
-                                slot, chunk_num, transfer_id
+                                "main:failed to send storage stats response transfer_id={}",
+                                transfer_id
                             );
                         } else {
-                            a.chunk_count = a.chunk_count.saturating_add(1);
-                        }
-
-                        if is_final {
-                            let a = active.take().unwrap();
                             info!(
-                                "main:committing slot={} transfer_id={} crc32={=u32:#010x} bytes={}",
-                                a.slot, a.transfer_id, a.expected_crc32, a.total_len
+                                "main:sent storage stats response transfer_id={} to {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                                transfer_id,
+                                source_peer[0],
+                                source_peer[1],
+                                source_peer[2],
+                                source_peer[3],
+                                source_peer[4],
+                                source_peer[5]
                             );
-                            match storage::commit_slot(
-                                a.slot,
-                                a.expected_crc32,
-                                a.total_len,
-                                a.kind,
-                                a.chunk_count,
-                            )
-                            .await
-                            {
-                                Ok(()) => {
-                                    info!(
-                                        "main:transfer {} committed to slot {}",
-                                        a.transfer_id, a.slot
-                                    );
-                                    if !led::try_send_led_command(LedCommand::LoadSlot(a.slot)) {
-                                        warn!(
-                                            "main:dropped load_slot slot={} led channel full",
-                                            a.slot
-                                        );
-                                    } else {
-                                        #[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
-                                        {
-                                            desired_status = StatusLedRequest::BLINK_SLOW;
-                                            let effective = {
-                                                #[cfg(feature = "imu-spin")]
-                                                {
-                                                    if imu_calibrating {
-                                                        StatusLedRequest::BLINK_FAST
-                                                    } else {
-                                                        desired_status
-                                                    }
-                                                }
-                                                #[cfg(not(feature = "imu-spin"))]
-                                                {
-                                                    desired_status
-                                                }
-                                            };
-                                            let _ = status_led::try_send_request(effective);
-                                        }
-                                    }
+                        }
+                    }
+                    _ => {
+                        #[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
+                        {
+                            match command_kind {
+                                SpokeCommand::DisplayOff => {
+                                    desired_status = StatusLedRequest::OFF;
                                 }
-                                Err(()) => {
-                                    warn!(
-                                        "main:commit failed for transfer {} slot {} (CRC mismatch or header error)",
-                                        a.transfer_id, a.slot
-                                    );
+                                SpokeCommand::RandomizeDisplay => {
+                                    desired_status = StatusLedRequest::BLINK_FAST;
                                 }
+                                SpokeCommand::NextImage => {
+                                    desired_status = StatusLedRequest::BLINK_SLOW;
+                                }
+                                _ => {}
                             }
 
+                            let effective = {
+                                #[cfg(feature = "imu-spin")]
+                                {
+                                    if imu_calibrating {
+                                        StatusLedRequest::BLINK_FAST
+                                    } else {
+                                        desired_status
+                                    }
+                                }
+                                #[cfg(not(feature = "imu-spin"))]
+                                {
+                                    desired_status
+                                }
+                            };
+                            let _ = status_led::try_send_request(effective);
+                        }
+
+                        if !led::try_send_led_command(LedCommand::Frame(command.frame)) {
+                            warn!(
+                                "main:dropped frame transfer_id={} command={:?}",
+                                transfer_id, command_kind
+                            );
+                        } else {
+                            info!(
+                                "main:forwarded frame transfer_id={} command={:?}",
+                                transfer_id, command_kind
+                            );
+                        }
+                    }
+                }
+            } else if let Some(chunk) = chunk {
+                // Accept renderable payloads (static images and videos).
+                // Keep ignoring non-renderable transfer kinds (e.g. OTA).
+                if !matches!(chunk.kind, DownloadKind::DisplayImage | DownloadKind::Video) {
+                    info!(
+                        "main:ignoring non-display download kind={:?} transfer_id={}",
+                        chunk.kind, chunk.transfer_id
+                    );
+                    continue;
+                }
+
+                let transfer_id = chunk.transfer_id;
+
+                // If a new transfer has started, abort the previous one and
+                // allocate a fresh flash slot.
+                if active.as_ref().is_none_or(|a| a.transfer_id != transfer_id) {
+                    if !render_pause_held {
+                        // Mark as held unconditionally: pause_render_for_flash always
+                        // sets RENDER_PAUSE_REQUESTED, so resume_render_after_flash must
+                        // always be called afterward — even if the ack times out — to
+                        // avoid leaving the render task stuck in its IRAM spin loop.
+                        render_pause_held = true;
+                        if !led::pause_render_for_flash(Duration::from_millis(500)).await {
+                            warn!(
+                                "main:render pause ack timeout before transfer {}",
+                                transfer_id
+                            );
+                        }
+                    }
+
+                    if let Some(old) = active.take() {
+                        info!(
+                            "main:new transfer {} aborts previous transfer {} in slot {}",
+                            transfer_id, old.transfer_id, old.slot
+                        );
+                        storage::abort_slot(old.slot, old.chunk_count).await.ok();
+                    }
+                    match storage::begin_slot_write(chunk.total_len).await {
+                        Ok(slot) => {
+                            info!(
+                                "main:began slot write slot={} transfer_id={}",
+                                slot, transfer_id
+                            );
+                            active = Some(ActiveTransfer {
+                                transfer_id,
+                                slot,
+                                kind: chunk.kind,
+                                expected_crc32: chunk.expected_crc32,
+                                total_len: chunk.total_len,
+                                chunk_count: 0,
+                            });
+                        }
+                        Err(()) => {
+                            warn!(
+                                "main:begin_slot_write failed for transfer_id={}",
+                                transfer_id
+                            );
                             if render_pause_held {
                                 led::resume_render_after_flash();
                                 render_pause_held = false;
                             }
+                            // Drop this chunk; the next one will retry begin_slot_write.
+                            continue;
                         }
                     }
+                }
+
+                if let Some(ref mut a) = active
+                    && a.transfer_id == transfer_id
+                {
+                    let slot = a.slot;
+                    let chunk_num = match u16::try_from(chunk.chunk_index) {
+                        Ok(v) => v,
+                        Err(_) => {
+                            warn!(
+                                "main:chunk index out of range slot={} idx={} transfer_id={}",
+                                slot, chunk.chunk_index, transfer_id
+                            );
+                            continue;
+                        }
+                    };
+                    let is_final = chunk.is_final;
+
+                    if storage::write_slot_chunk(slot, chunk_num, &chunk.data)
+                        .await
+                        .is_err()
+                    {
+                        warn!(
+                            "main:write_slot_chunk failed slot={} chunk={} transfer_id={}",
+                            slot, chunk_num, transfer_id
+                        );
+                    } else {
+                        a.chunk_count = a.chunk_count.saturating_add(1);
+                    }
+
+                    if is_final {
+                        let a = active.take().unwrap();
+                        info!(
+                            "main:committing slot={} transfer_id={} crc32={=u32:#010x} bytes={}",
+                            a.slot, a.transfer_id, a.expected_crc32, a.total_len
+                        );
+                        match storage::commit_slot(
+                            a.slot,
+                            a.expected_crc32,
+                            a.total_len,
+                            a.kind,
+                            a.chunk_count,
+                        )
+                        .await
+                        {
+                            Ok(()) => {
+                                info!(
+                                    "main:transfer {} committed to slot {}",
+                                    a.transfer_id, a.slot
+                                );
+                                if !led::try_send_led_command(LedCommand::LoadSlot(a.slot)) {
+                                    warn!(
+                                        "main:dropped load_slot slot={} led channel full",
+                                        a.slot
+                                    );
+                                } else {
+                                    #[cfg(all(
+                                        feature = "status-led",
+                                        not(feature = "waveshare-matrix")
+                                    ))]
+                                    {
+                                        desired_status = StatusLedRequest::BLINK_SLOW;
+                                        let effective = {
+                                            #[cfg(feature = "imu-spin")]
+                                            {
+                                                if imu_calibrating {
+                                                    StatusLedRequest::BLINK_FAST
+                                                } else {
+                                                    desired_status
+                                                }
+                                            }
+                                            #[cfg(not(feature = "imu-spin"))]
+                                            {
+                                                desired_status
+                                            }
+                                        };
+                                        let _ = status_led::try_send_request(effective);
+                                    }
+                                }
+                            }
+                            Err(()) => {
+                                warn!(
+                                    "main:commit failed for transfer {} slot {} (CRC mismatch or header error)",
+                                    a.transfer_id, a.slot
+                                );
+                            }
+                        }
+
+                        if render_pause_held {
+                            led::resume_render_after_flash();
+                            render_pause_held = false;
+                        }
+                    }
+                }
             }
         }
     }
