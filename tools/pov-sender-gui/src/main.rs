@@ -4,14 +4,13 @@ use iced::{
     Element, Length, Task,
     widget::{button, checkbox, column, container, pick_list, row, text, text_input},
 };
+#[cfg(not(target_arch = "wasm32"))]
+use pov_sender_core::list_serial_ports;
 use pov_sender_core::{
     DownloadKind, DownloadRequest, EspNowDelivery, PolarEncodeOptions, SensorOffsets,
     SerialLinkConfig, SpokeCommand, Transport, list_esp_now_peers, request_storage_stats,
-    send_command, send_download, send_image, send_sensor_offsets,
-    send_video_with_max_fps,
+    send_command, send_download, send_image, send_sensor_offsets, send_video_with_max_fps,
 };
-#[cfg(not(target_arch = "wasm32"))]
-use pov_sender_core::list_serial_ports;
 
 #[cfg(target_arch = "wasm32")]
 mod web_serial;
@@ -268,7 +267,6 @@ fn view(state: &SenderGui) -> Element<'_, Message> {
 }
 
 impl SenderGui {
-
     #[cfg_attr(target_arch = "wasm32", allow(unreachable_code))]
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
@@ -329,7 +327,10 @@ impl SenderGui {
                         self.web_ports = web_serial::cached_ports();
                         self.web_serial_error_banner = None;
                         self.ports = ports;
-                        self.status = format!("Browser serial device added. {} available.", self.ports.len());
+                        self.status = format!(
+                            "Browser serial device added. {} available.",
+                            self.ports.len()
+                        );
                     }
                     Err(err) => {
                         self.web_serial_error_banner = Some(err.clone());
@@ -636,13 +637,9 @@ impl SenderGui {
 
         #[cfg(target_arch = "wasm32")]
         if let Some(message) = &self.web_serial_error_banner {
-            let banner = container(
-                text(format!(
-                    "Web Serial unavailable: {message}"
-                )),
-            )
-            .padding(10)
-            .width(Length::Fill);
+            let banner = container(text(format!("Web Serial unavailable: {message}")))
+                .padding(10)
+                .width(Length::Fill);
             content = content.push(banner);
         }
 
@@ -862,7 +859,8 @@ impl SenderGui {
             };
 
             let Some(port) = self.web_ports.get(index).cloned() else {
-                self.status = "Missing browser serial port handle. Reconnect the device.".to_string();
+                self.status =
+                    "Missing browser serial port handle. Reconnect the device.".to_string();
                 return Task::none();
             };
 
@@ -1033,7 +1031,8 @@ impl SenderGui {
             };
 
             let Some(port) = self.web_ports.get(index).cloned() else {
-                self.status = "Missing browser serial port handle. Reconnect the device.".to_string();
+                self.status =
+                    "Missing browser serial port handle. Reconnect the device.".to_string();
                 return Task::none();
             };
 
@@ -1100,7 +1099,8 @@ impl SenderGui {
             };
 
             let Some(port) = self.web_ports.get(index).cloned() else {
-                self.status = "Missing browser serial port handle. Reconnect the device.".to_string();
+                self.status =
+                    "Missing browser serial port handle. Reconnect the device.".to_string();
                 return Task::none();
             };
 
@@ -1294,4 +1294,3 @@ fn main() -> iced::Result {
         .title("POV Sender GUI")
         .run()
 }
-

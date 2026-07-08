@@ -7,15 +7,13 @@ use js_sys::{Array, Reflect, Uint8Array};
 use pov_proto::{
     bridge::{BridgeFrame, EspNowTarget, TransportSelector},
     image::{LedCount, RadialCount, encode_polar_rgb888_to_wire, encode_rgb888_to_wire},
-    transfer::{
-        ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand, encode_packet,
-    },
+    transfer::{ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand, encode_packet},
     video,
 };
 use pov_sender_core::{EspNowDelivery, PolarEncodeOptions, SerialLinkConfig, Transport};
-use web_sys::wasm_bindgen::{JsCast, JsValue};
-use web_sys::wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::JsFuture;
+use web_sys::wasm_bindgen::closure::Closure;
+use web_sys::wasm_bindgen::{JsCast, JsValue};
 
 pub type WebSerialPort = web_sys::SerialPort;
 
@@ -41,9 +39,7 @@ pub fn cached_ports() -> Vec<WebSerialPort> {
 
 pub async fn list_port_labels() -> Result<Vec<String>, String> {
     let serial = browser_serial()?;
-    let values = JsFuture::from(serial.get_ports())
-        .await
-        .map_err(js_err)?;
+    let values = JsFuture::from(serial.get_ports()).await.map_err(js_err)?;
 
     let ports: Vec<WebSerialPort> = Array::from(&values)
         .iter()
@@ -170,9 +166,7 @@ pub async fn pick_file(accept: &str) -> Result<SelectedWebFile, String> {
     on_change.forget();
     input.click();
 
-    let file = rx
-        .await
-        .map_err(|_| "File picker canceled".to_string())??;
+    let file = rx.await.map_err(|_| "File picker canceled".to_string())??;
 
     let buffer = JsFuture::from(file.array_buffer()).await.map_err(js_err)?;
     let data = Uint8Array::new(&buffer);
@@ -324,12 +318,16 @@ fn encode_cartesian_image(image: &image::DynamicImage) -> Result<Vec<u8>, String
         .map_err(|e| format!("Failed to encode image to wire format: {e:?}"))
 }
 
-fn encode_polar_image(rgba: &image::RgbaImage, options: PolarEncodeOptions) -> Result<Vec<u8>, String> {
+fn encode_polar_image(
+    rgba: &image::RgbaImage,
+    options: PolarEncodeOptions,
+) -> Result<Vec<u8>, String> {
     validate_polar_options(options)?;
 
     let first_radius = options.first_led_distance / options.last_led_distance;
     let radius_values = evenly_spaced_radii(POLAR_LEDS, first_radius, 1.0);
-    let polar_bitmap = pov_images::polar_from_image::<POLAR_LEDS, POLAR_RADIALS>(rgba, &radius_values);
+    let polar_bitmap =
+        pov_images::polar_from_image::<POLAR_LEDS, POLAR_RADIALS>(rgba, &radius_values);
 
     let mut raw: Vec<u8> = Vec::with_capacity(POLAR_LEDS * POLAR_RADIALS * 3);
     for strip in &polar_bitmap.pixels {
@@ -406,7 +404,10 @@ fn encode_gif_video_payload_from_bytes(
     }
 
     if encoded_frames.is_empty() {
-        return Err(format!("GIF frame selection produced no frames: {}", file.name));
+        return Err(format!(
+            "GIF frame selection produced no frames: {}",
+            file.name
+        ));
     }
 
     let total_frame_bytes: usize = encoded_frames.iter().map(|f| 4usize + f.len()).sum();
@@ -468,7 +469,5 @@ struct SendStats {
 }
 
 fn js_err(value: JsValue) -> String {
-    value
-        .as_string()
-        .unwrap_or_else(|| format!("{value:?}"))
+    value.as_string().unwrap_or_else(|| format!("{value:?}"))
 }
