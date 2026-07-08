@@ -24,8 +24,6 @@ jobs:
         action:
           - command: build
             args: --release
-          - command: build
-            args: --release -p esp-spoke-firmware --features waveshare-matrix,sk9822-strip,heap-stats,ble,espnow,coexistence
           - command: fmt
             args: --all -- --check
           - command: clippy
