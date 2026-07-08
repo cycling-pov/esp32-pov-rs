@@ -1,0 +1,12 @@
+{
+    "name": "pov-sender-gui-deploy",
+    "private": true,
+    "version": "0.1.0",
+    "scripts": {
+        "build:web": "trunk build --release",
+        "deploy": "npm run build:web && wrangler deploy"
+    },
+    "devDependencies": {
+        "wrangler": "^4.27.0"
+    }
+}

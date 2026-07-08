@@ -35,6 +35,7 @@ crates/esp-spoke-firmware/.partitions-selected
 
 # GUI
 dist/
+node_modules/
 
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can

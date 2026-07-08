@@ -35,6 +35,38 @@ trunk build --release
 
 Generated web assets are emitted under `tools/pov-sender-gui/dist`.
 
+## Deploy (Cloudflare Workers)
+
+This project includes a Wrangler config and a minimal Worker that serves the
+Trunk-generated static assets from `dist`.
+
+Prerequisites:
+- Node.js 18+
+- Cloudflare account
+
+One-time setup:
+
+```sh
+cd tools/pov-sender-gui
+npm install
+npx wrangler login
+```
+
+Deploy:
+
+```sh
+cd tools/pov-sender-gui
+npm run deploy
+```
+
+Equivalent manual steps:
+
+```sh
+cd tools/pov-sender-gui
+trunk build --release
+npx wrangler deploy
+```
+
 ## Run
 
 ```sh
