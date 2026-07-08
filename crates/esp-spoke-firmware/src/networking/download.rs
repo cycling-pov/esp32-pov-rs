@@ -13,6 +13,9 @@ pub const BLE_MAX_CHUNK_PAYLOAD: usize = 224;
 /// Keep chunk payload at a multiple of 4 so flash write offsets are word-aligned.
 pub const ESPNOW_MAX_CHUNK_PAYLOAD: usize = 1448;
 pub const MAX_TRANSFER_BYTES: usize = 256 * 1024;
+/// Renderable payloads are later read into RAM for decode/playback.
+/// Keep this lower than `MAX_TRANSFER_BYTES` to avoid allocator pressure.
+pub const MAX_RENDERABLE_TRANSFER_BYTES: usize = 26 * 1024;
 
 #[cfg(feature = "ble")]
 const BLE_MAX_CHUNKS: usize = MAX_TRANSFER_BYTES.div_ceil(BLE_MAX_CHUNK_PAYLOAD);
@@ -101,6 +104,19 @@ fn ingest_chunk<const MCP: usize, const MC: usize>(
     chunk: DownloadChunk<'_>,
     assembly: &Mutex<RefCell<TransferAssembly<MCP, MAX_TRANSFER_BYTES, MC>>>,
 ) -> Result<Option<IngestedPacket>, IngestError> {
+    let max_total_len = match chunk.kind {
+        DownloadKind::DisplayImage | DownloadKind::Video => MAX_RENDERABLE_TRANSFER_BYTES,
+        DownloadKind::OtaImage => MAX_TRANSFER_BYTES,
+    };
+
+    if chunk.total_len > max_total_len {
+        warn!(
+            "transfer too large: kind={:?} transfer_id={=usize} bytes={=usize} limit={=usize}",
+            chunk.kind, chunk.transfer_id, chunk.total_len, max_total_len,
+        );
+        return Err(ParseError::PayloadShapeMismatch);
+    }
+
     let new_transfer = critical_section::with(|cs| assembly.borrow_ref(cs).is_new_transfer(&chunk));
 
     if new_transfer {
