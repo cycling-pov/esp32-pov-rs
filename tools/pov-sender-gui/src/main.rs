@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use iced::{
     Element, Length, Task,
-    widget::{button, checkbox, column, container, pick_list, row, text, text_input},
+    widget::{button, checkbox, column, container, pick_list, row, scrollable, text, text_input},
 };
 #[cfg(not(target_arch = "wasm32"))]
 use pov_sender_core::list_serial_ports;
@@ -648,7 +648,7 @@ impl SenderGui {
         }
 
         content = content
-            .push(actions_panel)
+            .push(scrollable(actions_panel).horizontal().width(Length::Fill))
             .push(text(format!("Status: {}", self.status)));
 
         container(content).into()
