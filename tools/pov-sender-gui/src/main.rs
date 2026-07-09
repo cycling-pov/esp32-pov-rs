@@ -242,10 +242,10 @@ impl Default for SenderGui {
 fn init_task() -> Task<Message> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        return Task::perform(
+        Task::perform(
             async { list_serial_ports().map_err(|e| e.to_string()) },
             Message::PortsLoaded,
-        );
+        )
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -274,15 +274,15 @@ impl SenderGui {
                 self.status = "Refreshing serial ports...".to_string();
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    return Task::perform(
+                    Task::perform(
                         async { list_serial_ports().map_err(|e| e.to_string()) },
                         Message::PortsLoaded,
-                    );
+                    )
                 }
 
                 #[cfg(target_arch = "wasm32")]
                 {
-                    return Task::perform(web_serial::list_port_labels(), Message::PortsLoaded);
+                    Task::perform(web_serial::list_port_labels(), Message::PortsLoaded)
                 }
             }
             Message::PortsLoaded(result) => {

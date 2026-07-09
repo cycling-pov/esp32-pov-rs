@@ -18,6 +18,28 @@
             display: flex;
         }
 
+        #support-note {
+            position: fixed;
+            inset: 16px;
+            max-width: 42rem;
+            padding: 14px 16px;
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            border-radius: 12px;
+            background: rgba(8, 12, 18, 0.9);
+            color: #dce6f2;
+            font: 14px/1.45 system-ui, sans-serif;
+            z-index: 10;
+        }
+
+        #support-note[hidden] {
+            display: none;
+        }
+
+        #support-note strong {
+            display: block;
+            margin-bottom: 6px;
+        }
+
         canvas {
             width: 100%;
             height: 100%;
@@ -26,7 +48,45 @@
 </head>
 
 <body>
+    <div id="support-note" hidden>
+        <strong>Browser support note</strong>
+        <span id="support-note-text"></span>
+    </div>
     <script data-trunk src="src/main.rs" type="rust"></script>
+    <script>
+        (() => {
+            const note = document.getElementById("support-note");
+            const text = document.getElementById("support-note-text");
+            if (!note || !text) {
+                return;
+            }
+
+            const userAgent = navigator.userAgent || "";
+            const isAndroid = /Android/i.test(userAgent);
+            const hasWebSerial = "serial" in navigator;
+
+            let message = "";
+
+            if (isAndroid) {
+                message = hasWebSerial
+                    ? "Chrome on Android currently exposes Web Serial only for Bluetooth RFCOMM devices. This sender expects a wired USB serial bridge, so phone Chrome is not a supported transport yet."
+                    : "This browser does not expose the Web Serial API on Android. Chrome on Android currently supports Web Serial only for Bluetooth RFCOMM devices, not wired USB serial."
+            } else if (!hasWebSerial) {
+                message = "This browser does not expose the Web Serial API. Use a desktop Chromium-based browser over HTTPS or localhost.";
+            }
+
+            if (message) {
+                text.textContent = message;
+                note.hidden = false;
+            }
+
+            addEventListener("TrunkApplicationStarted", () => {
+                if (!message) {
+                    note.hidden = true;
+                }
+            });
+        })();
+    </script>
 </body>
 
 </html>

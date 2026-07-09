@@ -13,6 +13,11 @@ cargo build
 
 This target runs in a Chromium browser and uses the Web Serial API.
 
+Phone-browser caveat:
+- Desktop Chromium is the supported path for the current bridge.
+- Chrome on Android only exposes Web Serial for Bluetooth RFCOMM devices and does not yet support general wired USB serial for this app's transport.
+- Safari/iOS does not support Web Serial.
+
 Prerequisites:
 - Rust target: `wasm32-unknown-unknown`
 - Trunk: `cargo install trunk`
@@ -80,6 +85,8 @@ Open the URL printed by `trunk serve`, then:
 - Click `Connect` to grant serial-device access.
 - Select the granted port in the port dropdown.
 - Use command tabs that do not require local file access.
+
+If testing on a phone, expect the current build to be informational only unless the bridge is exposed as a Bluetooth RFCOMM serial device.
 
 ## Features
 

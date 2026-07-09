@@ -221,7 +221,7 @@ fn browser_serial() -> Result<web_sys::Serial, String> {
     let has_serial = Reflect::has(&navigator, &JsValue::from_str("serial")).map_err(js_err)?;
     if !has_serial {
         return Err(
-            "Web Serial API is not available. Use a Chromium-based browser over HTTPS or localhost."
+            "Web Serial API is not available. Desktop Chromium over HTTPS or localhost is required. Chrome on Android only supports Web Serial over Bluetooth RFCOMM and does not support wired USB serial yet."
                 .to_string(),
         );
     }
