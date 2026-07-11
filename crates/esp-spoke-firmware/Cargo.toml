@@ -50,6 +50,7 @@ board-v1 = [
     "pushbutton-1",
     "pushbutton-2",
     "status-led",
+    "board-rev-resistor",
 ]
 
 [dependencies]

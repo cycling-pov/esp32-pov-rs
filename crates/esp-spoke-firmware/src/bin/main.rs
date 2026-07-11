@@ -48,6 +48,9 @@ use {esp_backtrace as _, esp_println as _};
 
 extern crate alloc;
 
+#[cfg(all(feature = "adc", feature = "board-rev-resistor"))]
+mod board_revision_check;
+
 #[cfg(feature = "sk9822-strip")]
 use embassy_futures::select::{Either, select};
 use esp_hal::timer::timg::TimerGroup;
@@ -197,6 +200,9 @@ async fn main(spawner: Spawner) -> ! {
             peripherals.GPIO8,
         );
         info!("ADC monitor task initialized (GPIO2/GPIO4/GPIO5/GPIO8)");
+
+        #[cfg(feature = "board-rev-resistor")]
+        board_revision_check::check_board_revision().await;
     }
 
     #[cfg(feature = "pushbutton-1")]
