@@ -53,6 +53,8 @@ enum StorageRequest {
     SetSensorConfig(SensorConfig),
     GetAdcMonitorSampleRateHz,
     SetAdcMonitorSampleRateHz(u16),
+    GetHybridHallTriggerThreshold,
+    SetHybridHallTriggerThreshold(u16),
     GetSlotState(usize),
     SetSlotState(usize, ImageSlotState),
     ReadSlotData(usize),
@@ -87,6 +89,8 @@ enum StorageResponse {
     SetSensorConfig(Result<(), ()>),
     AdcMonitorSampleRateHz(u16),
     SetAdcMonitorSampleRateHz(Result<(), ()>),
+    HybridHallTriggerThreshold(u16),
+    SetHybridHallTriggerThreshold(Result<(), ()>),
     SlotState(ImageSlotState),
     SetSlotState(Result<(), ()>),
     ReadSlotData(Result<Vec<u8>, ()>),
@@ -164,6 +168,26 @@ pub async fn set_adc_monitor_sample_rate_hz(hz: u16) -> Result<(), ()> {
         StorageResponse::SetAdcMonitorSampleRateHz(result) => result,
         _ => {
             warn!("storage:rpc set_adc_monitor_sample_rate_hz unexpected response");
+            Err(())
+        }
+    }
+}
+
+pub async fn get_hybrid_hall_trigger_threshold() -> u16 {
+    match rpc(StorageRequest::GetHybridHallTriggerThreshold).await {
+        StorageResponse::HybridHallTriggerThreshold(threshold) => threshold,
+        _ => {
+            warn!("storage:rpc get_hybrid_hall_trigger_threshold unexpected response");
+            config::DEFAULT_HYBRID_HALL_TRIGGER_THRESHOLD
+        }
+    }
+}
+
+pub async fn set_hybrid_hall_trigger_threshold(threshold: u16) -> Result<(), ()> {
+    match rpc(StorageRequest::SetHybridHallTriggerThreshold(threshold)).await {
+        StorageResponse::SetHybridHallTriggerThreshold(result) => result,
+        _ => {
+            warn!("storage:rpc set_hybrid_hall_trigger_threshold unexpected response");
             Err(())
         }
     }
@@ -558,6 +582,22 @@ pub async fn storage_task(flash: esp_hal::peripherals::FLASH<'static>) -> ! {
                 };
                 STORAGE_RESPONSE_CHANNEL
                     .send(StorageResponse::SetAdcMonitorSampleRateHz(result))
+                    .await;
+            }
+            StorageRequest::GetHybridHallTriggerThreshold => {
+                let threshold = config::get_hybrid_hall_trigger_threshold(&db).await;
+                STORAGE_RESPONSE_CHANNEL
+                    .send(StorageResponse::HybridHallTriggerThreshold(threshold))
+                    .await;
+            }
+            StorageRequest::SetHybridHallTriggerThreshold(threshold) => {
+                let result = if write_slot.is_some() {
+                    Err(())
+                } else {
+                    config::set_hybrid_hall_trigger_threshold(&db, threshold).await
+                };
+                STORAGE_RESPONSE_CHANNEL
+                    .send(StorageResponse::SetHybridHallTriggerThreshold(result))
                     .await;
             }
             StorageRequest::GetSlotState(slot) => {

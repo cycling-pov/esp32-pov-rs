@@ -35,57 +35,106 @@ pub enum AdcSampleSource {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, defmt::Format)]
 pub struct AdcSelection {
-    pub board_rev: bool,
-    pub hall_effect_sensor2: bool,
-    pub battery_voltage: bool,
-    pub hall_effect_sensor1: bool,
+    pub board_rev: Option<bool>,
+    pub hall_effect_sensor2: Option<bool>,
+    pub battery_voltage: Option<bool>,
+    pub hall_effect_sensor1: Option<bool>,
 }
 
 impl AdcSelection {
     pub const fn none() -> Self {
         Self {
-            board_rev: false,
-            hall_effect_sensor2: false,
-            battery_voltage: false,
-            hall_effect_sensor1: false,
+            board_rev: None,
+            hall_effect_sensor2: None,
+            battery_voltage: None,
+            hall_effect_sensor1: None,
         }
     }
 
     pub const fn all() -> Self {
         Self {
-            board_rev: true,
-            hall_effect_sensor2: true,
-            battery_voltage: true,
-            hall_effect_sensor1: true,
+            board_rev: Some(true),
+            hall_effect_sensor2: Some(true),
+            battery_voltage: Some(true),
+            hall_effect_sensor1: Some(true),
         }
     }
 
     pub const fn only(device: AdcDevice) -> Self {
         match device {
             AdcDevice::BoardRev => Self {
-                board_rev: true,
+                board_rev: Some(true),
                 ..Self::none()
             },
             AdcDevice::HallEffectSensor2 => Self {
-                hall_effect_sensor2: true,
+                hall_effect_sensor2: Some(true),
                 ..Self::none()
             },
             AdcDevice::BatteryVoltage => Self {
-                battery_voltage: true,
+                battery_voltage: Some(true),
                 ..Self::none()
             },
             AdcDevice::HallEffectSensor1 => Self {
-                hall_effect_sensor1: true,
+                hall_effect_sensor1: Some(true),
                 ..Self::none()
             },
         }
     }
 
+    pub const fn disabled(device: AdcDevice) -> Self {
+        match device {
+            AdcDevice::BoardRev => Self {
+                board_rev: Some(false),
+                ..Self::none()
+            },
+            AdcDevice::HallEffectSensor2 => Self {
+                hall_effect_sensor2: Some(false),
+                ..Self::none()
+            },
+            AdcDevice::BatteryVoltage => Self {
+                battery_voltage: Some(false),
+                ..Self::none()
+            },
+            AdcDevice::HallEffectSensor1 => Self {
+                hall_effect_sensor1: Some(false),
+                ..Self::none()
+            },
+        }
+    }
+
+    pub const fn stop_all() -> Self {
+        Self {
+            board_rev: Some(false),
+            hall_effect_sensor2: Some(false),
+            battery_voltage: Some(false),
+            hall_effect_sensor1: Some(false),
+        }
+    }
+
+    pub const fn is_enabled(value: Option<bool>) -> bool {
+        matches!(value, Some(true))
+    }
+
+    pub fn apply(&mut self, update: Self) {
+        if let Some(value) = update.board_rev {
+            self.board_rev = Some(value);
+        }
+        if let Some(value) = update.hall_effect_sensor2 {
+            self.hall_effect_sensor2 = Some(value);
+        }
+        if let Some(value) = update.battery_voltage {
+            self.battery_voltage = Some(value);
+        }
+        if let Some(value) = update.hall_effect_sensor1 {
+            self.hall_effect_sensor1 = Some(value);
+        }
+    }
+
     pub const fn any(self) -> bool {
-        self.board_rev
-            || self.hall_effect_sensor2
-            || self.battery_voltage
-            || self.hall_effect_sensor1
+        Self::is_enabled(self.board_rev)
+            || Self::is_enabled(self.hall_effect_sensor2)
+            || Self::is_enabled(self.battery_voltage)
+            || Self::is_enabled(self.hall_effect_sensor1)
     }
 }
 
@@ -198,7 +247,7 @@ async fn sample_selected(
     selection: AdcSelection,
     source: AdcSampleSource,
 ) {
-    if selection.board_rev {
+    if AdcSelection::is_enabled(selection.board_rev) {
         let raw = read_adc_sample(adc, gpio2).await;
         publish_sample(AdcSample {
             device: AdcDevice::BoardRev,
@@ -206,7 +255,7 @@ async fn sample_selected(
             source,
         });
     }
-    if selection.hall_effect_sensor2 {
+    if AdcSelection::is_enabled(selection.hall_effect_sensor2) {
         let raw = read_adc_sample(adc, gpio4).await;
         publish_sample(AdcSample {
             device: AdcDevice::HallEffectSensor2,
@@ -214,7 +263,7 @@ async fn sample_selected(
             source,
         });
     }
-    if selection.battery_voltage {
+    if AdcSelection::is_enabled(selection.battery_voltage) {
         let raw = read_adc_sample(adc, gpio5).await;
         publish_sample(AdcSample {
             device: AdcDevice::BatteryVoltage,
@@ -222,7 +271,7 @@ async fn sample_selected(
             source,
         });
     }
-    if selection.hall_effect_sensor1 {
+    if AdcSelection::is_enabled(selection.hall_effect_sensor1) {
         let raw = read_adc_sample(adc, gpio8).await;
         publish_sample(AdcSample {
             device: AdcDevice::HallEffectSensor1,
@@ -271,11 +320,11 @@ pub async fn adc_task(
             {
                 Either::First(cmd) => match cmd {
                     AdcCommand::StartMonitor { selection } => {
-                        monitor_selection = selection;
+                        monitor_selection.apply(selection);
                         info!("adc:monitor start");
                     }
                     AdcCommand::StopMonitor => {
-                        monitor_selection = AdcSelection::none();
+                        monitor_selection = AdcSelection::stop_all();
                         info!("adc:monitor stop");
                     }
                     AdcCommand::RequestOneshot { selection } => {
@@ -316,11 +365,11 @@ pub async fn adc_task(
         } else {
             match ADC_COMMAND_CHANNEL.receive().await {
                 AdcCommand::StartMonitor { selection } => {
-                    monitor_selection = selection;
+                    monitor_selection.apply(selection);
                     info!("adc:monitor start");
                 }
                 AdcCommand::StopMonitor => {
-                    monitor_selection = AdcSelection::none();
+                    monitor_selection = AdcSelection::stop_all();
                 }
                 AdcCommand::RequestOneshot { selection } => {
                     sample_selected(

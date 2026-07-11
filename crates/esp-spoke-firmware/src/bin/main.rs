@@ -22,10 +22,21 @@ use embassy_time::Timer;
 use esp_hal::clock::CpuClock;
 #[cfg(all(
     feature = "sk9822-strip",
-    not(feature = "mock-spin"),
-    not(feature = "imu-spin")
+    feature = "imu-spin",
+    feature = "hybrid-angle-estimator"
 ))]
-#[cfg(all(feature = "sk9822-strip", feature = "imu-spin"))]
+use esp_spoke_firmware::angle_estimator::hybrid_dual_spin_estimator_task;
+#[cfg(all(
+    feature = "sk9822-strip",
+    feature = "imu-spin",
+    feature = "hybrid-angle-estimator"
+))]
+use esp_spoke_firmware::angle_estimator::imu::imu_spin_rate_publisher_task;
+#[cfg(all(
+    feature = "sk9822-strip",
+    feature = "imu-spin",
+    not(feature = "hybrid-angle-estimator")
+))]
 use esp_spoke_firmware::angle_estimator::imu_dual_spin_estimator_task;
 #[cfg(feature = "sk9822-strip")]
 use esp_spoke_firmware::angle_estimator::new_shared_spin_state;
@@ -44,6 +55,8 @@ use esp_hal::timer::timg::TimerGroup;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use esp_spoke_firmware::led;
 
+#[cfg(feature = "adc")]
+use esp_spoke_firmware::adc;
 #[cfg(feature = "imu-spin")]
 use esp_spoke_firmware::angle_estimator::ImuCalibrationState;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
@@ -55,8 +68,6 @@ use esp_spoke_firmware::pushbutton;
 use esp_spoke_firmware::pushbutton::ButtonId;
 #[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
 use esp_spoke_firmware::status_led::{self, StatusLedRequest};
-#[cfg(feature = "adc")]
-use esp_spoke_firmware::adc;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use esp_spoke_firmware::storage;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
@@ -258,7 +269,7 @@ async fn main(spawner: Spawner) -> ! {
         let sensor_config = storage::get_sensor_config().await;
         let _hall_offset_0 = Angle::from_degrees(sensor_config.hall_offset_0_degrees);
         let _hall_offset_1 = Angle::from_degrees(sensor_config.hall_offset_1_degrees);
-        #[cfg(feature = "imu-spin")]
+        #[cfg(all(feature = "imu-spin", not(feature = "hybrid-angle-estimator")))]
         let imu_offset_degrees = sensor_config.imu_offset_degrees;
 
         // Coerce &'static mut to &'static (shared, Copy) so the same reference
@@ -309,9 +320,21 @@ async fn main(spawner: Spawner) -> ! {
                             .with_scl(i2c_config.scl)
                             .into_async(),
                         ));
-                        #[cfg(feature = "imu-spin")]
+                        #[cfg(feature = "hybrid-angle-estimator")]
+                        spawner.spawn(imu_spin_rate_publisher_task(I2cDevice::new(i2c)).unwrap());
+                        #[cfg(feature = "hybrid-angle-estimator")]
                         spawner.spawn(
-                            esp_spoke_firmware::angle_estimator::imu_dual_spin_estimator_task(
+                            hybrid_dual_spin_estimator_task(
+                                spin0,
+                                spin1,
+                                sensor_config.hall_offset_0_degrees,
+                                sensor_config.hall_offset_1_degrees,
+                            )
+                            .unwrap(),
+                        );
+                        #[cfg(all(feature = "imu-spin", not(feature = "hybrid-angle-estimator")))]
+                        spawner.spawn(
+                            imu_dual_spin_estimator_task(
                                 spin0,
                                 spin1,
                                 I2cDevice::new(i2c),

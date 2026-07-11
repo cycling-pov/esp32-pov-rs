@@ -1,4 +1,6 @@
 pub mod hall_effect;
+#[cfg(feature = "hybrid-angle-estimator")]
+pub mod hybrid;
 pub mod imu;
 pub mod mock;
 
@@ -13,6 +15,8 @@ use pov_algs::{Angle, AngularVelocity};
 
 use crate::led::{CORE1_FLASH_PAUSE_REQUESTED, CORE1_FLASH_PAUSED_COUNT};
 
+#[cfg(feature = "hybrid-angle-estimator")]
+pub use hybrid::hybrid_dual_spin_estimator_task;
 #[cfg(feature = "imu-spin")]
 pub use imu::imu_dual_spin_estimator_task;
 #[cfg(feature = "mock-spin")]

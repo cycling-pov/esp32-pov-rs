@@ -209,6 +209,7 @@ pub type EkvDatabase = Database<EkvFlash<'static>, CriticalSectionRawMutex>;
 //   0x05                → storage index   (value: postcard-encoded StorageIndex)
 //   0x06                → schema version  (value: 1 byte)
 //   0x07                → adc monitor sample rate hz (value: u16 little-endian)
+//   0x08                → hybrid hall threshold (value: u16 little-endian)
 
 /// Key for the active-image id record.
 pub const KEY_ACTIVE_SLOT: &[u8] = &[0x01];
@@ -224,6 +225,9 @@ pub const KEY_STORAGE_SCHEMA_VERSION: &[u8] = &[0x06];
 
 /// Key for persisted ADC periodic-monitor sample rate in hertz.
 pub const KEY_ADC_MONITOR_SAMPLE_RATE_HZ: &[u8] = &[0x07];
+
+/// Key for the hybrid angle estimator hall trigger threshold.
+pub const KEY_HYBRID_HALL_TRIGGER_THRESHOLD: &[u8] = &[0x08];
 
 /// Key for the metadata record of `image_id`.
 #[inline]
