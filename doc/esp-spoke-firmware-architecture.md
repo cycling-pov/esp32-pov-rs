@@ -32,7 +32,6 @@ This document assumes the following Cargo feature set:
 | `sk9822-strip`   | ✓ Enabled   | Dual SK9822 POV display + spin estimator         |
 | `ble`            | — Disabled  | BLE extended-advertisement backend               |
 | `usb-serial`     | — Disabled  | USB-JTAG COBS bridge backend                     |
-| `waveshare-matrix` | — Disabled | WS2811 8×8 matrix backend                      |
 | `mock-spin`      | — Disabled  | Time-based spin simulation (no hardware sensor)  |
 | `heap-stats`     | — Disabled  | Periodic heap-stats logging task                 |
 | `coexistence`    | — Disabled  | Simultaneous BLE + WiFi operation                |

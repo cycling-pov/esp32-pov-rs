@@ -4,22 +4,13 @@ mod pov_dual_strip;
 mod sk9822_strip;
 mod strip;
 pub(crate) mod task_common;
-#[cfg(feature = "waveshare-matrix")]
-mod waveshare_matrix;
 
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use defmt::{info, warn};
 
-#[cfg(feature = "waveshare-matrix")]
-use embassy_executor::Spawner;
-
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Instant, Timer};
-#[cfg(feature = "waveshare-matrix")]
-use esp_hal::rmt::Rmt;
-#[cfg(feature = "waveshare-matrix")]
-use esp_hal::time::Rate;
 use pov_proto::transfer::CommandFrame;
 
 #[cfg(feature = "sk9822-strip")]
@@ -30,10 +21,6 @@ pub use pov_dual_strip::{SharedBitmapMutex, pov_command_task, pov_render_task};
 pub use sk9822_strip::{Sk9822Pins, Sk9822Strip};
 
 pub use strip::{LedBrightness, LedError, LedStrip, LedTimings};
-#[cfg(feature = "waveshare-matrix")]
-pub use waveshare_matrix::WaveshareMatrix;
-#[cfg(feature = "waveshare-matrix")]
-pub use waveshare_matrix::WaveshareMatrixPins;
 
 /// Commands that can be sent to any LED output task.
 pub enum LedCommand {
@@ -125,17 +112,6 @@ pub fn resume_render_after_flash() {
         CORE1_FLASH_PAUSE_REQUESTED.store(false, Ordering::Release);
         info!("led:resume_render_after_flash: all core1 tasks resumed");
     }
-}
-
-#[cfg(feature = "waveshare-matrix")]
-pub fn init_waveshare(
-    rmt: esp_hal::peripherals::RMT<'static>,
-    waveshare_pin: esp_hal::peripherals::GPIO14<'static>,
-    spawner: Spawner,
-) {
-    let rmt = Rmt::new(rmt, Rate::from_mhz(80)).expect("failed to initialize RMT");
-    let led_strip = WaveshareMatrix::new(rmt.channel0, WaveshareMatrixPins::new(waveshare_pin));
-    spawner.spawn(waveshare_matrix::waveshare_matrix_task(led_strip).unwrap());
 }
 
 #[cfg(feature = "sk9822-strip")]

@@ -78,7 +78,6 @@ fn copy_partition_table() {
     // Track all feature toggles that can influence board selection / flash size.
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_BOARD_V1");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_BOARD_TEST_RIG");
-    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_BOARD_WAVESHARE");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_FLASH_16MB");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_FLASH_8MB");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_FLASH_4MB");

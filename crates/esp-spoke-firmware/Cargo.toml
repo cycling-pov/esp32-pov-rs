@@ -16,7 +16,6 @@ path = "./src/angle_estimator/hall_effect/adc_testbench.rs"
 
 [features]
 default = ["board-v1"]
-waveshare-matrix = []
 sk9822-strip = []
 heap-stats = []
 ble = ["dep:bt-hci", "dep:trouble-host", "esp-radio/ble"]
@@ -44,7 +43,6 @@ bmi260 = ["i2c-1", "dep:bmi2"]
 adafruit-9dof = ["i2c-1"]
 
 # Grouping for test boards
-board-waveshare = ["espnow", "waveshare-matrix", "flash-4mb"]
 board-test-rig = [
     "espnow",
     "sk9822-strip",

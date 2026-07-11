@@ -8,21 +8,18 @@
 #![deny(clippy::large_stack_frames)]
 
 use defmt::info;
-#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+#[cfg(feature = "sk9822-strip")]
 use defmt::warn;
 #[cfg(all(feature = "sk9822-strip", feature = "imu-spin"))]
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
 #[cfg(all(feature = "sk9822-strip", feature = "imu-spin"))]
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
-#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+#[cfg(feature = "sk9822-strip")]
 use embassy_time::Duration;
 #[cfg(any(
     feature = "heap-stats",
-    all(
-        feature = "adc",
-        any(feature = "waveshare-matrix", feature = "sk9822-strip")
-    )
+    all(feature = "adc", feature = "sk9822-strip")
 ))]
 use embassy_time::Timer;
 use esp_hal::clock::CpuClock;
@@ -54,39 +51,39 @@ use {esp_backtrace as _, esp_println as _};
 
 extern crate alloc;
 
-#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+#[cfg(feature = "sk9822-strip")]
 use embassy_futures::select::{Either, select};
 use esp_hal::timer::timg::TimerGroup;
 
-#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+#[cfg(feature = "sk9822-strip")]
 use esp_spoke_firmware::led;
 
 #[cfg(feature = "adc")]
 use esp_spoke_firmware::adc;
 #[cfg(feature = "imu-spin")]
 use esp_spoke_firmware::angle_estimator::ImuCalibrationState;
-#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+#[cfg(feature = "sk9822-strip")]
 use esp_spoke_firmware::led::LedCommand;
 use esp_spoke_firmware::networking;
 #[cfg(any(feature = "pushbutton-1", feature = "pushbutton-2"))]
 use esp_spoke_firmware::pushbutton;
 #[cfg(any(feature = "pushbutton-1", feature = "pushbutton-2"))]
 use esp_spoke_firmware::pushbutton::ButtonId;
-#[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
+#[cfg(feature = "status-led")]
 use esp_spoke_firmware::status_led::{self, StatusLedRequest};
-#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+#[cfg(feature = "sk9822-strip")]
 use esp_spoke_firmware::storage;
-#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+#[cfg(feature = "sk9822-strip")]
 use esp_spoke_firmware::storage::config::SensorConfig;
 
-#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+#[cfg(feature = "sk9822-strip")]
 use pov_proto::transfer::DownloadKind;
 #[cfg(all(
     feature = "adc",
-    any(feature = "waveshare-matrix", feature = "sk9822-strip")
+    feature = "sk9822-strip"
 ))]
 use pov_proto::transfer::{AdcDevice as WireAdcDevice, AdcSample as WireAdcSample};
-#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+#[cfg(feature = "sk9822-strip")]
 use pov_proto::transfer::{
     Packet, ResponseFrame, SpokeCommand, SpokeResponse, StorageStats as WireStorageStats,
     encode_packet,
@@ -104,7 +101,7 @@ const COEX_HEAP_BYTES: usize = 56 * 1024;
 
 #[cfg(all(
     feature = "adc",
-    any(feature = "waveshare-matrix", feature = "sk9822-strip")
+    feature = "sk9822-strip"
 ))]
 fn wire_adc_device_to_local(device: WireAdcDevice) -> adc::AdcDevice {
     match device {
@@ -117,7 +114,7 @@ fn wire_adc_device_to_local(device: WireAdcDevice) -> adc::AdcDevice {
 
 #[cfg(all(
     feature = "adc",
-    any(feature = "waveshare-matrix", feature = "sk9822-strip")
+    feature = "sk9822-strip"
 ))]
 fn local_adc_device_to_wire(device: adc::AdcDevice) -> WireAdcDevice {
     match device {
@@ -137,7 +134,7 @@ async fn heap_stats_task() -> ! {
 }
 
 /// Tracks an in-progress streaming download being written to a flash slot.
-#[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+#[cfg(feature = "sk9822-strip")]
 struct ActiveTransfer {
     transfer_id: usize,
     slot: usize,
@@ -201,11 +198,7 @@ async fn main(spawner: Spawner) -> ! {
         info!("Serial backend initialized");
     }
 
-    #[cfg(any(
-        feature = "waveshare-matrix",
-        feature = "sk9822-strip",
-        feature = "adc"
-    ))]
+    #[cfg(any(feature = "sk9822-strip", feature = "adc"))]
     {
         storage::init(peripherals.FLASH, spawner);
         info!("Flash storage initialized");
@@ -240,34 +233,10 @@ async fn main(spawner: Spawner) -> ! {
         info!("Pushbutton-2 initialized on GPIO7");
     }
 
-    #[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
+    #[cfg(feature = "status-led")]
     {
         status_led::init(peripherals.GPIO46, spawner);
         info!("Status LED initialized on GPIO46");
-    }
-
-    #[cfg(all(feature = "waveshare-matrix", not(feature = "sk9822-strip")))]
-    {
-        use esp_hal::system::Stack;
-        use static_cell::StaticCell;
-
-        static APP_CORE_STACK: StaticCell<Stack<65536>> = StaticCell::new();
-        let rmt = peripherals.RMT;
-        let gpio14 = peripherals.GPIO14;
-
-        esp_rtos::start_second_core(
-            peripherals.CPU_CTRL,
-            sw_int1,
-            APP_CORE_STACK.init(Stack::new()),
-            move || {
-                static CORE1_EXECUTOR: StaticCell<esp_rtos::embassy::Executor> = StaticCell::new();
-                CORE1_EXECUTOR
-                    .init(esp_rtos::embassy::Executor::new())
-                    .run(|spawner| {
-                        led::init_waveshare(rmt, gpio14, spawner);
-                    });
-            },
-        );
     }
 
     #[cfg(feature = "imu-spin")]
@@ -404,21 +373,17 @@ async fn main(spawner: Spawner) -> ! {
     info!("LED initialization completed");
 
     // Track the transfer currently being streamed to flash.
-    #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+    #[cfg(feature = "sk9822-strip")]
     let mut active: Option<ActiveTransfer> = None;
-    #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+    #[cfg(feature = "sk9822-strip")]
     let mut render_pause_held = false;
     #[cfg(all(
         feature = "adc",
-        any(feature = "waveshare-matrix", feature = "sk9822-strip")
+        feature = "sk9822-strip"
     ))]
     let mut adc_samples = adc::subscribe().expect("adc subscriber unavailable in main task");
 
-    #[cfg(all(
-        feature = "status-led",
-        feature = "sk9822-strip",
-        not(feature = "waveshare-matrix")
-    ))]
+    #[cfg(all(feature = "status-led", feature = "sk9822-strip"))]
     let mut desired_status = StatusLedRequest::BLINK_SLOW;
 
     #[cfg(feature = "imu-spin")]
@@ -431,29 +396,19 @@ async fn main(spawner: Spawner) -> ! {
         }
     }
 
-    #[cfg(all(
-        feature = "status-led",
-        feature = "sk9822-strip",
-        not(feature = "waveshare-matrix"),
-        feature = "imu-spin"
-    ))]
+    #[cfg(all(feature = "status-led", feature = "sk9822-strip", feature = "imu-spin"))]
     {
         let _ = status_led::try_send_request(StatusLedRequest::BLINK_FAST);
     }
 
-    #[cfg(all(
-        feature = "status-led",
-        feature = "sk9822-strip",
-        not(feature = "waveshare-matrix"),
-        not(feature = "imu-spin")
-    ))]
+    #[cfg(all(feature = "status-led", feature = "sk9822-strip", not(feature = "imu-spin")))]
     {
         let _ = status_led::try_send_request(desired_status);
     }
 
     loop {
         // Forward networking events to the active LED task or storage layer.
-        #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+        #[cfg(feature = "sk9822-strip")]
         {
             info!("Loop: waiting for network event");
 
@@ -493,7 +448,7 @@ async fn main(spawner: Spawner) -> ! {
                         }
                     }
 
-                    #[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
+                    #[cfg(feature = "status-led")]
                     {
                         let effective = if imu_calibrating {
                             StatusLedRequest::BLINK_FAST
@@ -578,7 +533,7 @@ async fn main(spawner: Spawner) -> ! {
                                 transfer_id, slot_usize
                             );
 
-                            #[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
+                            #[cfg(feature = "status-led")]
                             {
                                 desired_status = StatusLedRequest::BLINK_SLOW;
                                 let effective = {
@@ -652,7 +607,7 @@ async fn main(spawner: Spawner) -> ! {
                             );
                         }
 
-                        #[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
+                        #[cfg(feature = "status-led")]
                         {
                             desired_status = StatusLedRequest::OFF;
                             let effective = {
@@ -906,7 +861,7 @@ async fn main(spawner: Spawner) -> ! {
                         );
                     }
                     _ => {
-                        #[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
+                        #[cfg(feature = "status-led")]
                         {
                             match command_kind {
                                 SpokeCommand::DisplayOff => {
@@ -1072,10 +1027,7 @@ async fn main(spawner: Spawner) -> ! {
                                         a.slot
                                     );
                                 } else {
-                                    #[cfg(all(
-                                        feature = "status-led",
-                                        not(feature = "waveshare-matrix")
-                                    ))]
+                                    #[cfg(feature = "status-led")]
                                     {
                                         desired_status = StatusLedRequest::BLINK_SLOW;
                                         let effective = {
