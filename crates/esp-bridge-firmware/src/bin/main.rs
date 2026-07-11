@@ -7,18 +7,17 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
-use bt_hci::controller::ExternalController;
 use defmt::info;
 use embassy_executor::Spawner;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 use embassy_time::{Duration, Timer};
 use esp_bridge_firmware::{
-    ble_adv::{BleController, ble_adv_task},
+    ble_adv::ble_adv_task,
     esp_now_broadcaster::{InboundMsg, esp_now_task},
     usb_serial::{ChunkMsg, usb_serial_task},
 };
 use esp_hal::{clock::CpuClock, timer::timg::TimerGroup, usb_serial_jtag::UsbSerialJtag};
-use esp_radio::{ble::controller::BleConnector, esp_now::EspNow, wifi::WifiController};
+use esp_radio::{esp_now::EspNow, wifi::WifiController};
 use {esp_backtrace as _, esp_println as _};
 
 extern crate alloc;
@@ -93,10 +92,6 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("ESP-NOW ready to broadcast");
 
-    // ---------- BLE --------------------------------------------------------------
-    let ble_connector = BleConnector::new(peripherals.BT, Default::default()).unwrap();
-    let ble_ctrl: BleController = ExternalController::new(ble_connector);
-
     // ---------- USB Serial JTAG --------------------------------------------------
     let usb = UsbSerialJtag::new(peripherals.USB_DEVICE).into_async();
 
@@ -111,7 +106,7 @@ async fn main(spawner: Spawner) -> ! {
         .unwrap(),
     );
 
-    spawner.spawn(ble_adv_task(ble_ctrl, BLE_CHANNEL.receiver()).unwrap());
+    spawner.spawn(ble_adv_task(peripherals.BT, BLE_CHANNEL.receiver()).unwrap());
 
     spawner.spawn(
         esp_now_task(

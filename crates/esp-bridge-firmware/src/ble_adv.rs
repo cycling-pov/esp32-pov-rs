@@ -41,9 +41,16 @@ const BROADCASTER_ADDR: [u8; 6] = [0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFF];
 
 #[embassy_executor::task]
 pub async fn ble_adv_task(
-    controller: BleController,
+    bt: esp_hal::peripherals::BT<'static>,
     receiver: Receiver<'static, CriticalSectionRawMutex, ChunkMsg, 4>,
 ) {
+    // Keep BT/coexistence idle until the host actually requests BLE transport.
+    let first_msg = receiver.receive().await;
+    info!("BLE transport requested; enabling BLE radio");
+
+    let ble_connector = BleConnector::new(bt, Default::default()).unwrap();
+    let controller: BleController = ExternalController::new(ble_connector);
+
     let mut resources = HostResources::<DefaultPacketPool, CONNECTIONS, L2CAP_CHANNELS>::new();
     let random_addr = Address::random(BROADCASTER_ADDR);
     let builder = trouble_host::new(controller, &mut resources).set_random_address(random_addr);
@@ -60,8 +67,13 @@ pub async fn ble_adv_task(
     // other side of `select`.
     let adv_loop = async {
         info!("BLE extended advertisement broadcaster task started");
+
+        let mut pending = Some(first_msg);
         loop {
-            let msg = receiver.receive().await;
+            let msg = match pending.take() {
+                Some(msg) => msg,
+                None => receiver.receive().await,
+            };
 
             // Build an AD structure: manufacturer-specific data (type 0xFF).
             // Layout: [len][0xFF][chunk bytes…]
