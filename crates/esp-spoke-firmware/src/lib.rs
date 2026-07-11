@@ -10,6 +10,8 @@ compile_error!("features `imu-spin` and `mock-spin` are mutually exclusive");
 
 extern crate alloc;
 
+#[cfg(feature = "adc")]
+pub mod adc;
 pub mod angle_estimator;
 pub mod bitmap;
 pub mod led;

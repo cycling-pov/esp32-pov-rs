@@ -42,6 +42,12 @@ pub enum SpokeCommand {
     },
     ClearAllImages,
     RequestStorageStats,
+    SetAdcMonitorSampleRateHz {
+        hz: u16,
+    },
+    SetHybridHallTriggerThreshold {
+        threshold: u16,
+    },
     SetSensorOffsets {
         hall_offset_0_degrees: f32,
         hall_offset_1_degrees: f32,

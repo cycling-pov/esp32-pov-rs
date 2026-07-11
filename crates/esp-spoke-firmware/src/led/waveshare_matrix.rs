@@ -295,6 +295,18 @@ pub async fn waveshare_matrix_task(mut led_strip: WaveshareMatrix<'static>) -> !
                             frame.transfer_id
                         );
                     }
+                    SpokeCommand::SetAdcMonitorSampleRateHz { .. } => {
+                        info!(
+                            "ignoring SetAdcMonitorSampleRateHz in LED task for transfer {}",
+                            frame.transfer_id
+                        );
+                    }
+                    SpokeCommand::SetHybridHallTriggerThreshold { .. } => {
+                        info!(
+                            "ignoring SetHybridHallTriggerThreshold in LED task for transfer {}",
+                            frame.transfer_id
+                        );
+                    }
                     SpokeCommand::RequestStorageStats => {
                         info!(
                             "ignoring RequestStorageStats in LED task for transfer {}",

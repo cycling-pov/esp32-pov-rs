@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
 use pov_sender_core::{
-    DownloadKind, DownloadRequest, EspNowDelivery, PolarEncodeOptions, SensorOffsets,
-    SerialLinkConfig, SpokeCommand, Transport as CoreTransport, send_command, send_download,
-    send_image, send_sensor_offsets, send_video,
+    send_command, send_download, send_image, send_sensor_offsets, send_video, DownloadKind,
+    DownloadRequest, EspNowDelivery, PolarEncodeOptions, SensorOffsets, SerialLinkConfig,
+    SpokeCommand, Transport as CoreTransport,
 };
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -129,6 +129,16 @@ enum Command {
         #[arg(long)]
         imu_offset_degrees: f32,
     },
+    /// Persist the ADC monitor sample rate in hertz to nonvolatile storage.
+    SetAdcMonitorSampleRateHz {
+        #[arg(long)]
+        hz: u16,
+    },
+    /// Persist the hybrid hall trigger threshold to nonvolatile storage.
+    SetHybridHallTriggerThreshold {
+        #[arg(long)]
+        threshold: u16,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -237,6 +247,23 @@ fn main() -> anyhow::Result<()> {
             )?;
             println!(
                 "Collected command: SetSensorOffsets hall0={hall_offset_0_degrees} hall1={hall_offset_1_degrees} imu={imu_offset_degrees}"
+            );
+            stats
+        }
+        Command::SetAdcMonitorSampleRateHz { hz } => {
+            let stats = send_command(&config, SpokeCommand::SetAdcMonitorSampleRateHz { hz })?;
+            println!(
+                "Collected command: SetAdcMonitorSampleRateHz hz={hz}. Reboot firmware to apply."
+            );
+            stats
+        }
+        Command::SetHybridHallTriggerThreshold { threshold } => {
+            let stats = send_command(
+                &config,
+                SpokeCommand::SetHybridHallTriggerThreshold { threshold },
+            )?;
+            println!(
+                "Collected command: SetHybridHallTriggerThreshold threshold={threshold}. Reboot firmware to apply."
             );
             stats
         }

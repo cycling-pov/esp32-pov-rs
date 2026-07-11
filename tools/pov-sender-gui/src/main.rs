@@ -94,7 +94,7 @@ fn format_mac(mac: [u8; 6]) -> String {
 enum CommandTab {
     SendImage,
     SendOta,
-    SetOffsets,
+    DeviceConfig,
     SetActiveSlot,
     InputLessCommands,
     StorageStats,
@@ -104,7 +104,7 @@ impl CommandTab {
     const ALL: [Self; 6] = [
         Self::SendImage,
         Self::SendOta,
-        Self::SetOffsets,
+        Self::DeviceConfig,
         Self::SetActiveSlot,
         Self::InputLessCommands,
         Self::StorageStats,
@@ -114,7 +114,7 @@ impl CommandTab {
         match self {
             Self::SendImage => "Send Image",
             Self::SendOta => "Send OTA",
-            Self::SetOffsets => "Set Offsets",
+            Self::DeviceConfig => "Device Config",
             Self::SetActiveSlot => "Set Active Slot",
             Self::InputLessCommands => "Input-Less Commands",
             Self::StorageStats => "Storage Stats",
@@ -163,6 +163,10 @@ enum Message {
     HallOffset1Changed(String),
     ImuOffsetChanged(String),
     SetSensorOffsets,
+    AdcMonitorSampleRateChanged(String),
+    SetAdcMonitorSampleRateHz,
+    HybridHallTriggerThresholdChanged(String),
+    SetHybridHallTriggerThreshold,
     StorageStatsDone(Result<String, String>),
     ActionDone(Result<String, String>),
 }
@@ -195,6 +199,8 @@ struct SenderGui {
     hall_offset_0_degrees: String,
     hall_offset_1_degrees: String,
     imu_offset_degrees: String,
+    adc_monitor_sample_rate_hz: String,
+    hybrid_hall_trigger_threshold: String,
     active_slot_input: String,
     storage_stats_text: String,
     status: String,
@@ -231,6 +237,8 @@ impl Default for SenderGui {
             hall_offset_0_degrees: String::new(),
             hall_offset_1_degrees: String::new(),
             imu_offset_degrees: String::new(),
+            adc_monitor_sample_rate_hz: "20".to_string(),
+            hybrid_hall_trigger_threshold: "2000".to_string(),
             active_slot_input: String::new(),
             storage_stats_text: "No storage stats requested yet.".to_string(),
             status: "Ready".to_string(),
@@ -524,6 +532,16 @@ impl SenderGui {
                 Task::none()
             }
             Message::SetSensorOffsets => self.run_set_sensor_offsets(),
+            Message::AdcMonitorSampleRateChanged(value) => {
+                self.adc_monitor_sample_rate_hz = value;
+                Task::none()
+            }
+            Message::SetAdcMonitorSampleRateHz => self.run_set_adc_monitor_sample_rate_hz(),
+            Message::HybridHallTriggerThresholdChanged(value) => {
+                self.hybrid_hall_trigger_threshold = value;
+                Task::none()
+            }
+            Message::SetHybridHallTriggerThreshold => self.run_set_hybrid_hall_trigger_threshold(),
             Message::StorageStatsDone(result) => {
                 self.busy = false;
                 self.status = match result {
@@ -660,7 +678,7 @@ impl SenderGui {
         match self.active_tab {
             CommandTab::SendImage => self.send_image_tab(),
             CommandTab::SendOta => self.send_ota_tab(),
-            CommandTab::SetOffsets => self.set_offsets_tab(),
+            CommandTab::DeviceConfig => self.device_config_tab(),
             CommandTab::SetActiveSlot => self.set_active_slot_tab(),
             CommandTab::InputLessCommands => self.input_less_commands_tab(),
             CommandTab::StorageStats => self.storage_stats_tab(),
@@ -732,8 +750,8 @@ impl SenderGui {
         container(content).into()
     }
 
-    fn set_offsets_tab(&self) -> Element<'_, Message> {
-        let content = row![
+    fn device_config_tab(&self) -> Element<'_, Message> {
+        let offsets = row![
             text_input("hall 0 deg", &self.hall_offset_0_degrees)
                 .on_input(Message::HallOffset0Changed),
             text_input("hall 1 deg", &self.hall_offset_1_degrees)
@@ -743,7 +761,23 @@ impl SenderGui {
         ]
         .spacing(10);
 
-        container(content).into()
+        let sample_rate = row![
+            text_input("sample rate hz", &self.adc_monitor_sample_rate_hz)
+                .on_input(Message::AdcMonitorSampleRateChanged),
+            button("Set Sample Rate")
+                .on_press_maybe((!self.busy).then_some(Message::SetAdcMonitorSampleRateHz)),
+        ]
+        .spacing(10);
+
+        let hall_threshold = row![
+            text_input("hall threshold", &self.hybrid_hall_trigger_threshold)
+                .on_input(Message::HybridHallTriggerThresholdChanged),
+            button("Set Hall Threshold")
+                .on_press_maybe((!self.busy).then_some(Message::SetHybridHallTriggerThreshold),),
+        ]
+        .spacing(10);
+
+        container(column![offsets, sample_rate, hall_threshold].spacing(10)).into()
     }
 
     fn input_less_commands_tab(&self) -> Element<'_, Message> {
@@ -1188,6 +1222,80 @@ impl SenderGui {
                 Ok(format!(
                     "Sensor offsets sent: {} packet(s), {} transmission(s). Reboot firmware to apply.",
                     stats.packet_count, stats.total_transmissions
+                ))
+            },
+            Message::ActionDone,
+        )
+    }
+
+    #[cfg_attr(target_arch = "wasm32", allow(unreachable_code))]
+    fn run_set_adc_monitor_sample_rate_hz(&mut self) -> Task<Message> {
+        let hz = match self.adc_monitor_sample_rate_hz.parse::<u16>() {
+            Ok(value) if value > 0 => value,
+            _ => {
+                self.status = "Invalid ADC monitor sample rate".to_string();
+                return Task::none();
+            }
+        };
+
+        self.run_command_with_status(
+            SpokeCommand::SetAdcMonitorSampleRateHz { hz },
+            "Persisting ADC monitor sample rate...",
+            format!("ADC monitor sample rate sent: reboot firmware to apply (hz={hz})."),
+        )
+    }
+
+    #[cfg_attr(target_arch = "wasm32", allow(unreachable_code))]
+    fn run_set_hybrid_hall_trigger_threshold(&mut self) -> Task<Message> {
+        let threshold = match self.hybrid_hall_trigger_threshold.parse::<u16>() {
+            Ok(value) if value > 0 => value,
+            _ => {
+                self.status = "Invalid hall trigger threshold".to_string();
+                return Task::none();
+            }
+        };
+
+        self.run_command_with_status(
+            SpokeCommand::SetHybridHallTriggerThreshold { threshold },
+            "Persisting hall trigger threshold...",
+            format!(
+                "Hall trigger threshold sent: reboot firmware to apply (threshold={threshold})."
+            ),
+        )
+    }
+
+    #[cfg_attr(target_arch = "wasm32", allow(unreachable_code))]
+    fn run_command_with_status(
+        &mut self,
+        command: SpokeCommand,
+        pending_status: &str,
+        success_status: String,
+    ) -> Task<Message> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = &success_status;
+            self.busy = true;
+            self.status = pending_status.to_string();
+            return self.run_command(command);
+        }
+
+        let config = match self.parse_link_config() {
+            Ok(config) => config,
+            Err(err) => {
+                self.status = err;
+                return Task::none();
+            }
+        };
+
+        self.busy = true;
+        self.status = pending_status.to_string();
+
+        Task::perform(
+            async move {
+                let stats = send_command(&config, command).map_err(|e| e.to_string())?;
+                Ok(format!(
+                    "{} {} packet(s), {} transmission(s)",
+                    success_status, stats.packet_count, stats.total_transmissions
                 ))
             },
             Message::ActionDone,

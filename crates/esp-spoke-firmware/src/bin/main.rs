@@ -22,10 +22,21 @@ use embassy_time::Timer;
 use esp_hal::clock::CpuClock;
 #[cfg(all(
     feature = "sk9822-strip",
-    not(feature = "mock-spin"),
-    not(feature = "imu-spin")
+    feature = "imu-spin",
+    feature = "hybrid-angle-estimator"
 ))]
-#[cfg(all(feature = "sk9822-strip", feature = "imu-spin"))]
+use esp_spoke_firmware::angle_estimator::hybrid_dual_spin_estimator_task;
+#[cfg(all(
+    feature = "sk9822-strip",
+    feature = "imu-spin",
+    feature = "hybrid-angle-estimator"
+))]
+use esp_spoke_firmware::angle_estimator::imu::imu_spin_rate_publisher_task;
+#[cfg(all(
+    feature = "sk9822-strip",
+    feature = "imu-spin",
+    not(feature = "hybrid-angle-estimator")
+))]
 use esp_spoke_firmware::angle_estimator::imu_dual_spin_estimator_task;
 #[cfg(feature = "sk9822-strip")]
 use esp_spoke_firmware::angle_estimator::new_shared_spin_state;
@@ -44,6 +55,8 @@ use esp_hal::timer::timg::TimerGroup;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use esp_spoke_firmware::led;
 
+#[cfg(feature = "adc")]
+use esp_spoke_firmware::adc;
 #[cfg(feature = "imu-spin")]
 use esp_spoke_firmware::angle_estimator::ImuCalibrationState;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
@@ -151,10 +164,27 @@ async fn main(spawner: Spawner) -> ! {
         info!("Serial backend initialized");
     }
 
-    #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+    #[cfg(any(
+        feature = "waveshare-matrix",
+        feature = "sk9822-strip",
+        feature = "adc"
+    ))]
     {
         storage::init(peripherals.FLASH, spawner);
         info!("Flash storage initialized");
+    }
+
+    #[cfg(feature = "adc")]
+    {
+        adc::init(
+            spawner,
+            peripherals.ADC1,
+            peripherals.GPIO2,
+            peripherals.GPIO4,
+            peripherals.GPIO5,
+            peripherals.GPIO8,
+        );
+        info!("ADC monitor task initialized (GPIO2/GPIO4/GPIO5/GPIO8)");
     }
 
     #[cfg(feature = "pushbutton-1")]
@@ -239,7 +269,7 @@ async fn main(spawner: Spawner) -> ! {
         let sensor_config = storage::get_sensor_config().await;
         let _hall_offset_0 = Angle::from_degrees(sensor_config.hall_offset_0_degrees);
         let _hall_offset_1 = Angle::from_degrees(sensor_config.hall_offset_1_degrees);
-        #[cfg(feature = "imu-spin")]
+        #[cfg(all(feature = "imu-spin", not(feature = "hybrid-angle-estimator")))]
         let imu_offset_degrees = sensor_config.imu_offset_degrees;
 
         // Coerce &'static mut to &'static (shared, Copy) so the same reference
@@ -290,9 +320,21 @@ async fn main(spawner: Spawner) -> ! {
                             .with_scl(i2c_config.scl)
                             .into_async(),
                         ));
-                        #[cfg(feature = "imu-spin")]
+                        #[cfg(feature = "hybrid-angle-estimator")]
+                        spawner.spawn(imu_spin_rate_publisher_task(I2cDevice::new(i2c)).unwrap());
+                        #[cfg(feature = "hybrid-angle-estimator")]
                         spawner.spawn(
-                            esp_spoke_firmware::angle_estimator::imu_dual_spin_estimator_task(
+                            hybrid_dual_spin_estimator_task(
+                                spin0,
+                                spin1,
+                                sensor_config.hall_offset_0_degrees,
+                                sensor_config.hall_offset_1_degrees,
+                            )
+                            .unwrap(),
+                        );
+                        #[cfg(all(feature = "imu-spin", not(feature = "hybrid-angle-estimator")))]
+                        spawner.spawn(
+                            imu_dual_spin_estimator_task(
                                 spin0,
                                 spin1,
                                 I2cDevice::new(i2c),
@@ -609,6 +651,36 @@ async fn main(spawner: Spawner) -> ! {
                             info!(
                                 "main:persisted sensor offsets transfer_id={} reboot_required=true",
                                 transfer_id
+                            );
+                        }
+                    }
+                    SpokeCommand::SetAdcMonitorSampleRateHz { hz } => {
+                        let result = storage::set_adc_monitor_sample_rate_hz(hz).await;
+
+                        if result.is_err() {
+                            warn!(
+                                "main:failed to persist adc monitor sample rate transfer_id={} hz={}",
+                                transfer_id, hz
+                            );
+                        } else {
+                            info!(
+                                "main:persisted adc monitor sample rate transfer_id={} hz={} reboot_required=true",
+                                transfer_id, hz
+                            );
+                        }
+                    }
+                    SpokeCommand::SetHybridHallTriggerThreshold { threshold } => {
+                        let result = storage::set_hybrid_hall_trigger_threshold(threshold).await;
+
+                        if result.is_err() {
+                            warn!(
+                                "main:failed to persist hall trigger threshold transfer_id={} threshold={}",
+                                transfer_id, threshold
+                            );
+                        } else {
+                            info!(
+                                "main:persisted hall trigger threshold transfer_id={} threshold={} reboot_required=true",
+                                transfer_id, threshold
                             );
                         }
                     }

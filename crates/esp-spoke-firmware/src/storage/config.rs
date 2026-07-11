@@ -4,12 +4,15 @@ use pov_proto::image::Encoding;
 use serde::{Deserialize, Serialize};
 
 use super::ekv_flash::{
-    EkvDatabase, KEY_ACTIVE_SLOT, KEY_SENSOR_CONFIG, KEY_STORAGE_INDEX, KEY_STORAGE_SCHEMA_VERSION,
-    meta_key,
+    EkvDatabase, KEY_ACTIVE_SLOT, KEY_ADC_MONITOR_SAMPLE_RATE_HZ,
+    KEY_HYBRID_HALL_TRIGGER_THRESHOLD, KEY_SENSOR_CONFIG, KEY_STORAGE_INDEX,
+    KEY_STORAGE_SCHEMA_VERSION, meta_key,
 };
 
 pub const STORAGE_SCHEMA_VERSION: u8 = 2;
 pub const MAX_TRACKED_IMAGES: usize = 32;
+pub const DEFAULT_ADC_MONITOR_SAMPLE_RATE_HZ: u16 = 20;
+pub const DEFAULT_HYBRID_HALL_TRIGGER_THRESHOLD: u16 = 2000;
 
 // -- Value types ---------------------------------------------------------------
 
@@ -274,6 +277,90 @@ pub async fn set_sensor_config(db: &EkvDatabase, config: SensorConfig) -> Result
         })?;
     wtx.commit().await.map_err(|_| {
         warn!("config:set_sensor_config commit error");
+    })
+}
+
+pub async fn get_adc_monitor_sample_rate_hz(db: &EkvDatabase) -> u16 {
+    let rtx = db.read_transaction().await;
+    let mut buf = [0u8; 2];
+    match rtx.read(KEY_ADC_MONITOR_SAMPLE_RATE_HZ, &mut buf).await {
+        Ok(2) => {
+            let hz = u16::from_le_bytes(buf);
+            if hz == 0 {
+                DEFAULT_ADC_MONITOR_SAMPLE_RATE_HZ
+            } else {
+                hz
+            }
+        }
+        Ok(_) | Err(ReadError::KeyNotFound) => DEFAULT_ADC_MONITOR_SAMPLE_RATE_HZ,
+        Err(e) => {
+            warn!(
+                "config:get_adc_monitor_sample_rate_hz read error: {:?}",
+                defmt::Debug2Format(&e)
+            );
+            DEFAULT_ADC_MONITOR_SAMPLE_RATE_HZ
+        }
+    }
+}
+
+pub async fn set_adc_monitor_sample_rate_hz(db: &EkvDatabase, hz: u16) -> Result<(), ()> {
+    let hz = hz.max(1);
+    let mut wtx = db.write_transaction().await;
+    wtx.write(KEY_ADC_MONITOR_SAMPLE_RATE_HZ, &hz.to_le_bytes())
+        .await
+        .map_err(|_| {
+            warn!(
+                "config:set_adc_monitor_sample_rate_hz write error hz={}",
+                hz
+            );
+        })?;
+    wtx.commit().await.map_err(|_| {
+        warn!(
+            "config:set_adc_monitor_sample_rate_hz commit error hz={}",
+            hz
+        );
+    })
+}
+
+pub async fn get_hybrid_hall_trigger_threshold(db: &EkvDatabase) -> u16 {
+    let rtx = db.read_transaction().await;
+    let mut buf = [0u8; 2];
+    match rtx.read(KEY_HYBRID_HALL_TRIGGER_THRESHOLD, &mut buf).await {
+        Ok(2) => {
+            let threshold = u16::from_le_bytes(buf);
+            if threshold == 0 {
+                DEFAULT_HYBRID_HALL_TRIGGER_THRESHOLD
+            } else {
+                threshold
+            }
+        }
+        Ok(_) | Err(ReadError::KeyNotFound) => DEFAULT_HYBRID_HALL_TRIGGER_THRESHOLD,
+        Err(e) => {
+            warn!(
+                "config:get_hybrid_hall_trigger_threshold read error: {:?}",
+                defmt::Debug2Format(&e)
+            );
+            DEFAULT_HYBRID_HALL_TRIGGER_THRESHOLD
+        }
+    }
+}
+
+pub async fn set_hybrid_hall_trigger_threshold(db: &EkvDatabase, threshold: u16) -> Result<(), ()> {
+    let threshold = threshold.max(1);
+    let mut wtx = db.write_transaction().await;
+    wtx.write(KEY_HYBRID_HALL_TRIGGER_THRESHOLD, &threshold.to_le_bytes())
+        .await
+        .map_err(|_| {
+            warn!(
+                "config:set_hybrid_hall_trigger_threshold write error threshold={}",
+                threshold
+            );
+        })?;
+    wtx.commit().await.map_err(|_| {
+        warn!(
+            "config:set_hybrid_hall_trigger_threshold commit error threshold={}",
+            threshold
+        );
     })
 }
 

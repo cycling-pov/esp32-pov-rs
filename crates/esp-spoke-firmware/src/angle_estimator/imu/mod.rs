@@ -21,6 +21,15 @@ type SharedI2cDevice = embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice<
     esp_hal::i2c::master::I2c<'static, esp_hal::Async>,
 >;
 
+#[cfg(feature = "hybrid-angle-estimator")]
+pub use bmi260::subscribe_spin_rate;
+
+#[cfg(feature = "hybrid-angle-estimator")]
+#[embassy_executor::task]
+pub async fn imu_spin_rate_publisher_task(i2c: SharedI2cDevice) -> ! {
+    bmi260::spin_rate_publisher_impl(i2c).await
+}
+
 #[cfg(feature = "imu-spin")]
 #[embassy_executor::task]
 pub async fn imu_dual_spin_estimator_task(
