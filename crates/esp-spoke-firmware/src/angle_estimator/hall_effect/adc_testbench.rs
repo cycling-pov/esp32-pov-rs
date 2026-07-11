@@ -12,16 +12,29 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
-use esp_spoke_firmware::angle_estimator::hall_effect::adc_monitor::{
-    AdcMonitor, AdcSample, LAST_TICK_0, LAST_TICK_1, MonitorConfig, MonitorThreshold,
-    SENSOR_TRIGGER, SENSOR_TRIGGER_0, SENSOR_TRIGGER_1, SampleRate,
-};
 use {esp_backtrace as _, esp_println as _};
 
 use esp_hal::analog;
-use esp_hal::analog::adc::AdcConfig;
+use esp_hal::analog::adc::{Adc, AdcCalScheme, AdcChannel, AdcConfig, AdcPin, RegisterAccess};
 
 extern crate alloc;
+
+async fn read_adc_sample<'a, 'd, ADCX, PIN, CS>(
+    adc: &'a mut Adc<'d, ADCX, esp_hal::Blocking>,
+    pin: &'a mut AdcPin<PIN, ADCX, CS>,
+) -> u16
+where
+    ADCX: RegisterAccess + 'd,
+    PIN: AdcChannel,
+    CS: AdcCalScheme<ADCX>,
+{
+    loop {
+        if let Ok(sample) = adc.read_oneshot(pin) {
+            break sample;
+        }
+        Timer::after(Duration::from_millis(1)).await;
+    }
+}
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -47,62 +60,34 @@ async fn main(_spawner: Spawner) -> ! {
 
     info!("Embassy initialized!");
 
-    // Configure a hall-sensor GPIO as ADC1 input and monitor it continuously.
+    // Configure two hall-sensor GPIOs as ADC1 inputs for periodic oneshot sampling.
     let mut adc1_config: AdcConfig<_> = AdcConfig::new();
-    let hall_pin1 = adc1_config.enable_pin(peripherals.GPIO5, analog::adc::Attenuation::_0dB);
+    let mut hall_pin1 = adc1_config.enable_pin(peripherals.GPIO8, analog::adc::Attenuation::_11dB);
+    let mut hall_pin2 = adc1_config.enable_pin(peripherals.GPIO4, analog::adc::Attenuation::_11dB);
+    let mut status_resistor =
+        adc1_config.enable_pin(peripherals.GPIO2, analog::adc::Attenuation::_0dB);
+    let mut adc1 = Adc::new(peripherals.ADC1, adc1_config);
 
-    let hall_pin2 = adc1_config.enable_pin(peripherals.GPIO6, analog::adc::Attenuation::_0dB);
+    const SAMPLE_FREQ_HZ: u64 = 20;
+    const SAMPLE_INTERVAL: Duration = Duration::from_millis(1000 / SAMPLE_FREQ_HZ);
 
-    let config = MonitorConfig {
-        attenuation: analog::adc::Attenuation::_0dB,
-        threshold: MonitorThreshold {
-            low: AdcSample::new(1800),
-            high: AdcSample::new(3000),
-        },
-        sample_rate: SampleRate {
-            timer_target: 200,
-            sar_clk_div: 4,
-        },
-    };
-
-    // Example for a single monitor channel.
-    // let mut hall_monitor = AdcMonitor::new(peripherals.ADC1, hall_pin2, config.clone());
-
-    let mut hall_monitor =
-        AdcMonitor::new_dual(peripherals.ADC1, hall_pin1, hall_pin2, config, config);
-    hall_monitor.start();
+    let mut last_iter = embassy_time::Instant::now();
 
     loop {
-        info!("--------------------------");
+        let now = embassy_time::Instant::now();
+        let elapsed_us = now.duration_since(last_iter).as_micros();
+        last_iter = now;
+        info!("-------------------------- iter_us={=u64}", elapsed_us);
 
-        let triggered = SENSOR_TRIGGER.try_take().map(|_| 0usize);
-        if triggered.is_some() {
-            info!("an adc monitor triggered",);
-        }
+        let raw1 = read_adc_sample(&mut adc1, &mut hall_pin1).await;
+        let raw2 = read_adc_sample(&mut adc1, &mut hall_pin2).await;
+        let raw_status = read_adc_sample(&mut adc1, &mut status_resistor).await;
 
-        let triggered = SENSOR_TRIGGER_0.try_take().map(|_| 0usize);
-        if let Some(ind) = triggered {
-            critical_section::with(|cs| {
-                info!(
-                    "last adc tick0: {=u64},{=usize}",
-                    LAST_TICK_0.borrow_ref(cs).as_millis(),
-                    ind
-                );
-            });
-        }
+        info!("monitor1 sample: raw={=u16}", raw1);
+        info!("monitor2 sample: raw={=u16}", raw2);
+        info!("status resistor sample: raw={=u16}", raw_status);
 
-        let triggered = SENSOR_TRIGGER_1.try_take().map(|_| 0usize);
-        if let Some(ind) = triggered {
-            critical_section::with(|cs| {
-                info!(
-                    "last adc tick1: {=u64},{=usize}",
-                    LAST_TICK_1.borrow_ref(cs).as_millis(),
-                    ind
-                );
-            });
-        }
-
-        Timer::after(Duration::from_secs(1)).await;
+        Timer::after(SAMPLE_INTERVAL).await;
     }
 
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.0.0/examples
