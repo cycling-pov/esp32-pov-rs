@@ -106,6 +106,7 @@ jobs:
           New-Item -Name dist -ItemType Directory
           Copy-Item images.json dist -Force
           Copy-Item images dist -Recurse -Force
+          Copy-Item target\x86_64-pc-windows-msvc\release\cbc.exe dist -Force
 
       - name: Package binary
         working-directory: tools/pov-sim
