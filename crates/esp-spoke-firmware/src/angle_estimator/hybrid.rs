@@ -30,6 +30,9 @@ pub async fn hybrid_dual_spin_estimator_task(
 
     let mut last = Instant::now();
     let mut estimator = PositionEstimatorGyro::<2>::new(Duration::from_millis(100));
+    // Track whether each hall sensor is currently inside the trigger window.
+    // This lets us emit one trigger per threshold-crossing edge.
+    let mut hall_active = [false; 2];
 
     info!("spin:hybrid starting hall_threshold={=u16}", hall_threshold);
 
@@ -43,15 +46,25 @@ pub async fn hybrid_dual_spin_estimator_task(
 
         let mut triggered = None;
         while let Some(sample) = hall_samples.try_next_message_pure() {
-            if sample.source != AdcSampleSource::Monitor || sample.raw >= hall_threshold {
+            if sample.source != AdcSampleSource::Monitor {
                 continue;
             }
 
-            triggered = match sample.device {
+            let sensor_index = match sample.device {
                 AdcDevice::HallEffectSensor1 => Some(0usize),
                 AdcDevice::HallEffectSensor2 => Some(1usize),
-                _ => triggered,
+                _ => None,
             };
+
+            let Some(sensor_index) = sensor_index else {
+                continue;
+            };
+
+            let active = sample.raw < hall_threshold;
+            if active && !hall_active[sensor_index] {
+                triggered = Some(sensor_index);
+            }
+            hall_active[sensor_index] = active;
         }
 
         estimator.step(dt, rate, triggered);
