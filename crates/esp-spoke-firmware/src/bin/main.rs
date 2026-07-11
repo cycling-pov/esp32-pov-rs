@@ -141,14 +141,8 @@ struct I2CConfig<'d> {
 #[cfg(all(feature = "sk9822-strip", feature = "imu-spin"))]
 type SharedI2cBus = Mutex<NoopRawMutex, esp_hal::i2c::master::I2c<'static, esp_hal::Async>>;
 
-#[cfg(all(feature = "imu-spin", feature = "board-v1", feature = "board-test-rig"))]
-compile_error!("features `board-v1` and `board-test-rig` are mutually exclusive");
-
-#[cfg(all(
-    feature = "imu-spin",
-    not(any(feature = "board-v1", feature = "board-test-rig"))
-))]
-compile_error!("feature `imu-spin` requires either `board-v1` or `board-test-rig`");
+#[cfg(all(feature = "imu-spin", not(feature = "board-v1")))]
+compile_error!("feature `imu-spin` requires `board-v1`");
 
 #[allow(
     clippy::large_stack_frames,
@@ -230,24 +224,10 @@ async fn main(spawner: Spawner) -> ! {
     #[cfg(feature = "imu-spin")]
     let i2c0 = peripherals.I2C0;
 
-    #[cfg(all(
-        feature = "imu-spin",
-        feature = "board-v1",
-        not(feature = "board-test-rig")
-    ))]
+    #[cfg(all(feature = "imu-spin", feature = "board-v1"))]
     let i2c_config = I2CConfig {
         sda: peripherals.GPIO47.into(),
         scl: peripherals.GPIO48.into(),
-    };
-
-    #[cfg(all(
-        feature = "imu-spin",
-        feature = "board-test-rig",
-        not(feature = "board-v1")
-    ))]
-    let i2c_config = I2CConfig {
-        sda: peripherals.GPIO6.into(),
-        scl: peripherals.GPIO5.into(),
     };
 
     #[cfg(feature = "sk9822-strip")]
