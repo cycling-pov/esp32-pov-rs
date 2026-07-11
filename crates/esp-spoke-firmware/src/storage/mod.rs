@@ -7,6 +7,8 @@ use ekv::{Config, Database, MountError};
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
+#[cfg(feature = "sk9822-strip")]
+use embassy_time::Duration;
 use esp_bootloader_esp_idf::partitions;
 use esp_storage::FlashStorage;
 use pov_proto::image::Encoding;
@@ -19,6 +21,9 @@ use self::ekv_flash::{EkvFlash, chunk_key};
 pub mod config;
 pub mod ekv_flash;
 pub mod image_file;
+
+#[cfg(feature = "sk9822-strip")]
+use crate::led;
 
 pub const CHUNK_SIZE: usize = 3840;
 
@@ -112,9 +117,46 @@ static STORAGE_REQUEST_CHANNEL: Channel<CriticalSectionRawMutex, StorageRequest,
 static STORAGE_RESPONSE_CHANNEL: Channel<CriticalSectionRawMutex, StorageResponse, 4> =
     Channel::new();
 
+#[cfg(feature = "sk9822-strip")]
+const FLASH_PAUSE_TIMEOUT: Duration = Duration::from_millis(500);
+
+fn request_mutates_flash(req: &StorageRequest) -> bool {
+    matches!(
+        req,
+        StorageRequest::SetActiveSlot(_)
+            | StorageRequest::SetSensorConfig(_)
+            | StorageRequest::SetAdcMonitorSampleRateHz(_)
+            | StorageRequest::SetHybridHallTriggerThreshold(_)
+            | StorageRequest::SetEstimatorMode(_)
+            | StorageRequest::SetSlotState(_, _)
+            | StorageRequest::ClearAllImages
+            | StorageRequest::BeginSlotWrite { .. }
+            | StorageRequest::WriteSlotChunk { .. }
+            | StorageRequest::CommitSlot { .. }
+            | StorageRequest::AbortSlot { .. }
+    )
+}
+
 async fn rpc(req: StorageRequest) -> StorageResponse {
+    let mut pause_requested = false;
+
+    #[cfg(feature = "sk9822-strip")]
+    if request_mutates_flash(&req) {
+        pause_requested = true;
+        if !led::pause_render_for_flash(FLASH_PAUSE_TIMEOUT).await {
+            warn!("storage:flash pause ack timeout before request");
+        }
+    }
+
     STORAGE_REQUEST_CHANNEL.send(req).await;
-    STORAGE_RESPONSE_CHANNEL.receive().await
+    let response = STORAGE_RESPONSE_CHANNEL.receive().await;
+
+    #[cfg(feature = "sk9822-strip")]
+    if pause_requested {
+        led::resume_render_after_flash();
+    }
+
+    response
 }
 
 pub async fn get_active_slot() -> Option<usize> {

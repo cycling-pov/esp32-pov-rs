@@ -362,8 +362,6 @@ async fn main(spawner: Spawner) -> ! {
     // Track the transfer currently being streamed to flash.
     #[cfg(feature = "sk9822-strip")]
     let mut active: Option<ActiveTransfer> = None;
-    #[cfg(feature = "sk9822-strip")]
-    let mut render_pause_held = false;
     #[cfg(all(feature = "adc", feature = "sk9822-strip"))]
     let mut adc_samples = adc::subscribe().expect("adc subscriber unavailable in main task");
 
@@ -488,29 +486,11 @@ async fn main(spawner: Spawner) -> ! {
                             continue;
                         }
 
-                        let mut set_slot_pause_held = false;
-                        if !render_pause_held {
-                            // Active-slot updates touch flash metadata and need the same
-                            // render pause contract as other flash writes.
-                            render_pause_held = true;
-                            set_slot_pause_held = true;
-                            if !led::pause_render_for_flash(Duration::from_millis(500)).await {
-                                warn!(
-                                    "main:render pause ack timeout before SetActiveSlot transfer_id={} slot={}",
-                                    transfer_id, slot_usize
-                                );
-                            }
-                        }
-
                         if storage::set_active_slot(slot_usize).await.is_err() {
                             warn!(
                                 "main:failed SetActiveSlot transfer_id={} slot={}",
                                 transfer_id, slot_usize
                             );
-                            if set_slot_pause_held {
-                                led::resume_render_after_flash();
-                                render_pause_held = false;
-                            }
                             continue;
                         }
 
@@ -545,11 +525,6 @@ async fn main(spawner: Spawner) -> ! {
                                 let _ = status_led::try_send_request(effective);
                             }
                         }
-
-                        if set_slot_pause_held {
-                            led::resume_render_after_flash();
-                            render_pause_held = false;
-                        }
                     }
                     SpokeCommand::ClearAllImages => {
                         if let Some(old) = active.take() {
@@ -560,18 +535,6 @@ async fn main(spawner: Spawner) -> ! {
                             storage::abort_slot(old.slot, old.chunk_count).await.ok();
                         }
 
-                        if !render_pause_held {
-                            // Keep the same pause contract as transfer writes: once
-                            // requested, always resume afterward even on timeout.
-                            render_pause_held = true;
-                            if !led::pause_render_for_flash(Duration::from_millis(500)).await {
-                                warn!(
-                                    "main:render pause ack timeout before clear-all transfer_id={}",
-                                    transfer_id
-                                );
-                            }
-                        }
-
                         if storage::clear_all_images().await.is_err() {
                             warn!(
                                 "main:failed to clear all images transfer_id={}",
@@ -579,11 +542,6 @@ async fn main(spawner: Spawner) -> ! {
                             );
                         } else {
                             info!("main:cleared all images transfer_id={}", transfer_id);
-                        }
-
-                        if render_pause_held {
-                            led::resume_render_after_flash();
-                            render_pause_held = false;
                         }
 
                         // Force display off after clearing storage.
@@ -644,18 +602,6 @@ async fn main(spawner: Spawner) -> ! {
                         }
                     }
                     SpokeCommand::SetAdcMonitorSampleRateHz { hz } => {
-                        let mut sample_rate_pause_held = false;
-                        if !render_pause_held {
-                            render_pause_held = true;
-                            sample_rate_pause_held = true;
-                            if !led::pause_render_for_flash(Duration::from_millis(500)).await {
-                                warn!(
-                                    "main:render pause ack timeout before SetAdcMonitorSampleRateHz transfer_id={} hz={}",
-                                    transfer_id, hz
-                                );
-                            }
-                        }
-
                         let result = storage::set_adc_monitor_sample_rate_hz(hz).await;
 
                         if result.is_err() {
@@ -669,25 +615,8 @@ async fn main(spawner: Spawner) -> ! {
                                 transfer_id, hz
                             );
                         }
-
-                        if sample_rate_pause_held {
-                            led::resume_render_after_flash();
-                            render_pause_held = false;
-                        }
                     }
                     SpokeCommand::SetHybridHallTriggerThreshold { threshold } => {
-                        let mut threshold_pause_held = false;
-                        if !render_pause_held {
-                            render_pause_held = true;
-                            threshold_pause_held = true;
-                            if !led::pause_render_for_flash(Duration::from_millis(500)).await {
-                                warn!(
-                                    "main:render pause ack timeout before SetHybridHallTriggerThreshold transfer_id={} threshold={}",
-                                    transfer_id, threshold
-                                );
-                            }
-                        }
-
                         let result = storage::set_hybrid_hall_trigger_threshold(threshold).await;
 
                         if result.is_err() {
@@ -700,11 +629,6 @@ async fn main(spawner: Spawner) -> ! {
                                 "main:persisted hall trigger threshold transfer_id={} threshold={} reboot_required=true",
                                 transfer_id, threshold
                             );
-                        }
-
-                        if threshold_pause_held {
-                            led::resume_render_after_flash();
-                            render_pause_held = false;
                         }
                     }
                     SpokeCommand::SetEstimatorMode { mode } => {
@@ -723,18 +647,6 @@ async fn main(spawner: Spawner) -> ! {
                             continue;
                         }
 
-                        let mut mode_pause_held = false;
-                        if !render_pause_held {
-                            render_pause_held = true;
-                            mode_pause_held = true;
-                            if !led::pause_render_for_flash(Duration::from_millis(500)).await {
-                                warn!(
-                                    "main:render pause ack timeout before SetEstimatorMode transfer_id={} mode={:?}",
-                                    transfer_id, mode
-                                );
-                            }
-                        }
-
                         let result = storage::set_estimator_mode(mode).await;
 
                         if result.is_err() {
@@ -747,11 +659,6 @@ async fn main(spawner: Spawner) -> ! {
                                 "main:persisted estimator mode transfer_id={} mode={:?} reboot_required=true",
                                 transfer_id, mode
                             );
-                        }
-
-                        if mode_pause_held {
-                            led::resume_render_after_flash();
-                            render_pause_held = false;
                         }
                     }
                     SpokeCommand::RequestStorageStats => {
@@ -961,20 +868,6 @@ async fn main(spawner: Spawner) -> ! {
                 // If a new transfer has started, abort the previous one and
                 // allocate a fresh flash slot.
                 if active.as_ref().is_none_or(|a| a.transfer_id != transfer_id) {
-                    if !render_pause_held {
-                        // Mark as held unconditionally: pause_render_for_flash always
-                        // sets RENDER_PAUSE_REQUESTED, so resume_render_after_flash must
-                        // always be called afterward — even if the ack times out — to
-                        // avoid leaving the render task stuck in its IRAM spin loop.
-                        render_pause_held = true;
-                        if !led::pause_render_for_flash(Duration::from_millis(500)).await {
-                            warn!(
-                                "main:render pause ack timeout before transfer {}",
-                                transfer_id
-                            );
-                        }
-                    }
-
                     if let Some(old) = active.take() {
                         info!(
                             "main:new transfer {} aborts previous transfer {} in slot {}",
@@ -1002,10 +895,6 @@ async fn main(spawner: Spawner) -> ! {
                                 "main:begin_slot_write failed for transfer_id={}",
                                 transfer_id
                             );
-                            if render_pause_held {
-                                led::resume_render_after_flash();
-                                render_pause_held = false;
-                            }
                             // Drop this chunk; the next one will retry begin_slot_write.
                             continue;
                         }
@@ -1093,11 +982,6 @@ async fn main(spawner: Spawner) -> ! {
                                     a.transfer_id, a.slot
                                 );
                             }
-                        }
-
-                        if render_pause_held {
-                            led::resume_render_after_flash();
-                            render_pause_held = false;
                         }
                     }
                 }
