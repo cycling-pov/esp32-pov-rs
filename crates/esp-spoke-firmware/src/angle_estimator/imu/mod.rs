@@ -1,16 +1,6 @@
-#[cfg(all(feature = "imu-spin", feature = "adafruit-9dof", feature = "bmi260"))]
-compile_error!(
-    "Select exactly one IMU backend: enable either `adafruit-9dof` or `bmi260`, not both"
-);
+#[cfg(all(feature = "imu-spin", not(feature = "bmi260")))]
+compile_error!("`imu-spin` requires the `bmi260` IMU backend feature");
 
-#[cfg(all(
-    feature = "imu-spin",
-    not(any(feature = "adafruit-9dof", feature = "bmi260"))
-))]
-compile_error!("`imu-spin` requires one IMU backend feature: `adafruit-9dof` or `bmi260`");
-
-#[cfg(all(feature = "imu-spin", feature = "adafruit-9dof"))]
-mod adafruit_9dof;
 #[cfg(all(feature = "imu-spin", feature = "bmi260"))]
 mod bmi260;
 
@@ -38,11 +28,6 @@ pub async fn imu_dual_spin_estimator_task(
     i2c: SharedI2cDevice,
     imu_offset_degrees: f32,
 ) -> ! {
-    #[cfg(feature = "adafruit-9dof")]
-    {
-        adafruit_9dof::imu_dual_spin_estimator_impl(state0, state1, i2c, imu_offset_degrees).await
-    }
-
     #[cfg(feature = "bmi260")]
     {
         bmi260::imu_dual_spin_estimator_impl(state0, state1, i2c, imu_offset_degrees).await

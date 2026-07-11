@@ -17,10 +17,7 @@ use embassy_executor::Spawner;
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
 #[cfg(feature = "sk9822-strip")]
 use embassy_time::Duration;
-#[cfg(any(
-    feature = "heap-stats",
-    all(feature = "adc", feature = "sk9822-strip")
-))]
+#[cfg(any(feature = "heap-stats", all(feature = "adc", feature = "sk9822-strip")))]
 use embassy_time::Timer;
 use esp_hal::clock::CpuClock;
 #[cfg(all(
@@ -78,10 +75,7 @@ use esp_spoke_firmware::storage::config::SensorConfig;
 
 #[cfg(feature = "sk9822-strip")]
 use pov_proto::transfer::DownloadKind;
-#[cfg(all(
-    feature = "adc",
-    feature = "sk9822-strip"
-))]
+#[cfg(all(feature = "adc", feature = "sk9822-strip"))]
 use pov_proto::transfer::{AdcDevice as WireAdcDevice, AdcSample as WireAdcSample};
 #[cfg(feature = "sk9822-strip")]
 use pov_proto::transfer::{
@@ -99,10 +93,7 @@ const ADDITIONAL_HEAP_BYTES: usize = 64 * 1024;
 #[cfg(feature = "coexistence")]
 const COEX_HEAP_BYTES: usize = 56 * 1024;
 
-#[cfg(all(
-    feature = "adc",
-    feature = "sk9822-strip"
-))]
+#[cfg(all(feature = "adc", feature = "sk9822-strip"))]
 fn wire_adc_device_to_local(device: WireAdcDevice) -> adc::AdcDevice {
     match device {
         WireAdcDevice::BoardRev => adc::AdcDevice::BoardRev,
@@ -112,10 +103,7 @@ fn wire_adc_device_to_local(device: WireAdcDevice) -> adc::AdcDevice {
     }
 }
 
-#[cfg(all(
-    feature = "adc",
-    feature = "sk9822-strip"
-))]
+#[cfg(all(feature = "adc", feature = "sk9822-strip"))]
 fn local_adc_device_to_wire(device: adc::AdcDevice) -> WireAdcDevice {
     match device {
         adc::AdcDevice::BoardRev => WireAdcDevice::BoardRev,
@@ -377,10 +365,7 @@ async fn main(spawner: Spawner) -> ! {
     let mut active: Option<ActiveTransfer> = None;
     #[cfg(feature = "sk9822-strip")]
     let mut render_pause_held = false;
-    #[cfg(all(
-        feature = "adc",
-        feature = "sk9822-strip"
-    ))]
+    #[cfg(all(feature = "adc", feature = "sk9822-strip"))]
     let mut adc_samples = adc::subscribe().expect("adc subscriber unavailable in main task");
 
     #[cfg(all(feature = "status-led", feature = "sk9822-strip"))]
@@ -401,7 +386,11 @@ async fn main(spawner: Spawner) -> ! {
         let _ = status_led::try_send_request(StatusLedRequest::BLINK_FAST);
     }
 
-    #[cfg(all(feature = "status-led", feature = "sk9822-strip", not(feature = "imu-spin")))]
+    #[cfg(all(
+        feature = "status-led",
+        feature = "sk9822-strip",
+        not(feature = "imu-spin")
+    ))]
     {
         let _ = status_led::try_send_request(desired_status);
     }
