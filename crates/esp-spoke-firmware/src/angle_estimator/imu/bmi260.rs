@@ -2,6 +2,7 @@ use bmi2::config;
 use bmi2::interface::I2cInterface;
 use bmi2::types::{BMI260_CHIP_ID, BMI270_CHIP_ID, Burst, Error as Bmi2Error, PwrCtrl};
 use bmi2::{Bmi2, I2cAddr};
+use core::time::Duration;
 use defmt::info;
 #[cfg(feature = "hybrid-angle-estimator")]
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -14,12 +15,17 @@ use pov_algs::{Angle, AngularVelocity};
 const BMI260_ACCEL_G_PER_LSB_2G: f32 = 1.0 / 16384.0;
 const BMI260_GYRO_DPS_PER_LSB_2000DPS: f32 = 1.0 / 16.4;
 
+const IMU_SAMPLE_RATE_WARNING_THRESHOLD: EmbassyDuration = EmbassyDuration::from_hz(5);
+
 #[cfg(feature = "hybrid-angle-estimator")]
 const IMU_SPIN_RATE_CAPACITY: usize = 16;
 #[cfg(feature = "hybrid-angle-estimator")]
 const IMU_SPIN_RATE_SUBSCRIBERS: usize = 2;
 #[cfg(feature = "hybrid-angle-estimator")]
 const IMU_SPIN_RATE_PUBLISHERS: usize = 1;
+
+#[cfg(feature = "hybrid-angle-estimator")]
+const HYBRID_SAMPLE_RATE: EmbassyDuration = EmbassyDuration::from_hz(20);
 
 struct ImuSample {
     gyro_dps: nalgebra::Vector3<f32>,
@@ -30,14 +36,14 @@ struct CalibrationData {
     gyro_bias_dps: nalgebra::Vector3<f32>,
     calibrating_gyro_bias: bool,
     calibration_accum_dps: nalgebra::Vector3<f32>,
-    calibration_elapsed_s: f32,
+    calibration_elapsed: Duration,
     calibration_samples: u32,
     calibration_reset_log_divider: u8,
 }
 
 struct SampleRateMonitor {
     sample_counter: u32,
-    sample_time_accum_s: f32,
+    sample_time_accum: Duration,
 }
 
 type Bmi2Device<'a> = Bmi2<I2cInterface<&'a mut super::SharedI2cDevice>, Delay>;
@@ -153,18 +159,21 @@ where
     })
 }
 
-fn check_sample_rate(monitor: &mut SampleRateMonitor, dt: f32) {
+fn check_sample_rate(monitor: &mut SampleRateMonitor, dt: Duration) {
     monitor.sample_counter = monitor.sample_counter.wrapping_add(1);
-    monitor.sample_time_accum_s += dt;
+    monitor.sample_time_accum += dt;
     if monitor.sample_counter >= 500 {
-        let hz = monitor.sample_counter as f32 / monitor.sample_time_accum_s.max(1e-6);
-        if hz < 100.0 {
-            defmt::warn!("spin:imu low sample rate hz={=f32}", hz);
+        let elapsed_s = monitor.sample_time_accum.as_secs_f32().max(1e-6);
+        let hz = (monitor.sample_counter as f32 / elapsed_s) as u64;
+        let min_hz = 1000 / IMU_SAMPLE_RATE_WARNING_THRESHOLD.as_millis();
+
+        if hz < min_hz {
+            defmt::warn!("spin:imu low sample rate hz={=u64}", hz);
         } else {
-            defmt::debug!("spin:imu sample rate hz={=f32}", hz);
+            defmt::debug!("spin:imu sample rate hz={=u64}", hz);
         }
         monitor.sample_counter = 0;
-        monitor.sample_time_accum_s = 0.0;
+        monitor.sample_time_accum = Duration::ZERO;
     }
 }
 
@@ -200,9 +209,9 @@ fn publish_spin_rate(rate: AngularVelocity) {
 fn check_and_initialize_gyro_bias_rate_only(
     calibration_data: &mut CalibrationData,
     sample: &ImuSample,
-    dt: f32,
+    dt: Duration,
 ) -> bool {
-    const IMU_CALIBRATION_DURATION_S: f32 = 5.0;
+    const IMU_CALIBRATION_DURATION: Duration = Duration::from_secs(5);
     const IMU_CALIBRATION_MOTION_MAX_DPS: f32 = 100.0;
 
     if !calibration_data.calibrating_gyro_bias {
@@ -212,10 +221,10 @@ fn check_and_initialize_gyro_bias_rate_only(
     let gyro_norm_dps = sample.gyro_dps.norm();
     if gyro_norm_dps <= IMU_CALIBRATION_MOTION_MAX_DPS {
         calibration_data.calibration_accum_dps += sample.gyro_dps;
-        calibration_data.calibration_elapsed_s += dt;
+        calibration_data.calibration_elapsed += dt;
         calibration_data.calibration_samples = calibration_data.calibration_samples.wrapping_add(1);
 
-        if calibration_data.calibration_elapsed_s >= IMU_CALIBRATION_DURATION_S
+        if calibration_data.calibration_elapsed >= IMU_CALIBRATION_DURATION
             && calibration_data.calibration_samples > 0
         {
             let inv_n = 1.0 / calibration_data.calibration_samples as f32;
@@ -231,7 +240,7 @@ fn check_and_initialize_gyro_bias_rate_only(
         }
     } else {
         calibration_data.calibration_accum_dps = nalgebra::Vector3::new(0.0f32, 0.0, 0.0);
-        calibration_data.calibration_elapsed_s = 0.0;
+        calibration_data.calibration_elapsed = Duration::ZERO;
         calibration_data.calibration_samples = 0;
         calibration_data.calibration_reset_log_divider = calibration_data
             .calibration_reset_log_divider
@@ -250,12 +259,12 @@ fn check_and_initialize_gyro_bias_rate_only(
 fn check_and_initialize_gyro_bias(
     calibration_data: &mut CalibrationData,
     sample: &ImuSample,
-    dt: f32,
+    dt: Duration,
     last_angle: Angle,
     state0: &super::super::SharedSpinState,
     state1: &super::super::SharedSpinState,
 ) -> bool {
-    const IMU_CALIBRATION_DURATION_S: f32 = 5.0;
+    const IMU_CALIBRATION_DURATION: Duration = Duration::from_secs(5);
     const IMU_CALIBRATION_MOTION_MAX_DPS: f32 = 100.0;
 
     if !calibration_data.calibrating_gyro_bias {
@@ -265,10 +274,10 @@ fn check_and_initialize_gyro_bias(
     let gyro_norm_dps = sample.gyro_dps.norm();
     if gyro_norm_dps <= IMU_CALIBRATION_MOTION_MAX_DPS {
         calibration_data.calibration_accum_dps += sample.gyro_dps;
-        calibration_data.calibration_elapsed_s += dt;
+        calibration_data.calibration_elapsed += dt;
         calibration_data.calibration_samples = calibration_data.calibration_samples.wrapping_add(1);
 
-        if calibration_data.calibration_elapsed_s >= IMU_CALIBRATION_DURATION_S
+        if calibration_data.calibration_elapsed >= IMU_CALIBRATION_DURATION
             && calibration_data.calibration_samples > 0
         {
             let inv_n = 1.0 / calibration_data.calibration_samples as f32;
@@ -284,7 +293,7 @@ fn check_and_initialize_gyro_bias(
         }
     } else {
         calibration_data.calibration_accum_dps = nalgebra::Vector3::new(0.0f32, 0.0, 0.0);
-        calibration_data.calibration_elapsed_s = 0.0;
+        calibration_data.calibration_elapsed = Duration::ZERO;
         calibration_data.calibration_samples = 0;
         calibration_data.calibration_reset_log_divider = calibration_data
             .calibration_reset_log_divider
@@ -344,14 +353,14 @@ pub async fn imu_dual_spin_estimator_impl(
     let mut last_angle = Angle::from_radians(0.0);
     let mut sample_rate_monitor = SampleRateMonitor {
         sample_counter: 0,
-        sample_time_accum_s: 0.0,
+        sample_time_accum: Duration::ZERO,
     };
 
     let mut calibration_data = CalibrationData {
         gyro_bias_dps: nalgebra::Vector3::new(0.0f32, 0.0, 0.0),
         calibrating_gyro_bias: true,
         calibration_accum_dps: nalgebra::Vector3::new(0.0f32, 0.0, 0.0),
-        calibration_elapsed_s: 0.0,
+        calibration_elapsed: Duration::ZERO,
         calibration_samples: 0,
         calibration_reset_log_divider: 0,
     };
@@ -391,7 +400,7 @@ pub async fn imu_dual_spin_estimator_impl(
             }
 
             let now = Instant::now();
-            let dt = now.duration_since(last).as_micros() as f32 * 1e-6;
+            let dt = Duration::from_micros(now.duration_since(last).as_micros());
             last = now;
 
             match read_imu_sample(&mut bmi).await {
@@ -408,7 +417,11 @@ pub async fn imu_dual_spin_estimator_impl(
                     }
 
                     let corrected_gyro_dps = sample.gyro_dps - calibration_data.gyro_bias_dps;
-                    ahrs.update_no_magnetometer(corrected_gyro_dps, sample.accel_g, dt);
+                    ahrs.update_no_magnetometer(
+                        corrected_gyro_dps,
+                        sample.accel_g,
+                        dt.as_secs_f32(),
+                    );
 
                     check_sample_rate(&mut sample_rate_monitor, dt);
 
@@ -477,7 +490,7 @@ pub async fn imu_dual_spin_estimator_impl(
 
                     // Keep phase moving when geometric projection is unavailable.
                     if !updated_from_geometry {
-                        let delta_angle = Angle::from_degrees(signed_rate_dps * dt);
+                        let delta_angle = Angle::from_degrees(signed_rate_dps * dt.as_secs_f32());
                         last_angle = (last_angle + delta_angle).constrain_circle();
                     }
 
@@ -519,13 +532,13 @@ pub async fn spin_rate_publisher_impl(mut i2c: super::SharedI2cDevice) -> ! {
     let mut error_log_divider: u8 = 0;
     let mut sample_rate_monitor = SampleRateMonitor {
         sample_counter: 0,
-        sample_time_accum_s: 0.0,
+        sample_time_accum: Duration::ZERO,
     };
     let mut calibration_data = CalibrationData {
         gyro_bias_dps: nalgebra::Vector3::new(0.0f32, 0.0, 0.0),
         calibrating_gyro_bias: true,
         calibration_accum_dps: nalgebra::Vector3::new(0.0f32, 0.0, 0.0),
-        calibration_elapsed_s: 0.0,
+        calibration_elapsed: Duration::ZERO,
         calibration_samples: 0,
         calibration_reset_log_divider: 0,
     };
@@ -551,7 +564,7 @@ pub async fn spin_rate_publisher_impl(mut i2c: super::SharedI2cDevice) -> ! {
         let mut last = Instant::now();
 
         loop {
-            Timer::after(EmbassyDuration::from_millis(50)).await;
+            Timer::after(HYBRID_SAMPLE_RATE).await;
 
             if super::super::pause_needed_for_flash() {
                 info!("spin:hybrid paused for flash write");
@@ -561,16 +574,13 @@ pub async fn spin_rate_publisher_impl(mut i2c: super::SharedI2cDevice) -> ! {
             }
 
             let now = Instant::now();
-            let dt_secs = now.duration_since(last).as_micros() as f32 * 1e-6;
+            let dt = Duration::from_micros(now.duration_since(last).as_micros());
             last = now;
 
             match read_imu_sample(&mut bmi).await {
                 Ok(sample) => {
-                    if check_and_initialize_gyro_bias_rate_only(
-                        &mut calibration_data,
-                        &sample,
-                        dt_secs,
-                    ) {
+                    if check_and_initialize_gyro_bias_rate_only(&mut calibration_data, &sample, dt)
+                    {
                         continue;
                     }
 
@@ -579,7 +589,7 @@ pub async fn spin_rate_publisher_impl(mut i2c: super::SharedI2cDevice) -> ! {
                         corrected_gyro_dps,
                     ));
                     publish_spin_rate(rate);
-                    check_sample_rate(&mut sample_rate_monitor, dt_secs);
+                    check_sample_rate(&mut sample_rate_monitor, dt);
                 }
                 Err(_) => {
                     error_log_divider = error_log_divider.wrapping_add(1);
@@ -590,7 +600,7 @@ pub async fn spin_rate_publisher_impl(mut i2c: super::SharedI2cDevice) -> ! {
                         gyro_bias_dps: nalgebra::Vector3::new(0.0f32, 0.0, 0.0),
                         calibrating_gyro_bias: true,
                         calibration_accum_dps: nalgebra::Vector3::new(0.0f32, 0.0, 0.0),
-                        calibration_elapsed_s: 0.0,
+                        calibration_elapsed: Duration::ZERO,
                         calibration_samples: 0,
                         calibration_reset_log_divider: 0,
                     };
