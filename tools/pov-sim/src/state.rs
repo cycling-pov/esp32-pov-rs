@@ -30,9 +30,9 @@ impl Plugin for RotationPlugin {
             (
                 rotation_change_input.run_if(
                     input_pressed(KeyCode::ArrowUp)
-                        .or(input_pressed(KeyCode::ArrowDown))
-                        .or(input_pressed(KeyCode::ArrowLeft))
-                        .or(input_pressed(KeyCode::ArrowRight)),
+                        .or_else(input_pressed(KeyCode::ArrowDown))
+                        .or_else(input_pressed(KeyCode::ArrowLeft))
+                        .or_else(input_pressed(KeyCode::ArrowRight)),
                 ),
                 update_rotation_state,
             ),

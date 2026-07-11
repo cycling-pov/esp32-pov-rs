@@ -12,7 +12,7 @@ use bevy::{
     input::common_conditions::input_just_pressed,
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
-    text::TextColor,
+    text::{FontSize, TextColor},
     window::WindowTheme,
 };
 use pov_algs::{Angle, LedGeometry};
@@ -79,7 +79,7 @@ fn main() {
         app.add_plugins(FpsOverlayPlugin {
             config: FpsOverlayConfig {
                 text_config: TextFont {
-                    font_size: 11.0,
+                    font_size: FontSize::Px(11.0),
                     ..Default::default()
                 },
                 refresh_interval: core::time::Duration::from_millis(100),
