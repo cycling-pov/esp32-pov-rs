@@ -21,7 +21,7 @@ use pov_images::DEFAULT_LEDS;
 use crate::{
     estimator::PositionEstimator,
     images::{ImageChanged, ImageConfig, ImageState},
-    state::{NUM_SPOKES, RotationPlugin, RotationSettings, RotationState},
+    state::{RotationPlugin, RotationSettings, RotationState, NUM_SPOKES},
     theme::{ThemePlugin, ThemeState},
 };
 use clap::Parser;
