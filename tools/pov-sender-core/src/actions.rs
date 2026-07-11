@@ -8,8 +8,8 @@ use pov_proto::{
     },
     image::{LedCount, RadialCount, encode_polar_rgb888_to_wire, encode_rgb888_to_wire},
     transfer::{
-        ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand, SpokeResponse, encode_packet,
-        parse_packet,
+        AdcDevice, AdcSample, ChunkIter, CommandFrame, DownloadKind, Packet, SpokeCommand,
+        SpokeResponse, encode_packet, parse_packet,
     },
     video,
 };
@@ -171,6 +171,22 @@ pub struct DeviceStorageStats {
     pub active_image_id: Option<u32>,
 }
 
+fn require_stateful_espnow_target(
+    config: &SerialLinkConfig,
+    operation: &str,
+) -> anyhow::Result<[u8; 6]> {
+    if config.transport != Transport::Espnow {
+        anyhow::bail!("{operation} requires espnow transport");
+    }
+
+    match config.esp_now_delivery {
+        EspNowDelivery::Peer(peer) => Ok(peer),
+        EspNowDelivery::Broadcast => {
+            anyhow::bail!("{operation} requires stateful peer target")
+        }
+    }
+}
+
 fn read_bridge_control_response(
     port: &mut dyn SerialPort,
     context: &str,
@@ -292,16 +308,7 @@ pub fn send_sensor_offsets(
 }
 
 pub fn request_storage_stats(config: &SerialLinkConfig) -> anyhow::Result<DeviceStorageStats> {
-    if config.transport != Transport::Espnow {
-        anyhow::bail!("Storage stats request requires espnow transport");
-    }
-
-    let target_peer = match config.esp_now_delivery {
-        EspNowDelivery::Peer(peer) => peer,
-        EspNowDelivery::Broadcast => {
-            anyhow::bail!("Storage stats request requires stateful peer target")
-        }
-    };
+    let target_peer = require_stateful_espnow_target(config, "Storage stats request")?;
 
     let mut chunk_buf = [0u8; SERIAL_TX_BUF_BYTES];
     let transfer_id = 0x53544154usize; // 'STAT'
@@ -339,7 +346,9 @@ pub fn request_storage_stats(config: &SerialLinkConfig) -> anyhow::Result<Device
                     .map_err(|e| anyhow::anyhow!("Failed to parse inbound packet: {:?}", e))?;
                 match packet {
                     Packet::Response(frame) if frame.transfer_id == transfer_id => {
-                        let SpokeResponse::StorageStats(stats) = frame.response;
+                        let SpokeResponse::StorageStats(stats) = frame.response else {
+                            continue;
+                        };
                         return Ok(DeviceStorageStats {
                             total_bytes: stats.total_bytes,
                             used_bytes: stats.used_bytes,
@@ -347,6 +356,60 @@ pub fn request_storage_stats(config: &SerialLinkConfig) -> anyhow::Result<Device
                             image_count: stats.image_count,
                             active_image_id: stats.active_image_id,
                         });
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+pub fn request_adc_sample(
+    config: &SerialLinkConfig,
+    device: AdcDevice,
+) -> anyhow::Result<AdcSample> {
+    let target_peer = require_stateful_espnow_target(config, "ADC sample request")?;
+
+    let mut chunk_buf = [0u8; SERIAL_TX_BUF_BYTES];
+    let transfer_id = 0x4144_4353usize;
+    let n = encode_packet(
+        Packet::Command(CommandFrame {
+            transfer_id,
+            command: SpokeCommand::RequestAdcSample { device },
+        }),
+        &mut chunk_buf,
+    )
+    .map_err(|e| anyhow::anyhow!("Failed to encode ADC sample command: {:?}", e))?;
+
+    let mut port = open_serial_port(&config.port, config.baud)?;
+    send_bridge_frame(
+        &mut *port,
+        TransportSelector::EspNow,
+        EspNowTarget::Peer(target_peer),
+        config.esp_now_retries,
+        &chunk_buf[..n],
+        config.inter_packet_delay_ms,
+    )?;
+
+    loop {
+        let mut frame = read_bridge_control_response(&mut *port, "ADC sample")?;
+        let response = postcard::from_bytes_cobs::<BridgeControlResponse<'_>>(&mut frame)
+            .context("Failed to decode bridge ADC-sample response")?;
+        match response {
+            BridgeControlResponse::EspNowPeers(_) => {}
+            BridgeControlResponse::EspNowInboundPacket { src, payload } => {
+                if src != target_peer {
+                    continue;
+                }
+
+                let packet = parse_packet(payload)
+                    .map_err(|e| anyhow::anyhow!("Failed to parse inbound packet: {:?}", e))?;
+                match packet {
+                    Packet::Response(frame) if frame.transfer_id == transfer_id => {
+                        let SpokeResponse::AdcSample(sample) = frame.response else {
+                            continue;
+                        };
+                        return Ok(sample);
                     }
                     _ => {}
                 }

@@ -17,7 +17,13 @@ use embassy_executor::Spawner;
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use embassy_time::Duration;
-#[cfg(feature = "heap-stats")]
+#[cfg(any(
+    feature = "heap-stats",
+    all(
+        feature = "adc",
+        any(feature = "waveshare-matrix", feature = "sk9822-strip")
+    )
+))]
 use embassy_time::Timer;
 use esp_hal::clock::CpuClock;
 #[cfg(all(
@@ -75,6 +81,11 @@ use esp_spoke_firmware::storage::config::SensorConfig;
 
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use pov_proto::transfer::DownloadKind;
+#[cfg(all(
+    feature = "adc",
+    any(feature = "waveshare-matrix", feature = "sk9822-strip")
+))]
+use pov_proto::transfer::{AdcDevice as WireAdcDevice, AdcSample as WireAdcSample};
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use pov_proto::transfer::{
     Packet, ResponseFrame, SpokeCommand, SpokeResponse, StorageStats as WireStorageStats,
@@ -90,6 +101,32 @@ const ADDITIONAL_HEAP_BYTES: usize = 64 * 1024;
 // COEX (simultaneous BLE + WiFi/ESP-NOW) requires extra heap on top.
 #[cfg(feature = "coexistence")]
 const COEX_HEAP_BYTES: usize = 56 * 1024;
+
+#[cfg(all(
+    feature = "adc",
+    any(feature = "waveshare-matrix", feature = "sk9822-strip")
+))]
+fn wire_adc_device_to_local(device: WireAdcDevice) -> adc::AdcDevice {
+    match device {
+        WireAdcDevice::BoardRev => adc::AdcDevice::BoardRev,
+        WireAdcDevice::HallEffectSensor2 => adc::AdcDevice::HallEffectSensor2,
+        WireAdcDevice::BatteryVoltage => adc::AdcDevice::BatteryVoltage,
+        WireAdcDevice::HallEffectSensor1 => adc::AdcDevice::HallEffectSensor1,
+    }
+}
+
+#[cfg(all(
+    feature = "adc",
+    any(feature = "waveshare-matrix", feature = "sk9822-strip")
+))]
+fn local_adc_device_to_wire(device: adc::AdcDevice) -> WireAdcDevice {
+    match device {
+        adc::AdcDevice::BoardRev => WireAdcDevice::BoardRev,
+        adc::AdcDevice::HallEffectSensor2 => WireAdcDevice::HallEffectSensor2,
+        adc::AdcDevice::BatteryVoltage => WireAdcDevice::BatteryVoltage,
+        adc::AdcDevice::HallEffectSensor1 => WireAdcDevice::HallEffectSensor1,
+    }
+}
 #[cfg(feature = "heap-stats")]
 #[embassy_executor::task]
 async fn heap_stats_task() -> ! {
@@ -371,6 +408,11 @@ async fn main(spawner: Spawner) -> ! {
     let mut active: Option<ActiveTransfer> = None;
     #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
     let mut render_pause_held = false;
+    #[cfg(all(
+        feature = "adc",
+        any(feature = "waveshare-matrix", feature = "sk9822-strip")
+    ))]
+    let mut adc_samples = adc::subscribe().expect("adc subscriber unavailable in main task");
 
     #[cfg(all(
         feature = "status-led",
@@ -655,6 +697,18 @@ async fn main(spawner: Spawner) -> ! {
                         }
                     }
                     SpokeCommand::SetAdcMonitorSampleRateHz { hz } => {
+                        let mut sample_rate_pause_held = false;
+                        if !render_pause_held {
+                            render_pause_held = true;
+                            sample_rate_pause_held = true;
+                            if !led::pause_render_for_flash(Duration::from_millis(500)).await {
+                                warn!(
+                                    "main:render pause ack timeout before SetAdcMonitorSampleRateHz transfer_id={} hz={}",
+                                    transfer_id, hz
+                                );
+                            }
+                        }
+
                         let result = storage::set_adc_monitor_sample_rate_hz(hz).await;
 
                         if result.is_err() {
@@ -668,8 +722,25 @@ async fn main(spawner: Spawner) -> ! {
                                 transfer_id, hz
                             );
                         }
+
+                        if sample_rate_pause_held {
+                            led::resume_render_after_flash();
+                            render_pause_held = false;
+                        }
                     }
                     SpokeCommand::SetHybridHallTriggerThreshold { threshold } => {
+                        let mut threshold_pause_held = false;
+                        if !render_pause_held {
+                            render_pause_held = true;
+                            threshold_pause_held = true;
+                            if !led::pause_render_for_flash(Duration::from_millis(500)).await {
+                                warn!(
+                                    "main:render pause ack timeout before SetHybridHallTriggerThreshold transfer_id={} threshold={}",
+                                    transfer_id, threshold
+                                );
+                            }
+                        }
+
                         let result = storage::set_hybrid_hall_trigger_threshold(threshold).await;
 
                         if result.is_err() {
@@ -682,6 +753,11 @@ async fn main(spawner: Spawner) -> ! {
                                 "main:persisted hall trigger threshold transfer_id={} threshold={} reboot_required=true",
                                 transfer_id, threshold
                             );
+                        }
+
+                        if threshold_pause_held {
+                            led::resume_render_after_flash();
+                            render_pause_held = false;
                         }
                     }
                     SpokeCommand::RequestStorageStats => {
@@ -748,6 +824,86 @@ async fn main(spawner: Spawner) -> ! {
                                 source_peer[5]
                             );
                         }
+                    }
+                    #[cfg(feature = "adc")]
+                    SpokeCommand::RequestAdcSample { device } => {
+                        let Some(source_peer) = command.source_peer else {
+                            warn!(
+                                "main:RequestAdcSample missing source peer transfer_id={}",
+                                transfer_id
+                            );
+                            continue;
+                        };
+
+                        while adc_samples.try_next_message_pure().is_some() {}
+
+                        let requested_device = wire_adc_device_to_local(device);
+                        adc::start_oneshot_mode(adc::AdcSelection::only(requested_device)).await;
+
+                        let sample = loop {
+                            match select(
+                                adc_samples.next_message_pure(),
+                                Timer::after(Duration::from_millis(250)),
+                            )
+                            .await
+                            {
+                                Either::First(sample) => {
+                                    if sample.source != adc::AdcSampleSource::Oneshot
+                                        || sample.device != requested_device
+                                    {
+                                        continue;
+                                    }
+                                    break sample;
+                                }
+                                Either::Second(_) => {
+                                    warn!("main:adc sample timeout transfer_id={}", transfer_id);
+                                    continue;
+                                }
+                            }
+                        };
+
+                        let mut out = [0u8; 256];
+                        let encoded = match encode_packet(
+                            Packet::Response(ResponseFrame {
+                                transfer_id,
+                                response: SpokeResponse::AdcSample(WireAdcSample {
+                                    device: local_adc_device_to_wire(sample.device),
+                                    raw: sample.raw,
+                                }),
+                            }),
+                            &mut out,
+                        ) {
+                            Ok(n) => n,
+                            Err(_) => {
+                                warn!(
+                                    "main:failed to encode adc sample response transfer_id={}",
+                                    transfer_id
+                                );
+                                continue;
+                            }
+                        };
+
+                        if networking::send_espnow_packet(source_peer, &out[..encoded])
+                            .await
+                            .is_err()
+                        {
+                            warn!(
+                                "main:failed to send adc sample response transfer_id={}",
+                                transfer_id
+                            );
+                        } else {
+                            info!(
+                                "main:sent adc sample response transfer_id={} raw={}",
+                                transfer_id, sample.raw
+                            );
+                        }
+                    }
+                    #[cfg(not(feature = "adc"))]
+                    SpokeCommand::RequestAdcSample { .. } => {
+                        warn!(
+                            "main:ignoring RequestAdcSample without adc feature transfer_id={}",
+                            transfer_id
+                        );
                     }
                     _ => {
                         #[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]

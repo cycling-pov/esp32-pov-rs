@@ -7,9 +7,10 @@ use iced::{
 #[cfg(not(target_arch = "wasm32"))]
 use pov_sender_core::list_serial_ports;
 use pov_sender_core::{
-    DownloadKind, DownloadRequest, EspNowDelivery, PolarEncodeOptions, SensorOffsets,
-    SerialLinkConfig, SpokeCommand, Transport, list_esp_now_peers, request_storage_stats,
-    send_command, send_download, send_image, send_sensor_offsets, send_video_with_max_fps,
+    AdcDevice, DownloadKind, DownloadRequest, EspNowDelivery, PolarEncodeOptions, SensorOffsets,
+    SerialLinkConfig, SpokeCommand, Transport, list_esp_now_peers, request_adc_sample,
+    request_storage_stats, send_command, send_download, send_image, send_sensor_offsets,
+    send_video_with_max_fps,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -83,6 +84,49 @@ impl std::fmt::Display for EspNowPeerUi {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AdcDeviceUi {
+    BoardRev,
+    HallEffectSensor2,
+    BatteryVoltage,
+    HallEffectSensor1,
+}
+
+impl AdcDeviceUi {
+    const ALL: [Self; 4] = [
+        Self::BoardRev,
+        Self::HallEffectSensor2,
+        Self::BatteryVoltage,
+        Self::HallEffectSensor1,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::BoardRev => "board-rev",
+            Self::HallEffectSensor2 => "hall-effect-sensor-2",
+            Self::BatteryVoltage => "battery-voltage",
+            Self::HallEffectSensor1 => "hall-effect-sensor-1",
+        }
+    }
+}
+
+impl std::fmt::Display for AdcDeviceUi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.label())
+    }
+}
+
+impl From<AdcDeviceUi> for AdcDevice {
+    fn from(value: AdcDeviceUi) -> Self {
+        match value {
+            AdcDeviceUi::BoardRev => AdcDevice::BoardRev,
+            AdcDeviceUi::HallEffectSensor2 => AdcDevice::HallEffectSensor2,
+            AdcDeviceUi::BatteryVoltage => AdcDevice::BatteryVoltage,
+            AdcDeviceUi::HallEffectSensor1 => AdcDevice::HallEffectSensor1,
+        }
+    }
+}
+
 fn format_mac(mac: [u8; 6]) -> String {
     format!(
         "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
@@ -98,16 +142,18 @@ enum CommandTab {
     SetActiveSlot,
     InputLessCommands,
     StorageStats,
+    AdcSample,
 }
 
 impl CommandTab {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::SendImage,
         Self::SendOta,
         Self::DeviceConfig,
         Self::SetActiveSlot,
         Self::InputLessCommands,
         Self::StorageStats,
+        Self::AdcSample,
     ];
 
     fn label(self) -> &'static str {
@@ -118,6 +164,7 @@ impl CommandTab {
             Self::SetActiveSlot => "Set Active Slot",
             Self::InputLessCommands => "Input-Less Commands",
             Self::StorageStats => "Storage Stats",
+            Self::AdcSample => "ADC Sample",
         }
     }
 }
@@ -159,6 +206,8 @@ enum Message {
     ActiveSlotInputChanged(String),
     SetActiveSlot,
     RequestStorageStats,
+    SelectAdcDevice(AdcDeviceUi),
+    RequestAdcSample,
     HallOffset0Changed(String),
     HallOffset1Changed(String),
     ImuOffsetChanged(String),
@@ -168,6 +217,7 @@ enum Message {
     HybridHallTriggerThresholdChanged(String),
     SetHybridHallTriggerThreshold,
     StorageStatsDone(Result<String, String>),
+    AdcSampleDone(Result<String, String>),
     ActionDone(Result<String, String>),
 }
 
@@ -203,6 +253,8 @@ struct SenderGui {
     hybrid_hall_trigger_threshold: String,
     active_slot_input: String,
     storage_stats_text: String,
+    selected_adc_device: AdcDeviceUi,
+    adc_sample_text: String,
     status: String,
     busy: bool,
 }
@@ -241,6 +293,8 @@ impl Default for SenderGui {
             hybrid_hall_trigger_threshold: "2000".to_string(),
             active_slot_input: String::new(),
             storage_stats_text: "No storage stats requested yet.".to_string(),
+            selected_adc_device: AdcDeviceUi::HallEffectSensor1,
+            adc_sample_text: "No ADC sample requested yet.".to_string(),
             status: "Ready".to_string(),
             busy: false,
         }
@@ -519,6 +573,11 @@ impl SenderGui {
             }
             Message::SetActiveSlot => self.run_set_active_slot(),
             Message::RequestStorageStats => self.run_request_storage_stats(),
+            Message::SelectAdcDevice(device) => {
+                self.selected_adc_device = device;
+                Task::none()
+            }
+            Message::RequestAdcSample => self.run_request_adc_sample(),
             Message::HallOffset0Changed(value) => {
                 self.hall_offset_0_degrees = value;
                 Task::none()
@@ -548,6 +607,17 @@ impl SenderGui {
                     Ok(stats_text) => {
                         self.storage_stats_text = stats_text;
                         "Storage stats received".to_string()
+                    }
+                    Err(err) => err,
+                };
+                Task::none()
+            }
+            Message::AdcSampleDone(result) => {
+                self.busy = false;
+                self.status = match result {
+                    Ok(sample_text) => {
+                        self.adc_sample_text = sample_text;
+                        "ADC sample received".to_string()
                     }
                     Err(err) => err,
                 };
@@ -682,6 +752,7 @@ impl SenderGui {
             CommandTab::SetActiveSlot => self.set_active_slot_tab(),
             CommandTab::InputLessCommands => self.input_less_commands_tab(),
             CommandTab::StorageStats => self.storage_stats_tab(),
+            CommandTab::AdcSample => self.adc_sample_tab(),
         }
     }
 
@@ -813,6 +884,29 @@ impl SenderGui {
                 .on_press_maybe((!self.busy).then_some(Message::RequestStorageStats)),
             text(note),
             text(self.storage_stats_text.clone()),
+        ]
+        .spacing(10);
+
+        container(content).into()
+    }
+
+    fn adc_sample_tab(&self) -> Element<'_, Message> {
+        let note = "Requires espnow transport + stateful mode + selected peer.";
+        let content = column![
+            row![
+                text("ADC hookup"),
+                pick_list(
+                    AdcDeviceUi::ALL.to_vec(),
+                    Some(self.selected_adc_device),
+                    Message::SelectAdcDevice,
+                )
+                .width(Length::Shrink),
+                button("Request ADC Sample")
+                    .on_press_maybe((!self.busy).then_some(Message::RequestAdcSample)),
+            ]
+            .spacing(10),
+            text(note),
+            text(self.adc_sample_text.clone()),
         ]
         .spacing(10);
 
@@ -1393,6 +1487,53 @@ impl SenderGui {
                 ))
             },
             Message::StorageStatsDone,
+        )
+    }
+
+    #[cfg_attr(target_arch = "wasm32", allow(unreachable_code))]
+    fn run_request_adc_sample(&mut self) -> Task<Message> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.status =
+                "ADC sample request is not available in the web build yet (response reads pending)"
+                    .to_string();
+            return Task::none();
+        }
+
+        if self.transport != TransportUi::Espnow {
+            self.status = "ADC sample request requires espnow transport".to_string();
+            return Task::none();
+        }
+
+        if self.esp_now_mode != EspNowModeUi::Stateful {
+            self.status = "ADC sample request requires stateful espnow mode".to_string();
+            return Task::none();
+        }
+
+        if self.selected_peer.is_none() {
+            self.status = "Select a target peer first".to_string();
+            return Task::none();
+        }
+
+        let config = match self.parse_link_config() {
+            Ok(config) => config,
+            Err(err) => {
+                self.status = err;
+                return Task::none();
+            }
+        };
+
+        let device = self.selected_adc_device;
+        self.busy = true;
+        self.status = format!("Requesting ADC sample from {}...", device.label());
+
+        Task::perform(
+            async move {
+                let sample =
+                    request_adc_sample(&config, device.into()).map_err(|e| e.to_string())?;
+                Ok(format!("device={}\nraw={}", device.label(), sample.raw))
+            },
+            Message::AdcSampleDone,
         )
     }
 }

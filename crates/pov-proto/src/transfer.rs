@@ -42,6 +42,9 @@ pub enum SpokeCommand {
     },
     ClearAllImages,
     RequestStorageStats,
+    RequestAdcSample {
+        device: AdcDevice,
+    },
     SetAdcMonitorSampleRateHz {
         hz: u16,
     },
@@ -67,8 +70,25 @@ pub struct StorageStats {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum AdcDevice {
+    BoardRev,
+    HallEffectSensor2,
+    BatteryVoltage,
+    HallEffectSensor1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct AdcSample {
+    pub device: AdcDevice,
+    pub raw: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum SpokeResponse {
     StorageStats(StorageStats),
+    AdcSample(AdcSample),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

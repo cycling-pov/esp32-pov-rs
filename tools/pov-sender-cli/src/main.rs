@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
 use pov_sender_core::{
-    DownloadKind, DownloadRequest, EspNowDelivery, PolarEncodeOptions, SensorOffsets,
-    SerialLinkConfig, SpokeCommand, Transport as CoreTransport, send_command, send_download,
-    send_image, send_sensor_offsets, send_video,
+    AdcDevice, DownloadKind, DownloadRequest, EspNowDelivery, PolarEncodeOptions, SensorOffsets,
+    SerialLinkConfig, SpokeCommand, Transport as CoreTransport, request_adc_sample, send_command,
+    send_download, send_image, send_sensor_offsets, send_video,
 };
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -21,12 +21,31 @@ enum DownloadKindArg {
     Video,
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum AdcDeviceArg {
+    BoardRev,
+    HallEffectSensor2,
+    BatteryVoltage,
+    HallEffectSensor1,
+}
+
 impl From<DownloadKindArg> for DownloadKind {
     fn from(value: DownloadKindArg) -> Self {
         match value {
             DownloadKindArg::DisplayImage => DownloadKind::DisplayImage,
             DownloadKindArg::OtaImage => DownloadKind::OtaImage,
             DownloadKindArg::Video => DownloadKind::Video,
+        }
+    }
+}
+
+impl From<AdcDeviceArg> for AdcDevice {
+    fn from(value: AdcDeviceArg) -> Self {
+        match value {
+            AdcDeviceArg::BoardRev => AdcDevice::BoardRev,
+            AdcDeviceArg::HallEffectSensor2 => AdcDevice::HallEffectSensor2,
+            AdcDeviceArg::BatteryVoltage => AdcDevice::BatteryVoltage,
+            AdcDeviceArg::HallEffectSensor1 => AdcDevice::HallEffectSensor1,
         }
     }
 }
@@ -58,6 +77,10 @@ struct Args {
     /// Number of times to repeat each packet in random order for reliability
     #[arg(short, long, default_value_t = 1)]
     repeat: usize,
+
+    /// Target ESP-NOW peer MAC for stateful requests (for example AA:BB:CC:DD:EE:FF)
+    #[arg(long)]
+    esp_now_peer: Option<String>,
 
     #[command(subcommand)]
     command: Command,
@@ -139,15 +162,48 @@ enum Command {
         #[arg(long)]
         threshold: u16,
     },
+    /// Request one raw ADC sample from a selected ADC hookup.
+    RequestAdcSample {
+        #[arg(long, value_enum)]
+        device: AdcDeviceArg,
+    },
+}
+
+fn parse_mac(input: &str) -> anyhow::Result<[u8; 6]> {
+    let parts: Vec<_> = input.split(':').collect();
+    anyhow::ensure!(parts.len() == 6, "invalid MAC address: expected 6 octets");
+
+    let mut mac = [0u8; 6];
+    for (index, part) in parts.into_iter().enumerate() {
+        anyhow::ensure!(part.len() == 2, "invalid MAC address octet: {part}");
+        mac[index] = u8::from_str_radix(part, 16)
+            .with_context(|| format!("invalid MAC address octet: {part}"))?;
+    }
+
+    Ok(mac)
+}
+
+fn adc_device_label(device: AdcDevice) -> &'static str {
+    match device {
+        AdcDevice::BoardRev => "board-rev",
+        AdcDevice::HallEffectSensor2 => "hall-effect-sensor-2",
+        AdcDevice::BatteryVoltage => "battery-voltage",
+        AdcDevice::HallEffectSensor1 => "hall-effect-sensor-1",
+    }
 }
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    let esp_now_delivery = match args.esp_now_peer.as_deref() {
+        Some(peer) => EspNowDelivery::Peer(parse_mac(peer)?),
+        None => EspNowDelivery::Broadcast,
+    };
+
     let config = SerialLinkConfig {
         port: args.port,
         baud: args.baud,
         transport: args.transport.into(),
-        esp_now_delivery: EspNowDelivery::Broadcast,
+        esp_now_delivery,
         esp_now_retries: 0,
         repeat: args.repeat,
         inter_packet_delay_ms: 1_000,
@@ -266,6 +322,15 @@ fn main() -> anyhow::Result<()> {
                 "Collected command: SetHybridHallTriggerThreshold threshold={threshold}. Reboot firmware to apply."
             );
             stats
+        }
+        Command::RequestAdcSample { device } => {
+            let sample = request_adc_sample(&config, device.into())?;
+            println!(
+                "ADC sample received: device={} raw={}",
+                adc_device_label(sample.device),
+                sample.raw
+            );
+            return Ok(());
         }
     };
 

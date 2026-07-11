@@ -76,6 +76,9 @@ pub struct DeviceStorageStats {
     pub active_image_id: Option<u32>,
 }
 
+pub type AdcDevice = pov_proto::transfer::AdcDevice;
+pub type AdcSample = pov_proto::transfer::AdcSample;
+
 pub fn list_esp_now_peers(_port_name: &str, _baud: u32) -> anyhow::Result<Vec<EspNowPeer>> {
     anyhow::bail!("ESP-NOW peer listing is not available in wasm sender core")
 }
@@ -128,4 +131,11 @@ pub fn send_sensor_offsets(
 
 pub fn request_storage_stats(_config: &SerialLinkConfig) -> anyhow::Result<DeviceStorageStats> {
     anyhow::bail!("Storage stats request is not available in wasm sender core")
+}
+
+pub fn request_adc_sample(
+    _config: &SerialLinkConfig,
+    _device: AdcDevice,
+) -> anyhow::Result<AdcSample> {
+    anyhow::bail!("ADC sample request is not available in wasm sender core")
 }
