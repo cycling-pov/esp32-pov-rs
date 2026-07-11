@@ -654,6 +654,36 @@ async fn main(spawner: Spawner) -> ! {
                             );
                         }
                     }
+                    SpokeCommand::SetAdcMonitorSampleRateHz { hz } => {
+                        let result = storage::set_adc_monitor_sample_rate_hz(hz).await;
+
+                        if result.is_err() {
+                            warn!(
+                                "main:failed to persist adc monitor sample rate transfer_id={} hz={}",
+                                transfer_id, hz
+                            );
+                        } else {
+                            info!(
+                                "main:persisted adc monitor sample rate transfer_id={} hz={} reboot_required=true",
+                                transfer_id, hz
+                            );
+                        }
+                    }
+                    SpokeCommand::SetHybridHallTriggerThreshold { threshold } => {
+                        let result = storage::set_hybrid_hall_trigger_threshold(threshold).await;
+
+                        if result.is_err() {
+                            warn!(
+                                "main:failed to persist hall trigger threshold transfer_id={} threshold={}",
+                                transfer_id, threshold
+                            );
+                        } else {
+                            info!(
+                                "main:persisted hall trigger threshold transfer_id={} threshold={} reboot_required=true",
+                                transfer_id, threshold
+                            );
+                        }
+                    }
                     SpokeCommand::RequestStorageStats => {
                         let Some(source_peer) = command.source_peer else {
                             warn!(
