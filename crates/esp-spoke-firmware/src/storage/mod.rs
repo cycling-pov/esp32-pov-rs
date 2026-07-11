@@ -51,6 +51,8 @@ enum StorageRequest {
     SetActiveSlot(usize),
     GetSensorConfig,
     SetSensorConfig(SensorConfig),
+    GetAdcMonitorSampleRateHz,
+    SetAdcMonitorSampleRateHz(u16),
     GetSlotState(usize),
     SetSlotState(usize, ImageSlotState),
     ReadSlotData(usize),
@@ -83,6 +85,8 @@ enum StorageResponse {
     SetActiveSlot(Result<(), ()>),
     SensorConfig(SensorConfig),
     SetSensorConfig(Result<(), ()>),
+    AdcMonitorSampleRateHz(u16),
+    SetAdcMonitorSampleRateHz(Result<(), ()>),
     SlotState(ImageSlotState),
     SetSlotState(Result<(), ()>),
     ReadSlotData(Result<Vec<u8>, ()>),
@@ -140,6 +144,26 @@ pub async fn set_sensor_config(config: SensorConfig) -> Result<(), ()> {
         StorageResponse::SetSensorConfig(result) => result,
         _ => {
             warn!("storage:rpc set_sensor_config unexpected response");
+            Err(())
+        }
+    }
+}
+
+pub async fn get_adc_monitor_sample_rate_hz() -> u16 {
+    match rpc(StorageRequest::GetAdcMonitorSampleRateHz).await {
+        StorageResponse::AdcMonitorSampleRateHz(hz) => hz,
+        _ => {
+            warn!("storage:rpc get_adc_monitor_sample_rate_hz unexpected response");
+            config::DEFAULT_ADC_MONITOR_SAMPLE_RATE_HZ
+        }
+    }
+}
+
+pub async fn set_adc_monitor_sample_rate_hz(hz: u16) -> Result<(), ()> {
+    match rpc(StorageRequest::SetAdcMonitorSampleRateHz(hz)).await {
+        StorageResponse::SetAdcMonitorSampleRateHz(result) => result,
+        _ => {
+            warn!("storage:rpc set_adc_monitor_sample_rate_hz unexpected response");
             Err(())
         }
     }
@@ -518,6 +542,22 @@ pub async fn storage_task(flash: esp_hal::peripherals::FLASH<'static>) -> ! {
                 };
                 STORAGE_RESPONSE_CHANNEL
                     .send(StorageResponse::SetSensorConfig(result))
+                    .await;
+            }
+            StorageRequest::GetAdcMonitorSampleRateHz => {
+                let hz = config::get_adc_monitor_sample_rate_hz(&db).await;
+                STORAGE_RESPONSE_CHANNEL
+                    .send(StorageResponse::AdcMonitorSampleRateHz(hz))
+                    .await;
+            }
+            StorageRequest::SetAdcMonitorSampleRateHz(hz) => {
+                let result = if write_slot.is_some() {
+                    Err(())
+                } else {
+                    config::set_adc_monitor_sample_rate_hz(&db, hz).await
+                };
+                STORAGE_RESPONSE_CHANNEL
+                    .send(StorageResponse::SetAdcMonitorSampleRateHz(result))
                     .await;
             }
             StorageRequest::GetSlotState(slot) => {

@@ -55,6 +55,8 @@ use esp_spoke_firmware::pushbutton;
 use esp_spoke_firmware::pushbutton::ButtonId;
 #[cfg(all(feature = "status-led", not(feature = "waveshare-matrix")))]
 use esp_spoke_firmware::status_led::{self, StatusLedRequest};
+#[cfg(feature = "adc")]
+use esp_spoke_firmware::adc;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
 use esp_spoke_firmware::storage;
 #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
@@ -151,10 +153,27 @@ async fn main(spawner: Spawner) -> ! {
         info!("Serial backend initialized");
     }
 
-    #[cfg(any(feature = "waveshare-matrix", feature = "sk9822-strip"))]
+    #[cfg(any(
+        feature = "waveshare-matrix",
+        feature = "sk9822-strip",
+        feature = "adc"
+    ))]
     {
         storage::init(peripherals.FLASH, spawner);
         info!("Flash storage initialized");
+    }
+
+    #[cfg(feature = "adc")]
+    {
+        adc::init(
+            spawner,
+            peripherals.ADC1,
+            peripherals.GPIO2,
+            peripherals.GPIO4,
+            peripherals.GPIO5,
+            peripherals.GPIO8,
+        );
+        info!("ADC monitor task initialized (GPIO2/GPIO4/GPIO5/GPIO8)");
     }
 
     #[cfg(feature = "pushbutton-1")]

@@ -208,6 +208,7 @@ pub type EkvDatabase = Database<EkvFlash<'static>, CriticalSectionRawMutex>;
 //   0x04                → sensor config   (value: postcard-encoded SensorConfig)
 //   0x05                → storage index   (value: postcard-encoded StorageIndex)
 //   0x06                → schema version  (value: 1 byte)
+//   0x07                → adc monitor sample rate hz (value: u16 little-endian)
 
 /// Key for the active-image id record.
 pub const KEY_ACTIVE_SLOT: &[u8] = &[0x01];
@@ -220,6 +221,9 @@ pub const KEY_STORAGE_INDEX: &[u8] = &[0x05];
 
 /// Key for storage schema versioning.
 pub const KEY_STORAGE_SCHEMA_VERSION: &[u8] = &[0x06];
+
+/// Key for persisted ADC periodic-monitor sample rate in hertz.
+pub const KEY_ADC_MONITOR_SAMPLE_RATE_HZ: &[u8] = &[0x07];
 
 /// Key for the metadata record of `image_id`.
 #[inline]
