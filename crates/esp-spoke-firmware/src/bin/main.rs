@@ -20,11 +20,7 @@ use embassy_time::Duration;
 #[cfg(any(feature = "heap-stats", all(feature = "adc", feature = "sk9822-strip")))]
 use embassy_time::Timer;
 use esp_hal::clock::CpuClock;
-#[cfg(all(
-    feature = "sk9822-strip",
-    feature = "pure-imu-angle-estimator",
-    feature = "hybrid-angle-estimator"
-))]
+#[cfg(all(feature = "sk9822-strip", feature = "hybrid-angle-estimator"))]
 use esp_spoke_firmware::angle_estimator::hybrid_dual_spin_estimator_task;
 #[cfg(feature = "sk9822-strip")]
 use esp_spoke_firmware::angle_estimator::new_shared_spin_state;
@@ -245,7 +241,10 @@ async fn main(spawner: Spawner) -> ! {
         let sensor_config = storage::get_sensor_config().await;
         let _hall_offset_0 = Angle::from_degrees(sensor_config.hall_offset_0_degrees);
         let _hall_offset_1 = Angle::from_degrees(sensor_config.hall_offset_1_degrees);
-        #[cfg(all(feature = "pure-imu-angle-estimator", not(feature = "hybrid-angle-estimator")))]
+        #[cfg(all(
+            feature = "pure-imu-angle-estimator",
+            not(feature = "hybrid-angle-estimator")
+        ))]
         let imu_offset_degrees = sensor_config.imu_offset_degrees;
 
         // Coerce &'static mut to &'static (shared, Copy) so the same reference
@@ -315,7 +314,7 @@ async fn main(spawner: Spawner) -> ! {
                         );
                         #[cfg(all(not(feature = "mock-spin-estimator"), not(feature = "pure-imu-angle-estimator")))]
                         spawner.spawn(
-                            esp_spoke_firmware::angle_estimator::dual_spin_estimator_task(
+                            esp_spoke_firmware::angle_estimator::hall_effect::dual_spin_estimator_task(
                                 spin0,
                                 spin1,
                                 _hall_offset_0,
@@ -358,7 +357,11 @@ async fn main(spawner: Spawner) -> ! {
         }
     }
 
-    #[cfg(all(feature = "status-led", feature = "sk9822-strip", feature = "pure-imu-angle-estimator"))]
+    #[cfg(all(
+        feature = "status-led",
+        feature = "sk9822-strip",
+        feature = "pure-imu-angle-estimator"
+    ))]
     {
         let _ = status_led::try_send_request(StatusLedRequest::BLINK_FAST);
     }

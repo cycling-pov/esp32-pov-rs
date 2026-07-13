@@ -16,28 +16,39 @@ path = "./src/angle_estimator/hall_effect/adc_testbench.rs"
 
 [features]
 default = ["board-v1"]
-sk9822-strip = []
-heap-stats = []
-ble = ["dep:bt-hci", "dep:trouble-host", "esp-radio/ble"]
-espnow = ["esp-radio/esp-now", "esp-radio/wifi"]
-coexistence = ["esp-radio/coex"]
-usb-serial = []
+
+# Storage Capacity
 flash-4mb = []
 flash-8mb = []
 flash-16mb = []
-builtin-image = ["dep:image"]
-mock-spin-estimator = []
+
+# Board Features
 adc = []
-pure-imu-angle-estimator = ["dep:fusion-ahrs", "dep:nalgebra"]
-hybrid-angle-estimator = ["adc", "pure-imu-angle-estimator", "bmi260"]
-board-rev-resistor = []
+sk9822-strip = []
+board-rev-resistor = ["adc"]
 pushbutton-1 = []
 pushbutton-2 = []
+usb-serial = []
 status-led = []
 i2c-1 = []
 rtc-over-i2c = ["i2c-1"]
 oled-over-i2c = ["i2c-1"]
 bmi260 = ["i2c-1", "dep:bmi2", "dep:nalgebra"]
+
+# Spin Estimators
+mock-spin-estimator = []
+pure-imu-angle-estimator = ["bmi260", "dep:fusion-ahrs", "dep:nalgebra"]
+hybrid-angle-estimator = ["adc", "bmi260"]
+
+# Radios
+ble = ["dep:bt-hci", "dep:trouble-host", "esp-radio/ble"]
+espnow = ["esp-radio/esp-now", "esp-radio/wifi"]
+coexistence = ["esp-radio/coex"]
+
+# Software features
+builtin-image = ["dep:image"]
+heap-stats = []
+
 
 # Grouping for test boards
 board-v1 = [

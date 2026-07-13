@@ -1,11 +1,15 @@
 pub mod hall_effect;
 #[cfg(feature = "hybrid-angle-estimator")]
 pub mod hybrid;
+#[cfg(feature = "mock-spin-estimator")]
 pub mod mock;
+#[cfg(feature = "pure-imu-angle-estimator")]
 pub mod pure_imu_estimator;
 
 use core::cell::RefCell;
-use core::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "pure-imu-angle-estimator")]
+use core::sync::atomic::AtomicBool;
+use core::sync::atomic::Ordering;
 
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;

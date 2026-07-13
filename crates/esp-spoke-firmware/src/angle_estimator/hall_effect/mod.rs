@@ -52,8 +52,10 @@ pub async fn spin_estimator_task(state: &'static super::SharedSpinState, hall_of
 /// [`SENSOR_TRIGGER_1`]) and writes to its own [`super::SharedSpinState`].
 #[embassy_executor::task]
 pub async fn dual_spin_estimator_task(
-    state: &'static super::SharedSpinState,
-    hall_offset: Angle,
+    state_0: &'static super::SharedSpinState,
+    state_1: &'static super::SharedSpinState,
+    hall_offset_0: Angle,
+    hall_offset_1: Angle,
 ) -> ! {
     let mut estimator = PositionEstimator::<2>::default();
     let mut last = Instant::now();
@@ -86,9 +88,16 @@ pub async fn dual_spin_estimator_task(
         let triggered1 = SENSOR_TRIGGER_1.try_take().map(|_| 1usize);
 
         estimator.step(dt, triggered0.or(triggered1));
-        state.lock(|s| {
+
+        state_0.lock(|s| {
             *s.borrow_mut() = super::SpinState {
-                position: (estimator.get_current_pos() + hall_offset).constrain_circle(),
+                position: (estimator.get_current_pos() + hall_offset_0).constrain_circle(),
+                rate: estimator.get_current_rate(),
+            };
+        });
+        state_1.lock(|s| {
+            *s.borrow_mut() = super::SpinState {
+                position: (estimator.get_current_pos() + hall_offset_1).constrain_circle(),
                 rate: estimator.get_current_rate(),
             };
         });

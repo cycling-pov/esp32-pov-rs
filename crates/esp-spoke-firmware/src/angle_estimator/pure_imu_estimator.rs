@@ -1,13 +1,19 @@
+#[cfg(feature = "pure-imu-angle-estimator")]
 use core::time::Duration;
 
+#[cfg(feature = "pure-imu-angle-estimator")]
 use defmt::info;
+#[cfg(feature = "pure-imu-angle-estimator")]
 use embassy_time::Instant;
+#[cfg(feature = "pure-imu-angle-estimator")]
 use nalgebra::RealField;
+#[cfg(feature = "pure-imu-angle-estimator")]
 use pov_algs::{Angle, AngularVelocity};
 
 #[cfg(all(feature = "pure-imu-angle-estimator", not(feature = "bmi260")))]
 compile_error!("`pure-imu-angle-estimator` requires the `bmi260` IMU backend feature");
 
+#[cfg(feature = "pure-imu-angle-estimator")]
 struct CalibrationData {
     gyro_bias_dps: nalgebra::Vector3<f32>,
     calibrating_gyro_bias: bool,
@@ -17,6 +23,7 @@ struct CalibrationData {
     calibration_reset_log_divider: u8,
 }
 
+#[cfg(feature = "pure-imu-angle-estimator")]
 fn check_and_initialize_gyro_bias(
     calibration_data: &mut CalibrationData,
     sample: &crate::imu::ImuSample,
@@ -110,8 +117,8 @@ pub async fn pure_imu_dual_spin_estimator_task(
     };
 
     let mut ahrs = Ahrs::with_settings(settings);
-    let mut samples =
-        crate::imu::subscribe().expect("imu sample subscriber unavailable for pure-imu-angle-estimator estimator");
+    let mut samples = crate::imu::subscribe()
+        .expect("imu sample subscriber unavailable for pure-imu-angle-estimator estimator");
     let mut last = Instant::now();
     let mut last_angle = Angle::from_radians(0.0);
 
@@ -206,10 +213,10 @@ pub async fn pure_imu_dual_spin_estimator_task(
             last_angle = (last_angle + delta_angle).constrain_circle();
         }
 
-        let strip0_angle = (last_angle + STRIP0_PHASE_OFFSET_FROM_SENSOR + imu_offset)
-            .constrain_circle();
-        let strip1_angle = (last_angle + STRIP1_PHASE_OFFSET_FROM_SENSOR + imu_offset)
-            .constrain_circle();
+        let strip0_angle =
+            (last_angle + STRIP0_PHASE_OFFSET_FROM_SENSOR + imu_offset).constrain_circle();
+        let strip1_angle =
+            (last_angle + STRIP1_PHASE_OFFSET_FROM_SENSOR + imu_offset).constrain_circle();
 
         state0.lock(|s| {
             *s.borrow_mut() = super::SpinState {
