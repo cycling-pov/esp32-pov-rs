@@ -994,7 +994,6 @@ dependencies = [
  "anyhow",
  "image",
  "postcard",
- "pov-algs",
  "pov-images",
  "pov-proto",
  "rand 0.10.1",

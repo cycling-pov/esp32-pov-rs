@@ -9,11 +9,15 @@ pov-proto = { path = "../../crates/pov-proto", features = [
     "bridge",
 ] }
 anyhow = "1"
+image = { version = "0.25", default-features = false, features = [
+    "gif",
+    "png",
+    "jpeg",
+    "bmp",
+] }
+pov-images = { path = "../../crates/pov-images" }
+postcard = { version = "1", features = ["use-std"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 serialport = "4"
-pov-images = { path = "../../crates/pov-images" }
-pov-algs = { path = "../../crates/pov-algs" }
-postcard = { version = "1", features = ["use-std"] }
-image = "0.25"
 rand = "0.10.1"
