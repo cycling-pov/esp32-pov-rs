@@ -440,9 +440,46 @@ impl SenderGui {
             Message::RefreshPeers => {
                 #[cfg(target_arch = "wasm32")]
                 {
-                    self.status =
-                        "ESP-NOW peer refresh is not supported in the web build yet".to_string();
-                    return Task::none();
+                    let port_label = match self.selected_port.clone() {
+                        Some(port) => port,
+                        None => {
+                            self.status = "Select a serial port first".to_string();
+                            return Task::none();
+                        }
+                    };
+
+                    let baud = match self.baud.parse::<u32>() {
+                        Ok(baud) => baud,
+                        Err(_) => {
+                            self.status = "Invalid baud rate".to_string();
+                            return Task::none();
+                        }
+                    };
+
+                    let Some(index) = self.ports.iter().position(|p| p == &port_label) else {
+                        self.status =
+                            "Selected browser serial port is no longer available".to_string();
+                        return Task::none();
+                    };
+
+                    let Some(port) = self.web_ports.get(index).cloned() else {
+                        self.status =
+                            "Missing browser serial port handle. Reconnect the device.".to_string();
+                        return Task::none();
+                    };
+
+                    self.status = "Refreshing ESP-NOW peers...".to_string();
+                    return Task::perform(
+                        async move {
+                            let peers = web_serial::list_esp_now_peers_over_web_serial(port, baud)
+                                .await?
+                                .into_iter()
+                                .map(|p| EspNowPeerUi::new(p.mac))
+                                .collect();
+                            Ok(peers)
+                        },
+                        Message::PeersLoaded,
+                    );
                 }
 
                 let port = match self.selected_port.clone() {
@@ -1504,10 +1541,47 @@ impl SenderGui {
     fn run_request_storage_stats(&mut self) -> Task<Message> {
         #[cfg(target_arch = "wasm32")]
         {
-            self.status =
-                "Storage stats is not available in the web build yet (response reads pending)"
-                    .to_string();
-            return Task::none();
+            let config = match self.parse_link_config() {
+                Ok(config) => config,
+                Err(err) => {
+                    self.status = err;
+                    return Task::none();
+                }
+            };
+
+            let selected_label = config.port.clone();
+            let Some(index) = self.ports.iter().position(|p| p == &selected_label) else {
+                self.status = "Selected browser serial port is no longer available".to_string();
+                return Task::none();
+            };
+
+            let Some(port) = self.web_ports.get(index).cloned() else {
+                self.status =
+                    "Missing browser serial port handle. Reconnect the device.".to_string();
+                return Task::none();
+            };
+
+            self.busy = true;
+            self.status = "Requesting storage stats...".to_string();
+
+            return Task::perform(
+                async move {
+                    let stats =
+                        web_serial::request_storage_stats_over_web_serial(port, config).await?;
+                    Ok(format!(
+                        "total_bytes={}\nused_bytes={}\nfree_bytes={}\nimage_count={}\nactive_image_id={}",
+                        stats.total_bytes,
+                        stats.used_bytes,
+                        stats.free_bytes,
+                        stats.image_count,
+                        stats
+                            .active_image_id
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "none".to_string())
+                    ))
+                },
+                Message::StorageStatsDone,
+            );
         }
 
         if self.transport != TransportUi::Espnow {
@@ -1559,10 +1633,39 @@ impl SenderGui {
     fn run_request_adc_sample(&mut self) -> Task<Message> {
         #[cfg(target_arch = "wasm32")]
         {
-            self.status =
-                "ADC sample request is not available in the web build yet (response reads pending)"
-                    .to_string();
-            return Task::none();
+            let config = match self.parse_link_config() {
+                Ok(config) => config,
+                Err(err) => {
+                    self.status = err;
+                    return Task::none();
+                }
+            };
+
+            let selected_label = config.port.clone();
+            let Some(index) = self.ports.iter().position(|p| p == &selected_label) else {
+                self.status = "Selected browser serial port is no longer available".to_string();
+                return Task::none();
+            };
+
+            let Some(port) = self.web_ports.get(index).cloned() else {
+                self.status =
+                    "Missing browser serial port handle. Reconnect the device.".to_string();
+                return Task::none();
+            };
+
+            let device = self.selected_adc_device;
+            self.busy = true;
+            self.status = format!("Requesting ADC sample from {}...", device.label());
+
+            return Task::perform(
+                async move {
+                    let sample =
+                        web_serial::request_adc_sample_over_web_serial(port, config, device.into())
+                            .await?;
+                    Ok(format!("device={}\nraw={}", device.label(), sample.raw))
+                },
+                Message::AdcSampleDone,
+            );
         }
 
         if self.transport != TransportUi::Espnow {

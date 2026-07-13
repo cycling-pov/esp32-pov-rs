@@ -3189,6 +3189,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "futures-channel",
+ "futures-util",
  "gloo-timers",
  "iced",
  "image",

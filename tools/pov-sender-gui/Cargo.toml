@@ -26,6 +26,7 @@ wasm-bindgen-futures = "0.4"
 gloo-timers = { version = "0.3", features = ["futures"] }
 js-sys = "0.3"
 futures-channel = "0.3"
+futures-util = "0.3"
 image = { version = "0.25", default-features = false, features = [
     "gif",
     "png",
@@ -46,6 +47,7 @@ web-sys = { version = "=0.3.78", features = [
     "SerialPort",
     "SerialOptions",
     "ReadableStream",
+    "ReadableStreamDefaultReader",
     "WritableStream",
     "WritableStreamDefaultWriter",
 ] }
