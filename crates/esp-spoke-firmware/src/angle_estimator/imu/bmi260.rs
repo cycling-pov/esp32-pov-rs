@@ -1,19 +1,12 @@
-use bmi2::config;
-use bmi2::interface::I2cInterface;
-use bmi2::types::{BMI260_CHIP_ID, BMI270_CHIP_ID, Burst, Error as Bmi2Error, PwrCtrl};
-use bmi2::{Bmi2, I2cAddr};
 use core::time::Duration;
 use defmt::info;
 #[cfg(feature = "hybrid-angle-estimator")]
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 #[cfg(feature = "hybrid-angle-estimator")]
 use embassy_sync::pubsub::{PubSubChannel, Subscriber};
-use embassy_time::{Delay, Duration as EmbassyDuration, Instant, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use nalgebra::RealField;
 use pov_algs::{Angle, AngularVelocity};
-
-const BMI260_ACCEL_G_PER_LSB_2G: f32 = 1.0 / 16384.0;
-const BMI260_GYRO_DPS_PER_LSB_2000DPS: f32 = 1.0 / 16.4;
 
 const IMU_SAMPLE_RATE_WARNING_THRESHOLD: EmbassyDuration = EmbassyDuration::from_hz(5);
 
@@ -26,11 +19,6 @@ const IMU_SPIN_RATE_PUBLISHERS: usize = 1;
 
 #[cfg(feature = "hybrid-angle-estimator")]
 const HYBRID_SAMPLE_RATE: EmbassyDuration = EmbassyDuration::from_hz(20);
-
-struct ImuSample {
-    gyro_dps: nalgebra::Vector3<f32>,
-    accel_g: nalgebra::Vector3<f32>,
-}
 
 struct CalibrationData {
     gyro_bias_dps: nalgebra::Vector3<f32>,
@@ -45,8 +33,6 @@ struct SampleRateMonitor {
     sample_counter: u32,
     sample_time_accum: Duration,
 }
-
-type Bmi2Device<'a> = Bmi2<I2cInterface<&'a mut super::SharedI2cDevice>, Delay>;
 
 #[cfg(feature = "hybrid-angle-estimator")]
 pub type SpinRateSubscriber = Subscriber<
@@ -66,98 +52,6 @@ static IMU_SPIN_RATE_SAMPLES: PubSubChannel<
     IMU_SPIN_RATE_SUBSCRIBERS,
     IMU_SPIN_RATE_PUBLISHERS,
 > = PubSubChannel::new();
-
-fn i2c_addr_u8(address: I2cAddr) -> u8 {
-    match address {
-        I2cAddr::Default => 0x68,
-        I2cAddr::Alternative => 0x69,
-    }
-}
-
-async fn try_init_bmi2_on_addr<'a>(
-    i2c: &'a mut super::SharedI2cDevice,
-    address: I2cAddr,
-) -> Option<(Bmi2Device<'a>, u8)> {
-    let addr_u8 = i2c_addr_u8(address);
-    let mut bmi = Bmi2::new_i2c(i2c, Delay, address, Burst::new(255));
-
-    let chip_id = match bmi.get_chip_id().await {
-        Ok(id) => id,
-        Err(_) => return None,
-    };
-
-    if chip_id != BMI260_CHIP_ID && chip_id != BMI270_CHIP_ID {
-        defmt::warn!(
-            "spin:imu bmi2 unknown chip id=0x{=u8:02x} addr=0x{=u8:02x}",
-            chip_id,
-            addr_u8
-        );
-        return None;
-    }
-
-    let mut config_buf = [0u8; 256];
-    if bmi
-        .init(&config::BMI260_CONFIG_FILE, &mut config_buf)
-        .await
-        .is_err()
-    {
-        defmt::warn!("spin:imu bmi2 init failed addr=0x{=u8:02x}", addr_u8);
-        return None;
-    }
-
-    if bmi
-        .set_pwr_ctrl(PwrCtrl {
-            aux_en: false,
-            gyr_en: true,
-            acc_en: true,
-            temp_en: true,
-        })
-        .await
-        .is_err()
-    {
-        defmt::warn!(
-            "spin:imu bmi2 set pwr-ctrl failed addr=0x{=u8:02x}",
-            addr_u8
-        );
-        return None;
-    }
-
-    info!(
-        "spin:imu bmi2 initialized chip=0x{=u8:02x} addr=0x{=u8:02x}",
-        chip_id, addr_u8
-    );
-
-    Some((bmi, chip_id))
-}
-
-async fn read_imu_sample<I2C>(
-    bmi: &mut Bmi2<I2cInterface<I2C>, Delay>,
-) -> Result<ImuSample, Bmi2Error<I2C::Error>>
-where
-    I2C: embedded_hal_async::i2c::I2c,
-{
-    let data = bmi.get_data().await?;
-
-    let ax = data.acc.x as f32;
-    let ay = data.acc.y as f32;
-    let az = data.acc.z as f32;
-    let gx = data.gyr.x as f32;
-    let gy = data.gyr.y as f32;
-    let gz = data.gyr.z as f32;
-
-    Ok(ImuSample {
-        gyro_dps: nalgebra::Vector3::new(
-            gx * BMI260_GYRO_DPS_PER_LSB_2000DPS,
-            gy * BMI260_GYRO_DPS_PER_LSB_2000DPS,
-            gz * BMI260_GYRO_DPS_PER_LSB_2000DPS,
-        ),
-        accel_g: nalgebra::Vector3::new(
-            ax * BMI260_ACCEL_G_PER_LSB_2G,
-            ay * BMI260_ACCEL_G_PER_LSB_2G,
-            az * BMI260_ACCEL_G_PER_LSB_2G,
-        ),
-    })
-}
 
 fn check_sample_rate(monitor: &mut SampleRateMonitor, dt: Duration) {
     monitor.sample_counter = monitor.sample_counter.wrapping_add(1);
@@ -208,7 +102,7 @@ fn publish_spin_rate(rate: AngularVelocity) {
 #[cfg(feature = "hybrid-angle-estimator")]
 fn check_and_initialize_gyro_bias_rate_only(
     calibration_data: &mut CalibrationData,
-    sample: &ImuSample,
+    sample: &crate::imu::ImuSample,
     dt: Duration,
 ) -> bool {
     const IMU_CALIBRATION_DURATION: Duration = Duration::from_secs(5);
@@ -256,9 +150,10 @@ fn check_and_initialize_gyro_bias_rate_only(
     true
 }
 
+#[cfg(feature = "imu-spin")]
 fn check_and_initialize_gyro_bias(
     calibration_data: &mut CalibrationData,
-    sample: &ImuSample,
+    sample: &crate::imu::ImuSample,
     dt: Duration,
     last_angle: Angle,
     state0: &super::super::SharedSpinState,
@@ -323,10 +218,10 @@ fn check_and_initialize_gyro_bias(
     true
 }
 
+#[cfg(feature = "imu-spin")]
 pub async fn imu_dual_spin_estimator_impl(
     state0: &'static super::super::SharedSpinState,
     state1: &'static super::super::SharedSpinState,
-    mut i2c: super::SharedI2cDevice,
     imu_offset_degrees: f32,
 ) -> ! {
     use fusion_ahrs::{Ahrs, AhrsSettings, Convention};
@@ -348,13 +243,10 @@ pub async fn imu_dual_spin_estimator_impl(
     };
 
     let mut ahrs = Ahrs::with_settings(settings);
+    let mut samples =
+        crate::imu::subscribe().expect("imu sample subscriber unavailable for imu-spin estimator");
     let mut last = Instant::now();
-    let mut error_log_divider: u8 = 0;
     let mut last_angle = Angle::from_radians(0.0);
-    let mut sample_rate_monitor = SampleRateMonitor {
-        sample_counter: 0,
-        sample_time_accum: Duration::ZERO,
-    };
 
     let mut calibration_data = CalibrationData {
         gyro_bias_dps: nalgebra::Vector3::new(0.0f32, 0.0, 0.0),
@@ -372,164 +264,120 @@ pub async fn imu_dual_spin_estimator_impl(
     let mut ref_body: Option<nalgebra::Vector3<f32>> = None;
 
     loop {
-        let mut bmi = loop {
-            if let Some((dev, _chip_id)) = try_init_bmi2_on_addr(&mut i2c, I2cAddr::Default).await {
-                break dev;
-            }
-            if let Some((dev, _chip_id)) =
-                try_init_bmi2_on_addr(&mut i2c, I2cAddr::Alternative).await
-            {
-                break dev;
-            }
+        let sample = samples.next_message_pure().await;
 
-            error_log_divider = error_log_divider.wrapping_add(1);
-            if error_log_divider == 0 {
-                defmt::warn!("spin:imu bmi2 init failed; no device detected; retrying");
-            }
-            Timer::after(EmbassyDuration::from_millis(100)).await;
+        let now = Instant::now();
+        let dt = Duration::from_micros(now.duration_since(last).as_micros());
+        last = now;
+
+        if check_and_initialize_gyro_bias(
+            &mut calibration_data,
+            &sample,
+            dt,
+            last_angle,
+            state0,
+            state1,
+        ) {
+            continue;
+        }
+
+        let corrected_gyro_dps = sample.gyro_dps - calibration_data.gyro_bias_dps;
+        ahrs.update_no_magnetometer(corrected_gyro_dps, sample.accel_g, dt.as_secs_f32());
+
+        let gyro_rate_dps = corrected_gyro_dps.norm();
+        let dominant_axis_rate_dps = if corrected_gyro_dps.x.abs() >= corrected_gyro_dps.y.abs()
+            && corrected_gyro_dps.x.abs() >= corrected_gyro_dps.z.abs()
+        {
+            corrected_gyro_dps.x
+        } else if corrected_gyro_dps.y.abs() >= corrected_gyro_dps.z.abs() {
+            corrected_gyro_dps.y
+        } else {
+            corrected_gyro_dps.z
         };
+        let signed_rate_dps = IMU_ANGLE_DIRECTION * dominant_axis_rate_dps;
+        let rate = AngularVelocity::from_degrees_secs(signed_rate_dps);
 
-        loop {
-            Timer::after(EmbassyDuration::from_millis(1)).await;
+        let q = ahrs.quaternion();
+        // NWU convention: world Z = up.
+        let world_up = nalgebra::Vector3::new(0.0f32, 0.0, 1.0);
+        let mut updated_from_geometry = false;
 
-            if super::super::pause_needed_for_flash() {
-                info!("spin:imu paused for flash write");
-                super::super::spin_estimator_pause_spin();
-                info!("spin:imu resumed after flash write");
-                continue;
-            }
+        if gyro_rate_dps >= GYRO_AXIS_MIN_RATE_DPS {
+            // Spin axis in body frame, signed for rotation direction.
+            let spin_body = corrected_gyro_dps / gyro_rate_dps * IMU_ANGLE_DIRECTION;
+            // Spin axis in world frame.
+            let spin_world = q * spin_body;
 
-            let now = Instant::now();
-            let dt = Duration::from_micros(now.duration_since(last).as_micros());
-            last = now;
+            // Project world-up onto the spin plane (world frame).
+            let up_raw = world_up - spin_world * world_up.dot(&spin_world);
+            let up_norm = up_raw.norm();
 
-            match read_imu_sample(&mut bmi).await {
-                Ok(sample) => {
-                    if check_and_initialize_gyro_bias(
-                        &mut calibration_data,
-                        &sample,
-                        dt,
-                        last_angle,
-                        state0,
-                        state1,
-                    ) {
-                        continue;
+            if up_norm >= GRAVITY_PROJECTION_MIN_NORM {
+                // Orthonormal basis for the spin plane in world frame:
+                //   up_in_spin_frame  - direction of world-up within the plane
+                //   e2 - 90 degrees ahead in the direction of rotation
+                let up_in_spin_frame = up_raw / up_norm;
+                let e2 = spin_world.cross(&up_in_spin_frame);
+
+                // Capture body-frame reference once AHRS has converged.
+                if ref_body.is_none() && !ahrs.flags().initialising {
+                    let up_in_body = q.inverse() * world_up;
+                    let up_body_raw = up_in_body - spin_body * up_in_body.dot(&spin_body);
+                    let up_body_norm = up_body_raw.norm();
+                    if up_body_norm >= GRAVITY_PROJECTION_MIN_NORM {
+                        ref_body = Some(up_body_raw / up_body_norm);
+                        info!("spin:imu angle reference initialized");
                     }
-
-                    let corrected_gyro_dps = sample.gyro_dps - calibration_data.gyro_bias_dps;
-                    ahrs.update_no_magnetometer(
-                        corrected_gyro_dps,
-                        sample.accel_g,
-                        dt.as_secs_f32(),
-                    );
-
-                    check_sample_rate(&mut sample_rate_monitor, dt);
-
-                    let gyro_rate_dps = corrected_gyro_dps.norm();
-                    let dominant_axis_rate_dps = if corrected_gyro_dps.x.abs()
-                        >= corrected_gyro_dps.y.abs()
-                        && corrected_gyro_dps.x.abs() >= corrected_gyro_dps.z.abs()
-                    {
-                        corrected_gyro_dps.x
-                    } else if corrected_gyro_dps.y.abs() >= corrected_gyro_dps.z.abs() {
-                        corrected_gyro_dps.y
-                    } else {
-                        corrected_gyro_dps.z
-                    };
-                    let signed_rate_dps = IMU_ANGLE_DIRECTION * dominant_axis_rate_dps;
-                    let rate = AngularVelocity::from_degrees_secs(signed_rate_dps);
-
-                    let q = ahrs.quaternion();
-                    // NWU convention: world Z = up.
-                    let world_up = nalgebra::Vector3::new(0.0f32, 0.0, 1.0);
-                    let mut updated_from_geometry = false;
-
-                    if gyro_rate_dps >= GYRO_AXIS_MIN_RATE_DPS {
-                        // Spin axis in body frame, signed for rotation direction.
-                        let spin_body = corrected_gyro_dps / gyro_rate_dps * IMU_ANGLE_DIRECTION;
-                        // Spin axis in world frame.
-                        let spin_world = q * spin_body;
-
-                        // Project world-up onto the spin plane (world frame).
-                        let up_raw = world_up - spin_world * world_up.dot(&spin_world);
-                        let up_norm = up_raw.norm();
-
-                        if up_norm >= GRAVITY_PROJECTION_MIN_NORM {
-                            // Orthonormal basis for the spin plane in world frame:
-                            //   up_in_spin_frame  - direction of world-up within the plane
-                            //   e2 - 90 degrees ahead in the direction of rotation
-                            let up_in_spin_frame = up_raw / up_norm;
-                            let e2 = spin_world.cross(&up_in_spin_frame);
-
-                            // Capture body-frame reference once AHRS has converged.
-                            if ref_body.is_none() && !ahrs.flags().initialising {
-                                let up_in_body = q.inverse() * world_up;
-                                let up_body_raw =
-                                    up_in_body - spin_body * up_in_body.dot(&spin_body);
-                                let up_body_norm = up_body_raw.norm();
-                                if up_body_norm >= GRAVITY_PROJECTION_MIN_NORM {
-                                    ref_body = Some(up_body_raw / up_body_norm);
-                                    info!("spin:imu angle reference initialized");
-                                }
-                            }
-
-                            if let Some(ref_b) = ref_body {
-                                // Rotate body-fixed reference into world frame.
-                                let ref_world = q * ref_b;
-                                let ref_perp = ref_world - spin_world * ref_world.dot(&spin_world);
-                                // angle = 0 when ref_b aligns with world-up;
-                                // increases monotonically in the rotation direction.
-                                last_angle = Angle::from_radians(
-                                    ref_perp.dot(&e2).atan2(ref_perp.dot(&up_in_spin_frame)),
-                                )
-                                .constrain_circle();
-                                updated_from_geometry = true;
-                            }
-                        }
-                    }
-
-                    // Keep phase moving when geometric projection is unavailable.
-                    if !updated_from_geometry {
-                        let delta_angle = Angle::from_degrees(signed_rate_dps * dt.as_secs_f32());
-                        last_angle = (last_angle + delta_angle).constrain_circle();
-                    }
-
-                    let strip0_angle = (last_angle + STRIP0_PHASE_OFFSET_FROM_SENSOR + imu_offset)
-                        .constrain_circle();
-
-                    let strip1_angle = (last_angle + STRIP1_PHASE_OFFSET_FROM_SENSOR + imu_offset)
-                        .constrain_circle();
-
-                    state0.lock(|s| {
-                        *s.borrow_mut() = super::super::SpinState {
-                            position: strip0_angle,
-                            rate,
-                        };
-                    });
-                    state1.lock(|s| {
-                        *s.borrow_mut() = super::super::SpinState {
-                            position: strip1_angle,
-                            rate,
-                        };
-                    });
                 }
-                Err(_) => {
-                    error_log_divider = error_log_divider.wrapping_add(1);
-                    if error_log_divider == 0 {
-                        defmt::warn!("spin:imu bmi2 sample read failed; reinitializing");
-                    }
-                    break;
+
+                if let Some(ref_b) = ref_body {
+                    // Rotate body-fixed reference into world frame.
+                    let ref_world = q * ref_b;
+                    let ref_perp = ref_world - spin_world * ref_world.dot(&spin_world);
+                    // angle = 0 when ref_b aligns with world-up;
+                    // increases monotonically in the rotation direction.
+                    last_angle = Angle::from_radians(
+                        ref_perp.dot(&e2).atan2(ref_perp.dot(&up_in_spin_frame)),
+                    )
+                    .constrain_circle();
+                    updated_from_geometry = true;
                 }
             }
         }
+
+        // Keep phase moving when geometric projection is unavailable.
+        if !updated_from_geometry {
+            let delta_angle = Angle::from_degrees(signed_rate_dps * dt.as_secs_f32());
+            last_angle = (last_angle + delta_angle).constrain_circle();
+        }
+
+        let strip0_angle = (last_angle + STRIP0_PHASE_OFFSET_FROM_SENSOR + imu_offset)
+            .constrain_circle();
+
+        let strip1_angle = (last_angle + STRIP1_PHASE_OFFSET_FROM_SENSOR + imu_offset)
+            .constrain_circle();
+
+        state0.lock(|s| {
+            *s.borrow_mut() = super::super::SpinState {
+                position: strip0_angle,
+                rate,
+            };
+        });
+        state1.lock(|s| {
+            *s.borrow_mut() = super::super::SpinState {
+                position: strip1_angle,
+                rate,
+            };
+        });
     }
 }
 
 #[cfg(feature = "hybrid-angle-estimator")]
-pub async fn spin_rate_publisher_impl(mut i2c: super::SharedI2cDevice) -> ! {
+pub async fn spin_rate_publisher_impl() -> ! {
     super::super::publish_imu_boot_calibrating(true);
 
-    let mut error_log_divider: u8 = 0;
+    let mut samples =
+        crate::imu::subscribe().expect("imu sample subscriber unavailable for hybrid estimator");
     let mut sample_rate_monitor = SampleRateMonitor {
         sample_counter: 0,
         sample_time_accum: Duration::ZERO,
@@ -543,71 +391,28 @@ pub async fn spin_rate_publisher_impl(mut i2c: super::SharedI2cDevice) -> ! {
         calibration_reset_log_divider: 0,
     };
 
+    // Wait for the first sample so startup timing is aligned to sensor output.
+    let mut sample = samples.next_message_pure().await;
+    let mut last = Instant::now();
+
     loop {
-        let mut bmi = loop {
-            if let Some((dev, _chip_id)) = try_init_bmi2_on_addr(&mut i2c, I2cAddr::Default).await {
-                break dev;
-            }
-            if let Some((dev, _chip_id)) =
-                try_init_bmi2_on_addr(&mut i2c, I2cAddr::Alternative).await
-            {
-                break dev;
-            }
+        Timer::after(HYBRID_SAMPLE_RATE).await;
 
-            error_log_divider = error_log_divider.wrapping_add(1);
-            if error_log_divider == 0 {
-                defmt::warn!("spin:hybrid bmi2 init failed; no device detected; retrying");
-            }
-            Timer::after(EmbassyDuration::from_millis(100)).await;
-        };
-
-        let mut last = Instant::now();
-
-        loop {
-            Timer::after(HYBRID_SAMPLE_RATE).await;
-
-            if super::super::pause_needed_for_flash() {
-                info!("spin:hybrid paused for flash write");
-                super::super::spin_estimator_pause_spin();
-                info!("spin:hybrid resumed after flash write");
-                continue;
-            }
-
-            let now = Instant::now();
-            let dt = Duration::from_micros(now.duration_since(last).as_micros());
-            last = now;
-
-            match read_imu_sample(&mut bmi).await {
-                Ok(sample) => {
-                    if check_and_initialize_gyro_bias_rate_only(&mut calibration_data, &sample, dt)
-                    {
-                        continue;
-                    }
-
-                    let corrected_gyro_dps = sample.gyro_dps - calibration_data.gyro_bias_dps;
-                    let rate = AngularVelocity::from_degrees_secs(dominant_signed_rate_dps(
-                        corrected_gyro_dps,
-                    ));
-                    publish_spin_rate(rate);
-                    check_sample_rate(&mut sample_rate_monitor, dt);
-                }
-                Err(_) => {
-                    error_log_divider = error_log_divider.wrapping_add(1);
-                    if error_log_divider == 0 {
-                        defmt::warn!("spin:hybrid bmi2 sample read failed; reinitializing");
-                    }
-                    calibration_data = CalibrationData {
-                        gyro_bias_dps: nalgebra::Vector3::new(0.0f32, 0.0, 0.0),
-                        calibrating_gyro_bias: true,
-                        calibration_accum_dps: nalgebra::Vector3::new(0.0f32, 0.0, 0.0),
-                        calibration_elapsed: Duration::ZERO,
-                        calibration_samples: 0,
-                        calibration_reset_log_divider: 0,
-                    };
-                    super::super::publish_imu_boot_calibrating(true);
-                    break;
-                }
-            }
+        while let Some(next) = samples.try_next_message_pure() {
+            sample = next;
         }
+
+        let now = Instant::now();
+        let dt = Duration::from_micros(now.duration_since(last).as_micros());
+        last = now;
+
+        if check_and_initialize_gyro_bias_rate_only(&mut calibration_data, &sample, dt) {
+            continue;
+        }
+
+        let corrected_gyro_dps = sample.gyro_dps - calibration_data.gyro_bias_dps;
+        let rate = AngularVelocity::from_degrees_secs(dominant_signed_rate_dps(corrected_gyro_dps));
+        publish_spin_rate(rate);
+        check_sample_rate(&mut sample_rate_monitor, dt);
     }
 }

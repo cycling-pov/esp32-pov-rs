@@ -37,7 +37,7 @@ status-led = []
 i2c-1 = []
 rtc-over-i2c = ["i2c-1"]
 oled-over-i2c = ["i2c-1"]
-bmi260 = ["i2c-1", "dep:bmi2"]
+bmi260 = ["i2c-1", "dep:bmi2", "dep:nalgebra"]
 
 # Grouping for test boards
 board-v1 = [

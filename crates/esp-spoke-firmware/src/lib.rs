@@ -14,6 +14,8 @@ extern crate alloc;
 pub mod adc;
 pub mod angle_estimator;
 pub mod bitmap;
+#[cfg(feature = "bmi260")]
+pub mod imu;
 pub mod led;
 pub mod networking;
 pub mod pushbutton;

@@ -18,7 +18,7 @@ pub async fn hybrid_dual_spin_estimator_task(
     let hall_threshold = crate::storage::get_hybrid_hall_trigger_threshold().await;
     let mut hall_samples = adc::subscribe().expect("adc subscriber unavailable");
     let mut imu_samples =
-        super::imu::subscribe_spin_rate().expect("imu spin-rate subscriber unavailable");
+        crate::imu::subscribe_spin_rate().expect("imu spin-rate subscriber unavailable");
 
     adc::start_monitor_mode(AdcSelection {
         board_rev: None,

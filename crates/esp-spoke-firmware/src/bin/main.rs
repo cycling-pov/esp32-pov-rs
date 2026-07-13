@@ -10,10 +10,10 @@
 use defmt::info;
 #[cfg(feature = "sk9822-strip")]
 use defmt::warn;
-#[cfg(all(feature = "sk9822-strip", feature = "imu-spin"))]
+#[cfg(all(feature = "sk9822-strip", feature = "bmi260", feature = "board-v1"))]
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
-#[cfg(all(feature = "sk9822-strip", feature = "imu-spin"))]
+#[cfg(all(feature = "sk9822-strip", feature = "bmi260", feature = "board-v1"))]
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
 #[cfg(feature = "sk9822-strip")]
 use embassy_time::Duration;
@@ -29,17 +29,13 @@ use esp_spoke_firmware::angle_estimator::hybrid_dual_spin_estimator_task;
 #[cfg(all(
     feature = "sk9822-strip",
     feature = "imu-spin",
-    feature = "hybrid-angle-estimator"
-))]
-use esp_spoke_firmware::angle_estimator::imu::imu_spin_rate_publisher_task;
-#[cfg(all(
-    feature = "sk9822-strip",
-    feature = "imu-spin",
     not(feature = "hybrid-angle-estimator")
 ))]
 use esp_spoke_firmware::angle_estimator::imu_dual_spin_estimator_task;
 #[cfg(feature = "sk9822-strip")]
 use esp_spoke_firmware::angle_estimator::new_shared_spin_state;
+#[cfg(all(feature = "sk9822-strip", feature = "bmi260", feature = "board-v1"))]
+use esp_spoke_firmware::imu::imu_publisher_task;
 #[cfg(feature = "sk9822-strip")]
 use esp_spoke_firmware::led::Sk9822Pins;
 #[cfg(feature = "sk9822-strip")]
@@ -141,7 +137,7 @@ struct I2CConfig<'d> {
     pub scl: esp_hal::gpio::AnyPin<'d>,
 }
 
-#[cfg(all(feature = "sk9822-strip", feature = "imu-spin"))]
+#[cfg(all(feature = "sk9822-strip", feature = "bmi260", feature = "board-v1"))]
 type SharedI2cBus = Mutex<NoopRawMutex, esp_hal::i2c::master::I2c<'static, esp_hal::Async>>;
 
 #[cfg(all(feature = "imu-spin", not(feature = "board-v1")))]
@@ -227,10 +223,10 @@ async fn main(spawner: Spawner) -> ! {
         info!("Status LED initialized on GPIO46");
     }
 
-    #[cfg(feature = "imu-spin")]
+    #[cfg(all(feature = "bmi260", feature = "board-v1"))]
     let i2c0 = peripherals.I2C0;
 
-    #[cfg(all(feature = "imu-spin", feature = "board-v1"))]
+    #[cfg(all(feature = "bmi260", feature = "board-v1"))]
     let i2c_config = I2CConfig {
         sda: peripherals.GPIO47.into(),
         scl: peripherals.GPIO48.into(),
@@ -282,13 +278,13 @@ async fn main(spawner: Spawner) -> ! {
             APP_CORE_STACK.init(Stack::new()),
             move || {
                 static CORE1_EXECUTOR: StaticCell<esp_rtos::embassy::Executor> = StaticCell::new();
-                #[cfg(feature = "imu-spin")]
+                #[cfg(all(feature = "bmi260", feature = "board-v1"))]
                 static I2C_BUS: StaticCell<SharedI2cBus> = StaticCell::new();
                 CORE1_EXECUTOR
                     .init(esp_rtos::embassy::Executor::new())
                     .run(|spawner| {
                         spawner.spawn(led::pov_render_task(dual, shared_bitmap).unwrap());
-                        #[cfg(feature = "imu-spin")]
+                        #[cfg(all(feature = "bmi260", feature = "board-v1"))]
                         let i2c = I2C_BUS.init(Mutex::new(
                             esp_hal::i2c::master::I2c::new(
                                 i2c0,
@@ -300,8 +296,8 @@ async fn main(spawner: Spawner) -> ! {
                             .with_scl(i2c_config.scl)
                             .into_async(),
                         ));
-                        #[cfg(feature = "hybrid-angle-estimator")]
-                        spawner.spawn(imu_spin_rate_publisher_task(I2cDevice::new(i2c)).unwrap());
+                        #[cfg(all(feature = "bmi260", feature = "board-v1"))]
+                        spawner.spawn(imu_publisher_task(I2cDevice::new(i2c)).unwrap());
                         #[cfg(feature = "hybrid-angle-estimator")]
                         spawner.spawn(
                             hybrid_dual_spin_estimator_task(
@@ -314,13 +310,7 @@ async fn main(spawner: Spawner) -> ! {
                         );
                         #[cfg(all(feature = "imu-spin", not(feature = "hybrid-angle-estimator")))]
                         spawner.spawn(
-                            imu_dual_spin_estimator_task(
-                                spin0,
-                                spin1,
-                                I2cDevice::new(i2c),
-                                imu_offset_degrees,
-                            )
-                            .unwrap(),
+                            imu_dual_spin_estimator_task(spin0, spin1, imu_offset_degrees).unwrap(),
                         );
                         #[cfg(all(not(feature = "mock-spin"), not(feature = "imu-spin")))]
                         spawner.spawn(
