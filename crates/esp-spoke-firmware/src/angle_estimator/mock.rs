@@ -1,11 +1,11 @@
-#[cfg(feature = "mock-spin")]
+#[cfg(feature = "mock-spin-estimator")]
 use defmt::info;
-#[cfg(feature = "mock-spin")]
+#[cfg(feature = "mock-spin-estimator")]
 use embassy_time::{Duration, Instant, Timer};
-#[cfg(feature = "mock-spin")]
+#[cfg(feature = "mock-spin-estimator")]
 use pov_algs::{Angle, AngularVelocity};
 
-#[cfg(feature = "mock-spin")]
+#[cfg(feature = "mock-spin-estimator")]
 use super::{SharedSpinState, SpinEstimator, SpinState};
 
 /// Mock [`SpinEstimator`] that spins at a constant configurable rate.
@@ -13,14 +13,14 @@ use super::{SharedSpinState, SpinEstimator, SpinState};
 /// Angular position is extrapolated from the moment of construction using
 /// `embassy_time::Instant`. Useful for bench testing without hardware sensor.
 ///
-/// Enabled by the `mock-spin` crate feature.
-#[cfg(feature = "mock-spin")]
+/// Enabled by the `mock-spin-estimator` crate feature.
+#[cfg(feature = "mock-spin-estimator")]
 pub struct MockSpinEstimator {
     rate: AngularVelocity,
     start: Instant,
 }
 
-#[cfg(feature = "mock-spin")]
+#[cfg(feature = "mock-spin-estimator")]
 impl MockSpinEstimator {
     pub fn new(rate: AngularVelocity) -> Self {
         Self {
@@ -30,7 +30,7 @@ impl MockSpinEstimator {
     }
 }
 
-#[cfg(feature = "mock-spin")]
+#[cfg(feature = "mock-spin-estimator")]
 impl SpinEstimator for MockSpinEstimator {
     fn spin_state(&self) -> SpinState {
         let elapsed_us = self.start.elapsed().as_micros();
@@ -43,7 +43,7 @@ impl SpinEstimator for MockSpinEstimator {
 }
 
 /// Default mock spin rate used by [`mock_dual_spin_estimator_task`]: 2 revolutions per second.
-#[cfg(feature = "mock-spin")]
+#[cfg(feature = "mock-spin-estimator")]
 pub const MOCK_SPIN_RATE: AngularVelocity =
     AngularVelocity::from_radians_secs(2.0 * core::f32::consts::TAU);
 
@@ -51,14 +51,14 @@ pub const MOCK_SPIN_RATE: AngularVelocity =
 ///
 /// In hardware, opposite spokes are approximately 180 degrees apart. Apply the
 /// same relationship in mock mode so bench tests render opposite hemispheres.
-#[cfg(feature = "mock-spin")]
+#[cfg(feature = "mock-spin-estimator")]
 pub const MOCK_STRIP1_PHASE_OFFSET: Angle = Angle::from_radians(core::f32::consts::PI);
 
 /// Background task that drives both [`SharedSpinState`]s from a [`MockSpinEstimator`].
 ///
-/// Drop-in replacement for [`dual_spin_estimator_task`] when the `mock-spin`
+/// Drop-in replacement for [`dual_spin_estimator_task`] when the `mock-spin-estimator`
 /// feature is active.  Both strips spin at [`MOCK_SPIN_RATE`].
-#[cfg(feature = "mock-spin")]
+#[cfg(feature = "mock-spin-estimator")]
 #[embassy_executor::task]
 pub async fn mock_dual_spin_estimator_task(
     state0: &'static SharedSpinState,

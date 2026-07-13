@@ -17,7 +17,7 @@ use crate::led::{CORE1_FLASH_PAUSE_REQUESTED, CORE1_FLASH_PAUSED_COUNT};
 
 #[cfg(feature = "hybrid-angle-estimator")]
 pub use hybrid::hybrid_dual_spin_estimator_task;
-#[cfg(feature = "mock-spin")]
+#[cfg(feature = "mock-spin-estimator")]
 pub use mock::mock_dual_spin_estimator_task;
 #[cfg(feature = "pure-imu-angle-estimator")]
 pub use pure_imu_estimator::pure_imu_dual_spin_estimator_task;

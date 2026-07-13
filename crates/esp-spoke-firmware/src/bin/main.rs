@@ -313,7 +313,7 @@ async fn main(spawner: Spawner) -> ! {
                             pure_imu_dual_spin_estimator_task(spin0, spin1, imu_offset_degrees)
                                 .unwrap(),
                         );
-                        #[cfg(all(not(feature = "mock-spin"), not(feature = "pure-imu-angle-estimator")))]
+                        #[cfg(all(not(feature = "mock-spin-estimator"), not(feature = "pure-imu-angle-estimator")))]
                         spawner.spawn(
                             esp_spoke_firmware::angle_estimator::dual_spin_estimator_task(
                                 spin0,
@@ -323,7 +323,7 @@ async fn main(spawner: Spawner) -> ! {
                             )
                             .unwrap(),
                         );
-                        #[cfg(feature = "mock-spin")]
+                        #[cfg(feature = "mock-spin-estimator")]
                         spawner.spawn(
                             esp_spoke_firmware::angle_estimator::mock_dual_spin_estimator_task(
                                 spin0, spin1,
