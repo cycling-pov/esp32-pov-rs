@@ -22,7 +22,7 @@ pub use actions_wasm::{
     request_storage_stats, send_command, send_download, send_image, send_sensor_offsets,
     send_video, send_video_with_max_fps,
 };
-pub use pov_proto::transfer::{AdcDevice, AdcSample, DownloadKind, SpokeCommand};
+pub use pov_proto::transfer::{AdcDevice, AdcSample, DownloadKind, EstimatorMode, SpokeCommand};
 #[cfg(not(target_arch = "wasm32"))]
 pub use serial_link::list_serial_ports;
 #[cfg(target_arch = "wasm32")]

@@ -10,7 +10,7 @@ use embassy_sync::channel::Channel;
 use esp_bootloader_esp_idf::partitions;
 use esp_storage::FlashStorage;
 use pov_proto::image::Encoding;
-use pov_proto::transfer::DownloadKind;
+use pov_proto::transfer::{DownloadKind, EstimatorMode};
 use pov_proto::video;
 
 use self::config::{ImageKind, ImageSlotState, SensorConfig, SlotMetadata, StorageIndex};
@@ -55,6 +55,8 @@ enum StorageRequest {
     SetAdcMonitorSampleRateHz(u16),
     GetHybridHallTriggerThreshold,
     SetHybridHallTriggerThreshold(u16),
+    GetEstimatorMode,
+    SetEstimatorMode(EstimatorMode),
     GetSlotState(usize),
     SetSlotState(usize, ImageSlotState),
     ReadSlotData(usize),
@@ -91,6 +93,8 @@ enum StorageResponse {
     SetAdcMonitorSampleRateHz(Result<(), ()>),
     HybridHallTriggerThreshold(u16),
     SetHybridHallTriggerThreshold(Result<(), ()>),
+    EstimatorMode(EstimatorMode),
+    SetEstimatorMode(Result<(), ()>),
     SlotState(ImageSlotState),
     SetSlotState(Result<(), ()>),
     ReadSlotData(Result<Vec<u8>, ()>),
@@ -188,6 +192,26 @@ pub async fn set_hybrid_hall_trigger_threshold(threshold: u16) -> Result<(), ()>
         StorageResponse::SetHybridHallTriggerThreshold(result) => result,
         _ => {
             warn!("storage:rpc set_hybrid_hall_trigger_threshold unexpected response");
+            Err(())
+        }
+    }
+}
+
+pub async fn get_estimator_mode() -> EstimatorMode {
+    match rpc(StorageRequest::GetEstimatorMode).await {
+        StorageResponse::EstimatorMode(mode) => mode,
+        _ => {
+            warn!("storage:rpc get_estimator_mode unexpected response");
+            config::DEFAULT_ESTIMATOR_MODE
+        }
+    }
+}
+
+pub async fn set_estimator_mode(mode: EstimatorMode) -> Result<(), ()> {
+    match rpc(StorageRequest::SetEstimatorMode(mode)).await {
+        StorageResponse::SetEstimatorMode(result) => result,
+        _ => {
+            warn!("storage:rpc set_estimator_mode unexpected response");
             Err(())
         }
     }
@@ -598,6 +622,22 @@ pub async fn storage_task(flash: esp_hal::peripherals::FLASH<'static>) -> ! {
                 };
                 STORAGE_RESPONSE_CHANNEL
                     .send(StorageResponse::SetHybridHallTriggerThreshold(result))
+                    .await;
+            }
+            StorageRequest::GetEstimatorMode => {
+                let mode = config::get_estimator_mode(&db).await;
+                STORAGE_RESPONSE_CHANNEL
+                    .send(StorageResponse::EstimatorMode(mode))
+                    .await;
+            }
+            StorageRequest::SetEstimatorMode(mode) => {
+                let result = if write_slot.is_some() {
+                    Err(())
+                } else {
+                    config::set_estimator_mode(&db, mode).await
+                };
+                STORAGE_RESPONSE_CHANNEL
+                    .send(StorageResponse::SetEstimatorMode(result))
                     .await;
             }
             StorageRequest::GetSlotState(slot) => {

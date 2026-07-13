@@ -7,10 +7,10 @@ use iced::{
 #[cfg(not(target_arch = "wasm32"))]
 use pov_sender_core::list_serial_ports;
 use pov_sender_core::{
-    AdcDevice, DownloadKind, DownloadRequest, EspNowDelivery, PolarEncodeOptions, SensorOffsets,
-    SerialLinkConfig, SpokeCommand, Transport, list_esp_now_peers, request_adc_sample,
-    request_storage_stats, send_command, send_download, send_image, send_sensor_offsets,
-    send_video_with_max_fps,
+    AdcDevice, DownloadKind, DownloadRequest, EspNowDelivery, EstimatorMode, PolarEncodeOptions,
+    SensorOffsets, SerialLinkConfig, SpokeCommand, Transport, list_esp_now_peers,
+    request_adc_sample, request_storage_stats, send_command, send_download, send_image,
+    send_sensor_offsets, send_video_with_max_fps,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -127,6 +127,38 @@ impl From<AdcDeviceUi> for AdcDevice {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EstimatorModeUi {
+    Hybrid,
+    PureImu,
+}
+
+impl EstimatorModeUi {
+    const ALL: [Self; 2] = [Self::Hybrid, Self::PureImu];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Hybrid => "hybrid",
+            Self::PureImu => "pure-imu",
+        }
+    }
+}
+
+impl std::fmt::Display for EstimatorModeUi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.label())
+    }
+}
+
+impl From<EstimatorModeUi> for EstimatorMode {
+    fn from(value: EstimatorModeUi) -> Self {
+        match value {
+            EstimatorModeUi::Hybrid => EstimatorMode::Hybrid,
+            EstimatorModeUi::PureImu => EstimatorMode::PureImu,
+        }
+    }
+}
+
 fn format_mac(mac: [u8; 6]) -> String {
     format!(
         "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
@@ -216,6 +248,8 @@ enum Message {
     SetAdcMonitorSampleRateHz,
     HybridHallTriggerThresholdChanged(String),
     SetHybridHallTriggerThreshold,
+    SelectEstimatorMode(EstimatorModeUi),
+    SetEstimatorMode,
     StorageStatsDone(Result<String, String>),
     AdcSampleDone(Result<String, String>),
     ActionDone(Result<String, String>),
@@ -251,6 +285,7 @@ struct SenderGui {
     imu_offset_degrees: String,
     adc_monitor_sample_rate_hz: String,
     hybrid_hall_trigger_threshold: String,
+    estimator_mode: EstimatorModeUi,
     active_slot_input: String,
     storage_stats_text: String,
     selected_adc_device: AdcDeviceUi,
@@ -291,6 +326,7 @@ impl Default for SenderGui {
             imu_offset_degrees: String::new(),
             adc_monitor_sample_rate_hz: "20".to_string(),
             hybrid_hall_trigger_threshold: "2000".to_string(),
+            estimator_mode: EstimatorModeUi::Hybrid,
             active_slot_input: String::new(),
             storage_stats_text: "No storage stats requested yet.".to_string(),
             selected_adc_device: AdcDeviceUi::HallEffectSensor1,
@@ -601,6 +637,11 @@ impl SenderGui {
                 Task::none()
             }
             Message::SetHybridHallTriggerThreshold => self.run_set_hybrid_hall_trigger_threshold(),
+            Message::SelectEstimatorMode(mode) => {
+                self.estimator_mode = mode;
+                Task::none()
+            }
+            Message::SetEstimatorMode => self.run_set_estimator_mode(),
             Message::StorageStatsDone(result) => {
                 self.busy = false;
                 self.status = match result {
@@ -848,7 +889,20 @@ impl SenderGui {
         ]
         .spacing(10);
 
-        container(column![offsets, sample_rate, hall_threshold].spacing(10)).into()
+        let estimator_mode = row![
+            text("estimator mode"),
+            pick_list(
+                EstimatorModeUi::ALL.to_vec(),
+                Some(self.estimator_mode),
+                Message::SelectEstimatorMode,
+            )
+            .width(Length::Shrink),
+            button("Set Estimator Mode")
+                .on_press_maybe((!self.busy).then_some(Message::SetEstimatorMode)),
+        ]
+        .spacing(10);
+
+        container(column![offsets, sample_rate, hall_threshold, estimator_mode].spacing(10)).into()
     }
 
     fn input_less_commands_tab(&self) -> Element<'_, Message> {
@@ -1355,6 +1409,17 @@ impl SenderGui {
             format!(
                 "Hall trigger threshold sent: reboot firmware to apply (threshold={threshold})."
             ),
+        )
+    }
+
+    #[cfg_attr(target_arch = "wasm32", allow(unreachable_code))]
+    fn run_set_estimator_mode(&mut self) -> Task<Message> {
+        let mode: EstimatorMode = self.estimator_mode.into();
+
+        self.run_command_with_status(
+            SpokeCommand::SetEstimatorMode { mode },
+            "Persisting estimator mode...",
+            format!("Estimator mode sent: reboot firmware to apply (mode={mode:?})."),
         )
     }
 

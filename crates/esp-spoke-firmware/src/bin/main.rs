@@ -24,11 +24,7 @@ use esp_hal::clock::CpuClock;
 use esp_spoke_firmware::angle_estimator::hybrid_dual_spin_estimator_task;
 #[cfg(feature = "sk9822-strip")]
 use esp_spoke_firmware::angle_estimator::new_shared_spin_state;
-#[cfg(all(
-    feature = "sk9822-strip",
-    feature = "pure-imu-angle-estimator",
-    not(feature = "hybrid-angle-estimator")
-))]
+#[cfg(all(feature = "sk9822-strip", feature = "pure-imu-angle-estimator"))]
 use esp_spoke_firmware::angle_estimator::pure_imu_dual_spin_estimator_task;
 #[cfg(all(feature = "sk9822-strip", feature = "bmi260", feature = "board-v1"))]
 use esp_spoke_firmware::imu::imu_publisher_task;
@@ -74,8 +70,8 @@ use pov_proto::transfer::DownloadKind;
 use pov_proto::transfer::{AdcDevice as WireAdcDevice, AdcSample as WireAdcSample};
 #[cfg(feature = "sk9822-strip")]
 use pov_proto::transfer::{
-    Packet, ResponseFrame, SpokeCommand, SpokeResponse, StorageStats as WireStorageStats,
-    encode_packet,
+    EstimatorMode, Packet, ResponseFrame, SpokeCommand, SpokeResponse,
+    StorageStats as WireStorageStats, encode_packet,
 };
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
@@ -241,11 +237,14 @@ async fn main(spawner: Spawner) -> ! {
         let sensor_config = storage::get_sensor_config().await;
         let _hall_offset_0 = Angle::from_degrees(sensor_config.hall_offset_0_degrees);
         let _hall_offset_1 = Angle::from_degrees(sensor_config.hall_offset_1_degrees);
-        #[cfg(all(
-            feature = "pure-imu-angle-estimator",
-            not(feature = "hybrid-angle-estimator")
-        ))]
+        #[cfg(feature = "pure-imu-angle-estimator")]
         let imu_offset_degrees = sensor_config.imu_offset_degrees;
+
+        #[cfg(any(
+            feature = "hybrid-angle-estimator",
+            feature = "pure-imu-angle-estimator"
+        ))]
+        let estimator_mode = storage::get_estimator_mode().await;
 
         // Coerce &'static mut to &'static (shared, Copy) so the same reference
         // can be passed to both init_sk9822_dual and the core-1 tasks.
@@ -297,7 +296,31 @@ async fn main(spawner: Spawner) -> ! {
                         ));
                         #[cfg(all(feature = "bmi260", feature = "board-v1"))]
                         spawner.spawn(imu_publisher_task(I2cDevice::new(i2c)).unwrap());
-                        #[cfg(feature = "hybrid-angle-estimator")]
+                        #[cfg(all(feature = "hybrid-angle-estimator", feature = "pure-imu-angle-estimator"))]
+                        match estimator_mode {
+                            EstimatorMode::PureImu => {
+                                spawner.spawn(
+                                    pure_imu_dual_spin_estimator_task(
+                                        spin0,
+                                        spin1,
+                                        imu_offset_degrees,
+                                    )
+                                    .unwrap(),
+                                );
+                            }
+                            EstimatorMode::Hybrid => {
+                                spawner.spawn(
+                                    hybrid_dual_spin_estimator_task(
+                                        spin0,
+                                        spin1,
+                                        sensor_config.hall_offset_0_degrees,
+                                        sensor_config.hall_offset_1_degrees,
+                                    )
+                                    .unwrap(),
+                                );
+                            }
+                        }
+                        #[cfg(all(feature = "hybrid-angle-estimator", not(feature = "pure-imu-angle-estimator")))]
                         spawner.spawn(
                             hybrid_dual_spin_estimator_task(
                                 spin0,
@@ -680,6 +703,53 @@ async fn main(spawner: Spawner) -> ! {
                         }
 
                         if threshold_pause_held {
+                            led::resume_render_after_flash();
+                            render_pause_held = false;
+                        }
+                    }
+                    SpokeCommand::SetEstimatorMode { mode } => {
+                        let mode_supported = match mode {
+                            EstimatorMode::Hybrid => cfg!(feature = "hybrid-angle-estimator"),
+                            EstimatorMode::PureImu => {
+                                cfg!(feature = "pure-imu-angle-estimator")
+                            }
+                        };
+
+                        if !mode_supported {
+                            warn!(
+                                "main:unsupported estimator mode transfer_id={} mode={:?}",
+                                transfer_id, mode
+                            );
+                            continue;
+                        }
+
+                        let mut mode_pause_held = false;
+                        if !render_pause_held {
+                            render_pause_held = true;
+                            mode_pause_held = true;
+                            if !led::pause_render_for_flash(Duration::from_millis(500)).await {
+                                warn!(
+                                    "main:render pause ack timeout before SetEstimatorMode transfer_id={} mode={:?}",
+                                    transfer_id, mode
+                                );
+                            }
+                        }
+
+                        let result = storage::set_estimator_mode(mode).await;
+
+                        if result.is_err() {
+                            warn!(
+                                "main:failed to persist estimator mode transfer_id={} mode={:?}",
+                                transfer_id, mode
+                            );
+                        } else {
+                            info!(
+                                "main:persisted estimator mode transfer_id={} mode={:?} reboot_required=true",
+                                transfer_id, mode
+                            );
+                        }
+
+                        if mode_pause_held {
                             led::resume_render_after_flash();
                             render_pause_held = false;
                         }

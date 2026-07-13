@@ -56,7 +56,7 @@ board-v1 = [
     "flash-8mb",
     "sk9822-strip",
     "hybrid-angle-estimator",
-    # "pure-imu-angle-estimator",
+    "pure-imu-angle-estimator",
     "bmi260",
     "pushbutton-1",
     "pushbutton-2",

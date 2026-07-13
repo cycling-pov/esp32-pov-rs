@@ -432,6 +432,9 @@ pub async fn pov_command_task(bitmap: &'static SharedBitmapMutex) -> ! {
                     SpokeCommand::SetHybridHallTriggerThreshold { .. } => {
                         info!("pov:cmd ignoring SetHybridHallTriggerThreshold in render task");
                     }
+                    SpokeCommand::SetEstimatorMode { .. } => {
+                        info!("pov:cmd ignoring SetEstimatorMode in render task");
+                    }
                     SpokeCommand::RequestStorageStats => {
                         info!("pov:cmd ignoring RequestStorageStats in render task");
                     }

@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
 use pov_sender_core::{
-    AdcDevice, DownloadKind, DownloadRequest, EspNowDelivery, PolarEncodeOptions, SensorOffsets,
-    SerialLinkConfig, SpokeCommand, Transport as CoreTransport, request_adc_sample, send_command,
-    send_download, send_image, send_sensor_offsets, send_video,
+    AdcDevice, DownloadKind, DownloadRequest, EspNowDelivery, EstimatorMode, PolarEncodeOptions,
+    SensorOffsets, SerialLinkConfig, SpokeCommand, Transport as CoreTransport, request_adc_sample,
+    send_command, send_download, send_image, send_sensor_offsets, send_video,
 };
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -29,6 +29,12 @@ enum AdcDeviceArg {
     HallEffectSensor1,
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum EstimatorModeArg {
+    Hybrid,
+    PureImu,
+}
+
 impl From<DownloadKindArg> for DownloadKind {
     fn from(value: DownloadKindArg) -> Self {
         match value {
@@ -46,6 +52,15 @@ impl From<AdcDeviceArg> for AdcDevice {
             AdcDeviceArg::HallEffectSensor2 => AdcDevice::HallEffectSensor2,
             AdcDeviceArg::BatteryVoltage => AdcDevice::BatteryVoltage,
             AdcDeviceArg::HallEffectSensor1 => AdcDevice::HallEffectSensor1,
+        }
+    }
+}
+
+impl From<EstimatorModeArg> for EstimatorMode {
+    fn from(value: EstimatorModeArg) -> Self {
+        match value {
+            EstimatorModeArg::Hybrid => EstimatorMode::Hybrid,
+            EstimatorModeArg::PureImu => EstimatorMode::PureImu,
         }
     }
 }
@@ -161,6 +176,11 @@ enum Command {
     SetHybridHallTriggerThreshold {
         #[arg(long)]
         threshold: u16,
+    },
+    /// Persist the runtime estimator mode to apply at next power cycle.
+    SetEstimatorMode {
+        #[arg(long, value_enum)]
+        mode: EstimatorModeArg,
     },
     /// Request one raw ADC sample from a selected ADC hookup.
     RequestAdcSample {
@@ -320,6 +340,14 @@ fn main() -> anyhow::Result<()> {
             )?;
             println!(
                 "Collected command: SetHybridHallTriggerThreshold threshold={threshold}. Reboot firmware to apply."
+            );
+            stats
+        }
+        Command::SetEstimatorMode { mode } => {
+            let wire_mode: EstimatorMode = mode.into();
+            let stats = send_command(&config, SpokeCommand::SetEstimatorMode { mode: wire_mode })?;
+            println!(
+                "Collected command: SetEstimatorMode mode={wire_mode:?}. Reboot firmware to apply."
             );
             stats
         }

@@ -51,6 +51,9 @@ pub enum SpokeCommand {
     SetHybridHallTriggerThreshold {
         threshold: u16,
     },
+    SetEstimatorMode {
+        mode: EstimatorMode,
+    },
     SetSensorOffsets {
         hall_offset_0_degrees: f32,
         hall_offset_1_degrees: f32,
@@ -75,6 +78,13 @@ pub enum AdcDevice {
     HallEffectSensor2,
     BatteryVoltage,
     HallEffectSensor1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum EstimatorMode {
+    Hybrid,
+    PureImu,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -1,10 +1,11 @@
 use defmt::{info, warn};
 use ekv::ReadError;
 use pov_proto::image::Encoding;
+use pov_proto::transfer::EstimatorMode;
 use serde::{Deserialize, Serialize};
 
 use super::ekv_flash::{
-    EkvDatabase, KEY_ACTIVE_SLOT, KEY_ADC_MONITOR_SAMPLE_RATE_HZ,
+    EkvDatabase, KEY_ACTIVE_SLOT, KEY_ADC_MONITOR_SAMPLE_RATE_HZ, KEY_ESTIMATOR_MODE,
     KEY_HYBRID_HALL_TRIGGER_THRESHOLD, KEY_SENSOR_CONFIG, KEY_STORAGE_INDEX,
     KEY_STORAGE_SCHEMA_VERSION, meta_key,
 };
@@ -13,6 +14,7 @@ pub const STORAGE_SCHEMA_VERSION: u8 = 2;
 pub const MAX_TRACKED_IMAGES: usize = 32;
 pub const DEFAULT_ADC_MONITOR_SAMPLE_RATE_HZ: u16 = 20;
 pub const DEFAULT_HYBRID_HALL_TRIGGER_THRESHOLD: u16 = 2000;
+pub const DEFAULT_ESTIMATOR_MODE: EstimatorMode = EstimatorMode::Hybrid;
 
 // -- Value types ---------------------------------------------------------------
 
@@ -361,6 +363,43 @@ pub async fn set_hybrid_hall_trigger_threshold(db: &EkvDatabase, threshold: u16)
             "config:set_hybrid_hall_trigger_threshold commit error threshold={}",
             threshold
         );
+    })
+}
+
+pub async fn get_estimator_mode(db: &EkvDatabase) -> EstimatorMode {
+    let rtx = db.read_transaction().await;
+    let mut buf = [0u8; 1];
+    match rtx.read(KEY_ESTIMATOR_MODE, &mut buf).await {
+        Ok(1) => match buf[0] {
+            0 => EstimatorMode::Hybrid,
+            1 => EstimatorMode::PureImu,
+            _ => DEFAULT_ESTIMATOR_MODE,
+        },
+        Ok(_) | Err(ReadError::KeyNotFound) => DEFAULT_ESTIMATOR_MODE,
+        Err(e) => {
+            warn!(
+                "config:get_estimator_mode read error: {:?}",
+                defmt::Debug2Format(&e)
+            );
+            DEFAULT_ESTIMATOR_MODE
+        }
+    }
+}
+
+pub async fn set_estimator_mode(db: &EkvDatabase, mode: EstimatorMode) -> Result<(), ()> {
+    let wire_mode = match mode {
+        EstimatorMode::Hybrid => 0u8,
+        EstimatorMode::PureImu => 1u8,
+    };
+
+    let mut wtx = db.write_transaction().await;
+    wtx.write(KEY_ESTIMATOR_MODE, &[wire_mode])
+        .await
+        .map_err(|_| {
+            warn!("config:set_estimator_mode write error mode={}", wire_mode);
+        })?;
+    wtx.commit().await.map_err(|_| {
+        warn!("config:set_estimator_mode commit error mode={}", wire_mode);
     })
 }
 
