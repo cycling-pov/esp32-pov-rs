@@ -5,8 +5,8 @@ compile_error!(
     "features `ble` and `espnow` require `coexistence`; enable it to run both transports together"
 );
 
-#[cfg(all(feature = "imu-spin", feature = "mock-spin"))]
-compile_error!("features `imu-spin` and `mock-spin` are mutually exclusive");
+#[cfg(all(feature = "pure-imu-angle-estimator", feature = "mock-spin"))]
+compile_error!("features `pure-imu-angle-estimator` and `mock-spin` are mutually exclusive");
 
 extern crate alloc;
 

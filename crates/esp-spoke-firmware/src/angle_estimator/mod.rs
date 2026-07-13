@@ -1,15 +1,15 @@
 pub mod hall_effect;
 #[cfg(feature = "hybrid-angle-estimator")]
 pub mod hybrid;
-pub mod imu;
 pub mod mock;
+pub mod pure_imu_estimator;
 
 use core::cell::RefCell;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-#[cfg(feature = "imu-spin")]
+#[cfg(feature = "pure-imu-angle-estimator")]
 use embassy_sync::channel::Channel;
 use pov_algs::{Angle, AngularVelocity};
 
@@ -17,18 +17,18 @@ use crate::led::{CORE1_FLASH_PAUSE_REQUESTED, CORE1_FLASH_PAUSED_COUNT};
 
 #[cfg(feature = "hybrid-angle-estimator")]
 pub use hybrid::hybrid_dual_spin_estimator_task;
-#[cfg(feature = "imu-spin")]
-pub use imu::imu_dual_spin_estimator_task;
 #[cfg(feature = "mock-spin")]
 pub use mock::mock_dual_spin_estimator_task;
+#[cfg(feature = "pure-imu-angle-estimator")]
+pub use pure_imu_estimator::pure_imu_dual_spin_estimator_task;
 
-#[cfg(feature = "imu-spin")]
+#[cfg(feature = "pure-imu-angle-estimator")]
 static IMU_BOOT_CALIBRATING: AtomicBool = AtomicBool::new(false);
-#[cfg(feature = "imu-spin")]
+#[cfg(feature = "pure-imu-angle-estimator")]
 static IMU_CALIBRATION_STATE_CHANNEL: Channel<CriticalSectionRawMutex, ImuCalibrationState, 4> =
     Channel::new();
 
-#[cfg(feature = "imu-spin")]
+#[cfg(feature = "pure-imu-angle-estimator")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImuCalibrationState {
     Calibrating,
@@ -68,7 +68,7 @@ pub trait SpinEstimator {
     fn spin_state(&self) -> SpinState;
 }
 
-#[cfg(feature = "imu-spin")]
+#[cfg(feature = "pure-imu-angle-estimator")]
 pub fn publish_imu_boot_calibrating(calibrating: bool) {
     let previous = IMU_BOOT_CALIBRATING.swap(calibrating, Ordering::AcqRel);
     if previous == calibrating {
@@ -83,7 +83,7 @@ pub fn publish_imu_boot_calibrating(calibrating: bool) {
     let _ = IMU_CALIBRATION_STATE_CHANNEL.try_send(state);
 }
 
-#[cfg(feature = "imu-spin")]
+#[cfg(feature = "pure-imu-angle-estimator")]
 pub async fn receive_imu_boot_calibration_state() -> ImuCalibrationState {
     IMU_CALIBRATION_STATE_CHANNEL.receive().await
 }

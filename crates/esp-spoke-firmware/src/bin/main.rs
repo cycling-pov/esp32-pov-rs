@@ -22,18 +22,18 @@ use embassy_time::Timer;
 use esp_hal::clock::CpuClock;
 #[cfg(all(
     feature = "sk9822-strip",
-    feature = "imu-spin",
+    feature = "pure-imu-angle-estimator",
     feature = "hybrid-angle-estimator"
 ))]
 use esp_spoke_firmware::angle_estimator::hybrid_dual_spin_estimator_task;
-#[cfg(all(
-    feature = "sk9822-strip",
-    feature = "imu-spin",
-    not(feature = "hybrid-angle-estimator")
-))]
-use esp_spoke_firmware::angle_estimator::imu_dual_spin_estimator_task;
 #[cfg(feature = "sk9822-strip")]
 use esp_spoke_firmware::angle_estimator::new_shared_spin_state;
+#[cfg(all(
+    feature = "sk9822-strip",
+    feature = "pure-imu-angle-estimator",
+    not(feature = "hybrid-angle-estimator")
+))]
+use esp_spoke_firmware::angle_estimator::pure_imu_dual_spin_estimator_task;
 #[cfg(all(feature = "sk9822-strip", feature = "bmi260", feature = "board-v1"))]
 use esp_spoke_firmware::imu::imu_publisher_task;
 #[cfg(feature = "sk9822-strip")]
@@ -56,7 +56,7 @@ use esp_spoke_firmware::led;
 
 #[cfg(feature = "adc")]
 use esp_spoke_firmware::adc;
-#[cfg(feature = "imu-spin")]
+#[cfg(feature = "pure-imu-angle-estimator")]
 use esp_spoke_firmware::angle_estimator::ImuCalibrationState;
 #[cfg(feature = "sk9822-strip")]
 use esp_spoke_firmware::led::LedCommand;
@@ -140,8 +140,8 @@ struct I2CConfig<'d> {
 #[cfg(all(feature = "sk9822-strip", feature = "bmi260", feature = "board-v1"))]
 type SharedI2cBus = Mutex<NoopRawMutex, esp_hal::i2c::master::I2c<'static, esp_hal::Async>>;
 
-#[cfg(all(feature = "imu-spin", not(feature = "board-v1")))]
-compile_error!("feature `imu-spin` requires `board-v1`");
+#[cfg(all(feature = "pure-imu-angle-estimator", not(feature = "board-v1")))]
+compile_error!("feature `pure-imu-angle-estimator` requires `board-v1`");
 
 #[allow(
     clippy::large_stack_frames,
@@ -245,7 +245,7 @@ async fn main(spawner: Spawner) -> ! {
         let sensor_config = storage::get_sensor_config().await;
         let _hall_offset_0 = Angle::from_degrees(sensor_config.hall_offset_0_degrees);
         let _hall_offset_1 = Angle::from_degrees(sensor_config.hall_offset_1_degrees);
-        #[cfg(all(feature = "imu-spin", not(feature = "hybrid-angle-estimator")))]
+        #[cfg(all(feature = "pure-imu-angle-estimator", not(feature = "hybrid-angle-estimator")))]
         let imu_offset_degrees = sensor_config.imu_offset_degrees;
 
         // Coerce &'static mut to &'static (shared, Copy) so the same reference
@@ -308,11 +308,12 @@ async fn main(spawner: Spawner) -> ! {
                             )
                             .unwrap(),
                         );
-                        #[cfg(all(feature = "imu-spin", not(feature = "hybrid-angle-estimator")))]
+                        #[cfg(all(feature = "pure-imu-angle-estimator", not(feature = "hybrid-angle-estimator")))]
                         spawner.spawn(
-                            imu_dual_spin_estimator_task(spin0, spin1, imu_offset_degrees).unwrap(),
+                            pure_imu_dual_spin_estimator_task(spin0, spin1, imu_offset_degrees)
+                                .unwrap(),
                         );
-                        #[cfg(all(not(feature = "mock-spin"), not(feature = "imu-spin")))]
+                        #[cfg(all(not(feature = "mock-spin"), not(feature = "pure-imu-angle-estimator")))]
                         spawner.spawn(
                             esp_spoke_firmware::angle_estimator::dual_spin_estimator_task(
                                 spin0,
@@ -347,17 +348,17 @@ async fn main(spawner: Spawner) -> ! {
     #[cfg(all(feature = "status-led", feature = "sk9822-strip"))]
     let mut desired_status = StatusLedRequest::BLINK_SLOW;
 
-    #[cfg(feature = "imu-spin")]
+    #[cfg(feature = "pure-imu-angle-estimator")]
     let mut imu_calibrating = true;
 
-    #[cfg(feature = "imu-spin")]
+    #[cfg(feature = "pure-imu-angle-estimator")]
     {
         if !led::try_send_led_command(LedCommand::SetDisplayEnabled(false)) {
             warn!("main:failed to enqueue initial display disable for imu calibration");
         }
     }
 
-    #[cfg(all(feature = "status-led", feature = "sk9822-strip", feature = "imu-spin"))]
+    #[cfg(all(feature = "status-led", feature = "sk9822-strip", feature = "pure-imu-angle-estimator"))]
     {
         let _ = status_led::try_send_request(StatusLedRequest::BLINK_FAST);
     }
@@ -365,7 +366,7 @@ async fn main(spawner: Spawner) -> ! {
     #[cfg(all(
         feature = "status-led",
         feature = "sk9822-strip",
-        not(feature = "imu-spin")
+        not(feature = "pure-imu-angle-estimator")
     ))]
     {
         let _ = status_led::try_send_request(desired_status);
@@ -380,7 +381,7 @@ async fn main(spawner: Spawner) -> ! {
             let mut command = None;
             let mut chunk = None;
 
-            #[cfg(feature = "imu-spin")]
+            #[cfg(feature = "pure-imu-angle-estimator")]
             match select(
                 select(networking::receive_command(), networking::receive_chunk()),
                 esp_spoke_firmware::angle_estimator::receive_imu_boot_calibration_state(),
@@ -426,7 +427,7 @@ async fn main(spawner: Spawner) -> ! {
                 }
             }
 
-            #[cfg(not(feature = "imu-spin"))]
+            #[cfg(not(feature = "pure-imu-angle-estimator"))]
             match select(networking::receive_command(), networking::receive_chunk()).await {
                 Either::First(cmd) => {
                     command = cmd;
@@ -502,7 +503,7 @@ async fn main(spawner: Spawner) -> ! {
                             {
                                 desired_status = StatusLedRequest::BLINK_SLOW;
                                 let effective = {
-                                    #[cfg(feature = "imu-spin")]
+                                    #[cfg(feature = "pure-imu-angle-estimator")]
                                     {
                                         if imu_calibrating {
                                             StatusLedRequest::BLINK_FAST
@@ -510,7 +511,7 @@ async fn main(spawner: Spawner) -> ! {
                                             desired_status
                                         }
                                     }
-                                    #[cfg(not(feature = "imu-spin"))]
+                                    #[cfg(not(feature = "pure-imu-angle-estimator"))]
                                     {
                                         desired_status
                                     }
@@ -576,7 +577,7 @@ async fn main(spawner: Spawner) -> ! {
                         {
                             desired_status = StatusLedRequest::OFF;
                             let effective = {
-                                #[cfg(feature = "imu-spin")]
+                                #[cfg(feature = "pure-imu-angle-estimator")]
                                 {
                                     if imu_calibrating {
                                         StatusLedRequest::BLINK_FAST
@@ -584,7 +585,7 @@ async fn main(spawner: Spawner) -> ! {
                                         desired_status
                                     }
                                 }
-                                #[cfg(not(feature = "imu-spin"))]
+                                #[cfg(not(feature = "pure-imu-angle-estimator"))]
                                 {
                                     desired_status
                                 }
@@ -842,7 +843,7 @@ async fn main(spawner: Spawner) -> ! {
                             }
 
                             let effective = {
-                                #[cfg(feature = "imu-spin")]
+                                #[cfg(feature = "pure-imu-angle-estimator")]
                                 {
                                     if imu_calibrating {
                                         StatusLedRequest::BLINK_FAST
@@ -850,7 +851,7 @@ async fn main(spawner: Spawner) -> ! {
                                         desired_status
                                     }
                                 }
-                                #[cfg(not(feature = "imu-spin"))]
+                                #[cfg(not(feature = "pure-imu-angle-estimator"))]
                                 {
                                     desired_status
                                 }
@@ -996,7 +997,7 @@ async fn main(spawner: Spawner) -> ! {
                                     {
                                         desired_status = StatusLedRequest::BLINK_SLOW;
                                         let effective = {
-                                            #[cfg(feature = "imu-spin")]
+                                            #[cfg(feature = "pure-imu-angle-estimator")]
                                             {
                                                 if imu_calibrating {
                                                     StatusLedRequest::BLINK_FAST
@@ -1004,7 +1005,7 @@ async fn main(spawner: Spawner) -> ! {
                                                     desired_status
                                                 }
                                             }
-                                            #[cfg(not(feature = "imu-spin"))]
+                                            #[cfg(not(feature = "pure-imu-angle-estimator"))]
                                             {
                                                 desired_status
                                             }

@@ -28,8 +28,8 @@ flash-16mb = []
 builtin-image = ["dep:image"]
 mock-spin = []
 adc = []
-imu-spin = ["dep:fusion-ahrs", "dep:nalgebra"]
-hybrid-angle-estimator = ["adc", "imu-spin", "bmi260"]
+pure-imu-angle-estimator = ["dep:fusion-ahrs", "dep:nalgebra"]
+hybrid-angle-estimator = ["adc", "pure-imu-angle-estimator", "bmi260"]
 board-rev-resistor = []
 pushbutton-1 = []
 pushbutton-2 = []
@@ -45,7 +45,7 @@ board-v1 = [
     "flash-8mb",
     "sk9822-strip",
     "hybrid-angle-estimator",
-    # "imu-spin",
+    # "pure-imu-angle-estimator",
     "bmi260",
     "pushbutton-1",
     "pushbutton-2",
