@@ -29,7 +29,7 @@ pub async fn hybrid_dual_spin_estimator_task(
     .await;
 
     let mut last = Instant::now();
-    let mut estimator = PositionEstimatorGyro::<2>::new(Duration::from_millis(100));
+    let mut estimator = PositionEstimatorGyro::<2>::new(Duration::from_secs(1));
     // Track whether each hall sensor is currently inside the trigger window.
     // This lets us emit one trigger per threshold-crossing edge.
     let mut hall_active = [false; 2];
