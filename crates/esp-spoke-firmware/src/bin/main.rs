@@ -38,6 +38,11 @@ extern crate alloc;
 
 #[cfg(all(feature = "adc", feature = "board-rev-resistor"))]
 mod board_revision_check;
+#[cfg(all(
+    feature = "sk9822-strip",
+    any(feature = "pushbutton-1", feature = "pushbutton-2")
+))]
+mod image_cycle;
 
 #[cfg(feature = "sk9822-strip")]
 use embassy_futures::select::{Either, select};
@@ -207,6 +212,15 @@ async fn main(spawner: Spawner) -> ! {
             pushbutton::button_input_task(peripherals.GPIO6.into(), ButtonId::Button2).unwrap(),
         );
         info!("Pushbutton-2 initialized on GPIO7");
+    }
+
+    #[cfg(all(
+        feature = "sk9822-strip",
+        any(feature = "pushbutton-1", feature = "pushbutton-2")
+    ))]
+    {
+        spawner.spawn(image_cycle::short_press_image_cycle_task().unwrap());
+        info!("Pushbutton short-press navigation listener initialized");
     }
 
     #[cfg(feature = "status-led")]
